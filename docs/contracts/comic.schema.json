@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "manga-nikki ComicDocument v1",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "panels": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "const": 1
+            },
+            "scene": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 250
+            },
+            "caption": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            },
+            "dialogue": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            }
+          },
+          "required": [
+            "index",
+            "scene",
+            "caption",
+            "dialogue"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "const": 2
+            },
+            "scene": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 250
+            },
+            "caption": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            },
+            "dialogue": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            }
+          },
+          "required": [
+            "index",
+            "scene",
+            "caption",
+            "dialogue"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "const": 3
+            },
+            "scene": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 250
+            },
+            "caption": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            },
+            "dialogue": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            }
+          },
+          "required": [
+            "index",
+            "scene",
+            "caption",
+            "dialogue"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "const": 4
+            },
+            "scene": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 250
+            },
+            "caption": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            },
+            "dialogue": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 70
+            }
+          },
+          "required": [
+            "index",
+            "scene",
+            "caption",
+            "dialogue"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "visual": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "page"
+            },
+            "assetId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "textMode": {
+              "enum": [
+                "embedded",
+                "external"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "assetId",
+            "textMode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "panels"
+            },
+            "assetIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "minItems": 4,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            "textMode": {
+              "const": "external"
+            }
+          },
+          "required": [
+            "kind",
+            "assetIds",
+            "textMode"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "title",
+    "panels",
+    "visual"
+  ],
+  "additionalProperties": false
+}

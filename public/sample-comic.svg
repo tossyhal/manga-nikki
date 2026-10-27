@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="760" viewBox="0 0 240 760">
+<title>架空の一日の4コマサンプル</title>
+<g stroke="#24352b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+<path fill="#edf2df" d="M2 2h236v180H2zM2 194h236v180H2zM2 386h236v180H2zM2 578h236v180H2z"/>
+<g fill="#fafbf7"><circle cx="120" cy="70" r="25"/><circle cx="120" cy="260" r="25"/><circle cx="120" cy="454" r="25"/><circle cx="88" cy="645" r="25"/></g>
+<g fill="none"><path d="M98 160v-40q22-22 44 0v40M98 354v-44q22-20 44 0v44M100 550l20-45 20 45M120 505v-26M66 738v-38q22-20 44 0v38"/>
+<path d="M108 72h1m22 0h1m-18 10q6 5 12 0M108 262h1m22 0h1m-18 10q6 5 12 0M108 456h1m22 0h1m-18 10q6 5 12 0M76 647h1m22 0h1m-18 10q6 5 12 0"/></g>
+<path fill="#dbb77a" d="M154 127v-25q-10-8 0-14h28q10 6 0 14v25z"/>
+<path fill="#d5dfc3" d="M70 320q25-10 50 0 25-10 50 0v30q-25-10-50 0-25-10-50 0z"/>
+<path fill="none" d="M120 320v30M20 549h60m80 0h60M174 710q22-4 20-23"/>
+<path fill="#c5cfa7" d="M145 729v-35l8 8 14-8 9 10v25z"/>
+</g>
+<g fill="#24352b" font-family="sans-serif" font-size="16"><text x="14" y="27">1</text><text x="14" y="219">2</text><text x="14" y="411">3</text><text x="14" y="603">4</text></g>
+</svg>
