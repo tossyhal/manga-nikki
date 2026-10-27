@@ -112,7 +112,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | `pnpm build:staging` / `pnpm build:production` | 環境別ビルド | 公開準備時 |
 | `pnpm deploy:staging` / `pnpm deploy:production` | 承認済み環境への公開 | 公開準備時 |
 
-`pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはmise-actionで同じ版を導入します。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
+`pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはUbuntuだけで実行し、mise-actionで同じ版を導入します。同じブランチの古い実行はキャンセルします。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
