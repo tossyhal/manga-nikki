@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router';
-import { sampleDiary } from '../../shared/fixtures';
+import { pageComic, sampleDiary } from '../../shared/fixtures';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry } from '../features/diary/NewEntry';
 import { Library } from '../features/library/Library';
@@ -27,7 +27,13 @@ function Home() {
       <section className="sample">
         <h2>サンプルの一日</h2>
         <p>{sampleDiary}</p>
-        <Comic />
+        <Comic
+          comic={pageComic}
+          images={{
+            [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
+          }}
+          mock
+        />
       </section>
     </>
   );

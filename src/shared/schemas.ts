@@ -60,12 +60,14 @@ export type Entry = {
   createdAt: string;
   updatedAt: string;
 };
-export type Generation = {
-  id: string;
-  entryId: string;
-  status: 'succeeded';
-  stage: null;
-  comic: ComicDocument;
-  mock: true;
-};
+export type GenerationError = { code: string; message: string; retryable: boolean };
+type GenerationBase = { id: string; entryId: string; mock: boolean };
+export type Generation = GenerationBase &
+  (
+    | { status: 'queued'; stage: null; comic?: never }
+    | { status: 'running'; stage: 'script' | 'images' | 'saving'; comic?: never }
+    | { status: 'succeeded'; stage: null; comic: ComicDocument }
+    | { status: 'failed' | 'unknown'; stage: null; comic?: never; error: GenerationError }
+    | { status: 'cancelled'; stage: null; comic?: never }
+  );
 export type EntryDetail = Entry & { latestGeneration: Generation | null };

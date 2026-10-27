@@ -11,6 +11,7 @@
 ### 認証・DB・Storageの境界ルール
 
 - JWTと匿名認証の検証
+  - 認証セッションの保存・更新はSupabase SDKに管理させます。現行設計はHttpOnly Cookie方式ではありません。JWTをURLのクエリやフラグメントへ入れません。
   - 既存の匿名セッションを再利用し、サーバー側でJWTの「署名・issuer・audience・有効期限・`sub`（ユーザーID）」を必ず検証します。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
 - 読み取りと書き込みの分離
@@ -39,6 +40,7 @@
 ### 公開設定と秘密情報の分離
 
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
+- 公開用scriptsを実装する際は環境別のフロント設定を分け、ローカルの`.env.local`等がstaging/productionのビルドへ混入しないことを生成物で確認します。公開用コマンドは現時点で未実装です。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
 

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from './app';
+import { createMockRepository } from './repositories/mock';
+import { generationFixtures, panelsComic } from '../shared/fixtures';
 import { mockEnvironment, resolveMode } from './mode';
 import { jstToday } from '../shared/schemas';
 
@@ -196,4 +198,37 @@ it('distinguishes draft limits from daily generation limits', async () => {
   expect(response.status).toBe(429);
   expect((await response.json()).error.code).toBe('DRAFT_LIMIT_REACHED');
   expect((await (await request('/me/quota')).json()).remainingToday).toBe(2);
+});
+
+it('serves all generation states and exposes only successful owned assets', async () => {
+  const repository = createMockRepository();
+  app = createApp({ localDevelopment: true, repository });
+  const entry = await create();
+  const id = crypto.randomUUID();
+  const fixtures = generationFixtures(entry.id, id);
+  repository.entries.get(entry.id)!.entry.latestGenerationId = id;
+  for (const generation of Object.values(fixtures)) {
+    repository.generations.set(id, { owner, key: crypto.randomUUID(), revision: 1, generation });
+    expect(await (await request(`/generations/${id}`)).json()).toEqual(generation);
+    const detail = await (await request(`/entries/${entry.id}`)).json();
+    expect(detail.latestGeneration.status).toBe(generation.status);
+    if (generation.status !== 'succeeded') {
+      const asset = fixtures.succeeded.comic.visual;
+      if (asset.kind === 'page')
+        expect((await request(`/assets/${asset.assetId}/url`)).status).toBe(404);
+    }
+  }
+  repository.generations.set(id, {
+    owner,
+    key: crypto.randomUUID(),
+    revision: 1,
+    generation: { ...fixtures.succeeded, comic: panelsComic },
+  });
+  if (panelsComic.visual.kind !== 'panels') throw new Error('panels fixture required');
+  for (const assetId of panelsComic.visual.assetIds) {
+    expect((await request(`/assets/${assetId}/url`)).status).toBe(200);
+    expect(
+      (await request(`/assets/${assetId}/url`, 'GET', undefined, {}, crypto.randomUUID())).status,
+    ).toBe(404);
+  }
 });

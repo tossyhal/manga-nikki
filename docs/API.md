@@ -170,6 +170,8 @@ type ComicDocument = {
 - `status`（6種類）：`queued` | `running` | `succeeded` | `failed` | `unknown` | `cancelled`
 - `stage`（進行段階）：`script`（脚本作成中） | `images`（画像描画中） | `saving`（保存中） | `null`
 
+共有型は`src/shared/schemas.ts`の`Generation`です。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
+
 ### ポーリングと`unknown`状態の扱い
 
 - フロントエンドのポーリング：約5秒間隔を目安に状態を取得します。ブラウザのタブが非表示の間は間隔を延ばすか一時停止し、タブ復帰時に再取得します。終了状態（`succeeded` / `failed` / `unknown` / `cancelled`）になったらポーリングを止めます。

@@ -262,8 +262,10 @@ export function createApp(
     const job = [...repository.generations.values()].find(
       (x) =>
         x.owner === c.get('owner') &&
-        x.generation.comic.visual.kind === 'page' &&
-        x.generation.comic.visual.assetId === c.req.param('id'),
+        x.generation.status === 'succeeded' &&
+        (x.generation.comic.visual.kind === 'page'
+          ? x.generation.comic.visual.assetId === c.req.param('id')
+          : x.generation.comic.visual.assetIds.includes(c.req.param('id'))),
     );
     if (!job) throw new ApiError(404, 'NOT_FOUND');
     return c.json({
