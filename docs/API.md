@@ -3,6 +3,14 @@
 > エンドポイント共通プレフィックス：`/api/v1`
 > 以下はフロントエンド・バックエンド・DB・AIアダプター間の実装契約です（文書作成時点では未実装）。
 
+### 初期基盤の実装範囲
+
+localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`generationAvailable`はこの基盤ではlocal-mockだけtrueです。
+
+モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
+
+以降の実認証・DB・Queue・期限削除等の記述は後続の実装契約です。モックは再起動で消える一時メモリで、実環境への安全性を検証したものではありません。
+
 ---
 
 ## 1. 共通規則
@@ -40,7 +48,7 @@
 | Method / Path | 認証 | リクエスト / レスポンス概要 |
 |---|---|---|
 | `GET /health` | 不要 | `{ status: "ok", version }`を返す（内部の接続情報は含めない） |
-| `GET /config` | 不要 | `{ generationAvailable, consentVersion, retentionDays: 30 }` |
+| `GET /config` | 不要 | `{ generationAvailable, dataMode: "mock" | "live" | "sample", consentVersion, retentionDays: 30 }` |
 | `GET /me/quota` | 必須 | 自分の`remainingToday`、`activeGenerationId`、JST基準の`resetAt`、`generationAvailable` |
 | `POST /entries` | 必須 | `{ createRequestId, diaryDate, body, consentVersion }` → `201` Entry |
 | `GET /entries?cursor=...&limit=20` | 必須 | `{ items, nextCursor }`（`limit`は最大50） |
@@ -196,6 +204,7 @@ type ComicDocument = {
 | `404` | `NOT_FOUND` | 対象のデータが存在しない旨を表示 |
 | `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
 | `413` | `INPUT_TOO_LARGE` | 入力サイズの削減を案内 |
+| `429` | `DRAFT_LIMIT_REACHED` | 下書き上限。不要な記録の削除を案内 |
 | `429` | `USER_LIMIT_REACHED` / `GLOBAL_LIMIT_REACHED` / `TOO_MANY_ACTIVE` | 新規生成を停止。架空サンプルや保存済み履歴の閲覧は引き続き利用可能と案内 |
 | `503` | `GENERATION_DISABLED` / `DEPENDENCY_UNAVAILABLE` | サービス停止中または一時障害を表示し、ボタンを繰り返し連打させない |
 

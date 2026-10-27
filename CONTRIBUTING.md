@@ -1,12 +1,12 @@
 # 開発手順（CONTRIBUTING）
 
-## 1. 今やること（初期基盤を作る前）
+## 1. 最初にやること（ツールの準備）
 
-現在は`mise.toml`・`mise.lock`・`package.json`・`pnpm-lock.yaml`がありません。この節ではツールとエディターだけ準備します。`pnpm install`や`pnpm dev`は、基盤の追加後に実行します。
+初期基盤と固定版の設定は追加済みです。この節でツールとエディターを準備し、次の節で開発サーバーを起動します。
 
 ### ツールと採用バージョン
 
-Git、mise、任意のエディターを用意します。Node.jsは24系、pnpmは手元で確認した`12.11.2`に揃えます。Node.jsの正確な版は基盤構築時に検証して固定します。
+Git、mise、任意のエディターを用意します。Node.jsは`24.22.1`、pnpmは`12.11.2`に固定済みです。miseも検証した`2026.10.19`以降を使います。
 
 Node.jsとpnpmはmise、依存パッケージはpnpmと`pnpm-lock.yaml`で管理します。package.jsonの`packageManager`には`pnpm@12.11.2`を設定します。WindowsとWSLで`node_modules`を共有しません。通常の画面開発にDockerやSupabase CLIは不要です。
 
@@ -45,9 +45,9 @@ VS Codeでリポジトリを開き、拡張機能の推奨一覧からEditorConf
 
 `.editorconfig`は保存時のLF・文字コード・インデント、`.gitattributes`はGitのテキスト改行をLFへ揃えます。個人の`core.autocrlf`設定を変更する必要はありません。日本語と英数字の間に不要な半角スペースは入れず、コード・URL・コマンド内の空白は維持します。
 
-## 2. 基盤ができたらやること（初回起動）
+## 2. 初回起動
 
-この節は、前述の4ファイルが追加された後に実行します。既にclone済みなら取得を繰り返しません。招待を承諾したGitHubアカウントで認証し、URLにトークンを埋め込みません。
+リポジトリにある4つの設定・lockfileを使います。既にclone済みなら取得を繰り返しません。招待を承諾したGitHubアカウントで認証し、URLにトークンを埋め込みません。
 
 ```powershell
 git clone https://github.com/tossyhal/manga-nikki.git
@@ -79,37 +79,40 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
-## 3. 初期基盤の範囲（最初に作るもの）
+## 3. 初期基盤の範囲
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
 - 標準コマンド・lint/format・型確認・unit/E2E・CIを用意し、秘密情報なしの新規Windows環境で起動と検査が通ることを確認する。
 - モック表示、localhost制限、動作モードの起動時検証を入れる。DB・Queue・実AI・本番公開は後続PRで扱う。
 
-基盤構築時に次の指定で`mise.toml`と`mise.lock`を作ります。通常の参加者は作り直さず、前節の`--locked`で導入します。
+以下は基盤設定を更新するときだけの参考です。通常の参加者は作り直さず、前節の`--locked`で導入します。
 
 ```sh
-mise use node@24 pnpm@12.11.2
-mise lock --platform linux-x64,windows-x64,macos-arm64
+mise use node@24.22.1 pnpm@12.11.2
+mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 ```
 
 利用者のOS/CPUに合わせて対象を追加し、各環境で`mise install --locked`を確認します。Node.jsの解決版とpnpmの指定版を確認し、miseの設定・lockfileを一緒に管理します。package.jsonの`packageManager`とCIも同じ版へ揃えます。
 
 ## 4. 標準コマンド一覧
 
-現在はすべて未実装です。実装後もpackage.jsonの`scripts`で利用可否を確認します。
+初期基盤のコマンドは実装済みです。DBテストと公開用コマンドは後続で追加し、package.jsonの`scripts`を正本とします。
 
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
-| `pnpm dev` | 画面とAPIの開発サーバー | 初期基盤 |
-| `pnpm lint` | 静的ルール検査 | 初期基盤 |
-| `pnpm typecheck` | TypeScriptの型検査 | 初期基盤 |
-| `pnpm test` | Vitestの非watch実行 | 初期基盤 |
-| `pnpm test:e2e` | PlaywrightのモックE2E | 初期基盤 |
-| `pnpm build` | ビルド検証。公開しない | 初期基盤 |
+| `pnpm dev` | 画面とAPIの開発サーバー | 実装済み |
+| `pnpm lint` | 静的ルール検査 | 実装済み |
+| `pnpm typecheck` | TypeScriptの型検査 | 実装済み |
+| `pnpm test` | Vitestの非watch実行 | 実装済み |
+| `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
+| `pnpm build` | ビルド検証。公開しない | 実装済み |
+| `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
 | `pnpm test:db` | 隔離DBのRLS/RPC・同時要求 | DB・認証の実装時 |
 | `pnpm build:staging` / `pnpm build:production` | 環境別ビルド | 公開準備時 |
 | `pnpm deploy:staging` / `pnpm deploy:production` | 承認済み環境への公開 | 公開準備時 |
+
+`pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはmise-actionで同じ版を導入します。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
@@ -176,3 +179,12 @@ git switch -c feat/diary-form
   [Supabase公式migration手順](https://supabase.com/docs/guides/local-development/database-migrations/)を確認し、「ローカルDBのreset」と「共有DBへのmigration適用」を明確に区別してください。**共有DBや本番DBではresetを実行しないでください。**（CLIの具体的な操作手順は、採用バージョンの動作確認後に追記します）。
 
 miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導入手順](https://mise.jdx.dev/installing-mise.html)・[シェル設定](https://mise.jdx.dev/shell-setup.html)・[lockfile仕様](https://mise.jdx.dev/dev-tools/mise-lock.html)と手元のmiseのhelpを確認しました。Windows/macOSでの起動は未検証です。
+
+
+## 開発モックの制限
+
+- 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
+- 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
+- Supabase接続・JWT検証・CAPTCHA・Queue・実AI・30日期限削除・PWAは未実装です。接続モードをliveに変えても実APIには接続せず503で拒否します。
+- ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
+- E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

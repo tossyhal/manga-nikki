@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "manga-nikki",
+  "main": "src/server/index.ts",
+  "compatibility_date": "2026-10-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "vars": {
+    "APP_ENV": "production",
+    "DATA_MODE": "sample",
+    "AI_MODE": "mock",
+    "GENERATION_ENABLED": "false",
+  },
+  "observability": { "enabled": false },
+}

@@ -1,0 +1,14 @@
+{
+  "singleQuote": true,
+  "printWidth": 100,
+  "ignorePatterns": [
+    "docs/**",
+    "*.md",
+    "mise.lock",
+    "pnpm-lock.yaml",
+    ".dev.vars*",
+    ".env*",
+    "dist/**",
+    "node_modules/**"
+  ]
+}

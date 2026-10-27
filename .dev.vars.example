@@ -11,6 +11,6 @@ SUPABASE_URL=""
 SUPABASE_PUBLISHABLE_KEY=""
 SUPABASE_SECRET_KEY=""
 TURNSTILE_SECRET_KEY=""
-# 実モデルを選んだ場合のみ使う。Workers AIはbindingを別途設定する。
+# 候補用・未承認。実モデルを選んだ場合のみ使う。Workers AIはbindingを別途設定する。
 GEMINI_API_KEY=""
 # 上限・モデルprofileはprivate.generation_policyで管理。承認までは0/disabled。
