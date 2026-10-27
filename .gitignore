@@ -1,0 +1,22 @@
+# Dependencies / outputs
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.wrangler/
+.vite/
+*.tsbuildinfo
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+# Logs / local scratch
+*.log
+.DS_Store
+Thumbs.db
+supabase/.temp/
+supabase/.branches/
