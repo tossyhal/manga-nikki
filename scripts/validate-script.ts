@@ -2,9 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { scriptSchema } from '../src/server/ai/script-schema.ts';
 
-// 引数を省略した場合は、保存済みの大学祭のサンプルを検証する。
+// 引数を省略した場合は、保存済みの脚本サンプルを検証する。
 const defaultPath = fileURLToPath(
-  new URL('../docs/contracts/university-festival.script.example.json', import.meta.url),
+  new URL('../docs/contracts/script.example.json', import.meta.url),
 );
 const args = process.argv.slice(2);
 
@@ -38,7 +38,12 @@ async function main() {
   if (!result.success) {
     console.error('検証失敗：脚本の形式が仕様に合っていません。');
     for (const issue of result.error.issues) {
-      console.error(`- ${issue.path.join('.') || '(全体)'}: ${issue.message}`);
+      const [field, position, ...rest] = issue.path;
+      const location =
+        field === 'panels' && typeof position === 'number'
+          ? [`${position + 1}コマ目`, ...rest].join('.')
+          : issue.path.join('.') || '(全体)';
+      console.error(`- ${location}: ${issue.message}`);
     }
     process.exitCode = 1;
     return;

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import sample from '../../../docs/contracts/university-festival.script.example.json';
+import sample from '../../../docs/contracts/script.example.json';
 import { scriptSchema } from './script-schema';
 
 describe('脚本JSONの検証', () => {
-  it('大学祭のサンプルを受け付ける', () => {
+  it('脚本サンプルを受け付ける', () => {
     expect(scriptSchema.safeParse(sample).success).toBe(true);
   });
 
