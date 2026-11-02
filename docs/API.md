@@ -219,6 +219,8 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
+日記・生成ジョブ管理テーブルと`create_entry`・`update_entry`・`request_entry_deletion`のmigrationを追加済みです。RPCの具体的な引数、列の読み取り権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。画像保存・予算関連テーブル・生成RPC・アプリからの実接続は後続です。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+
 ### テーブル設計
 
 | テーブル名 | 主なカラム | 主な制約・役割 |

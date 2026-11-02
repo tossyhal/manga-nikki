@@ -8,6 +8,8 @@
 > 現在の状態（2026-10-27時点）
 > localhost限定の開発用モック基盤があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。実AI・Supabase・Queue・PWAは未実装です。
 
+日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストを追加しました。アプリのSupabase接続と共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+
 ## 最初に読むドキュメント
 
 開発を始める際は、まず以下の3つを順番に読んでください。

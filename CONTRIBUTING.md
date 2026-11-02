@@ -97,7 +97,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 ## 4. 標準コマンド一覧
 
-初期基盤のコマンドは実装済みです。DBテストと公開用コマンドは後続で追加し、package.jsonの`scripts`を正本とします。
+初期基盤のコマンドと日記DBテストは実装済みです。公開用コマンドは後続で追加し、package.jsonの`scripts`を正本とします。
 
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
@@ -108,13 +108,15 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
 | `pnpm build` | ビルド検証。公開しない | 実装済み |
 | `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
-| `pnpm test:db` | 隔離DBのRLS/RPC・同時要求 | DB・認証の実装時 |
+| `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
 | `pnpm build:staging` / `pnpm build:production` | 環境別ビルド | 公開準備時 |
 | `pnpm deploy:staging` / `pnpm deploy:production` | 承認済み環境への公開 | 公開準備時 |
 
 `pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはUbuntuだけで実行し、mise-actionで同じ版を導入します。同じブランチの古い実行はキャンセルします。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
+
+DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 
