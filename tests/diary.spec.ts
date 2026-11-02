@@ -7,13 +7,20 @@ test('入力からモック漫画と履歴を再読込して削除できる', as
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '保存してモック漫画を見る' }).click();
   await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.getByRole('heading', { name: '図書館で本を読んだ。' })).toBeVisible();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await expect(
     page.getByText('固定サンプルです。入力した日記から生成した画像ではありません。'),
   ).toBeVisible();
   await page.reload();
   await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
+  await page
+    .getByRole('link', { name: /漫画日記/ })
+    .first()
+    .click();
+  await expect(page.getByRole('heading', { name: '過去の記録' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /図書館で本を読んだ。/ }).first()).toBeVisible();
+  await page.getByRole('link', { name: '記録', exact: true }).click();
   await expect(page.getByRole('heading', { name: '保存した記録', exact: true })).toBeVisible();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toBeVisible();
   await page.getByText('図書館で本を読んだ。', { exact: true }).click();
@@ -25,12 +32,19 @@ test('狭い画面で下書き保存とHTML風の文字を安全に表示でき�
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('<script>window.injected=true</script>');
+  await expect(page.locator('#summary-preview')).toHaveText(
+    '見出し：<script>window.injected=true</script>',
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(
-    page.getByText('<script>window.injected=true</script>', { exact: true }),
+    page.getByRole('heading', { name: '<script>window.injected=true</script>' }),
   ).toBeVisible();
+  await expect(page.locator('.diary')).toHaveText('<script>window.injected=true</script>');
   expect(await page.evaluate(() => Reflect.get(window, 'injected'))).toBeUndefined();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

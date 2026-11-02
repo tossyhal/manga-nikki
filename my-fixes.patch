@@ -1,0 +1,213 @@
+diff --git a/src/client/app/App.tsx b/src/client/app/App.tsx
+index 98397c7..811386d 100644
+--- a/src/client/app/App.tsx
++++ b/src/client/app/App.tsx
+@@ -9,15 +9,10 @@ import { Library } from '../features/library/Library';
+ import { Detail } from '../features/library/Detail';
+ import { getEntries } from '../lib/api';
+ 
+-function Home({ available }: { available: boolean | null }) {
++function RecentRecords() {
+   const [recent, setRecent] = useState<Entry[] | null>(null);
+   const [historyError, setHistoryError] = useState('');
+   useEffect(() => {
+-    if (available !== true) {
+-      setRecent(null);
+-      setHistoryError('');
+-      return;
+-    }
+     let active = true;
+     getEntries({ limit: 5 })
+       .then((result) => {
+@@ -32,7 +27,32 @@ function Home({ available }: { available: boolean | null }) {
+     return () => {
+       active = false;
+     };
+-  }, [available]);
++  }, []);
++  return (
++    <section>
++      <h2>過去の記録</h2>
++      {historyError && (
++        <p role="alert" className="error">
++          {historyError}
++        </p>
++      )}
++      {recent === null ? (
++        <output>読み込んでいます…</output>
++      ) : recent.length === 0 ? (
++        <p>まだ保存した日記はありません。書いた記録は、要約を見出しにしてここに並びます。</p>
++      ) : (
++        <>
++          <EntryHistory entries={recent} />
++          <p>
++            <Link to="/library">すべての記録を見る →</Link>
++          </p>
++        </>
++      )}
++    </section>
++  );
++}
++
++function Home({ available }: { available: boolean | null }) {
+   return (
+     <>
+       <p className="eyebrow">一日を、4つの場面に。</p>
+@@ -50,28 +70,7 @@ function Home({ available }: { available: boolean | null }) {
+         </Link>
+         <Link to="/library">保存した記録を見る →</Link>
+       </div>
+-      {available === true && (
+-        <section>
+-          <h2>過去の記録</h2>
+-          {historyError && (
+-            <p role="alert" className="error">
+-              {historyError}
+-            </p>
+-          )}
+-          {recent === null ? (
+-            <output>読み込んでいます…</output>
+-          ) : recent.length === 0 ? (
+-            <p>まだ保存した日記はありません。書いた記録は、要約を見出しにしてここに並びます。</p>
+-          ) : (
+-            <>
+-              <EntryHistory entries={recent} />
+-              <p>
+-                <Link to="/library">すべての記録を見る →</Link>
+-              </p>
+-            </>
+-          )}
+-        </section>
+-      )}
++      {available === true && <RecentRecords />}
+       <section className="sample">
+         <h2>サンプルの一日</h2>
+         <p>{sampleDiary}</p>
+@@ -81,6 +80,7 @@ function Home({ available }: { available: boolean | null }) {
+             [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
+           }}
+           mock
++          titleAs="h3"
+         />
+       </section>
+     </>
+diff --git a/src/client/features/comic/Comic.tsx b/src/client/features/comic/Comic.tsx
+index 4ef8ba3..3e45c0f 100644
+--- a/src/client/features/comic/Comic.tsx
++++ b/src/client/features/comic/Comic.tsx
+@@ -4,10 +4,13 @@ export function Comic({
+   comic,
+   images,
+   mock = false,
++  titleAs: Title = 'h2',
+ }: {
+   comic: ComicDocument;
+   images: Record<string, string>;
+   mock?: boolean;
++  /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
++  titleAs?: 'h2' | 'h3';
+ }) {
+   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
+   return (
+@@ -29,7 +32,7 @@ export function Comic({
+         )}
+       </div>
+       <figcaption>
+-        <strong>{comic.title}</strong>
++        <Title className="comic-title">{comic.title}</Title>
+         <ol>
+           {comic.panels.map((panel) => (
+             <li key={panel.index}>
+diff --git a/src/client/features/library/Library.tsx b/src/client/features/library/Library.tsx
+index 3d9f58b..52ff734 100644
+--- a/src/client/features/library/Library.tsx
++++ b/src/client/features/library/Library.tsx
+@@ -64,12 +64,7 @@ export function Library() {
+           </Link>
+         </div>
+       ) : (
+-        <EntryHistory
+-          entries={entries}
+-          nextCursor={nextCursor}
+-          onLoadMore={loadMore}
+-          busy={busy}
+-        />
++        <EntryHistory entries={entries} nextCursor={nextCursor} onLoadMore={loadMore} busy={busy} />
+       )}
+     </>
+   );
+diff --git a/src/client/style.css b/src/client/style.css
+index f1ecbdd..079ae02 100644
+--- a/src/client/style.css
++++ b/src/client/style.css
+@@ -79,6 +79,7 @@ h1 {
+   line-height: 1.55;
+   letter-spacing: 0.04em;
+   margin: 10px 0 24px;
++  overflow-wrap: anywhere;
+ }
+ h2 {
+   font-size: 20px;
+@@ -138,6 +139,12 @@ section {
+   width: 100%;
+   height: auto;
+ }
++.comic .comic-title {
++  margin: 0;
++  font-size: 18px;
++  line-height: 1.5;
++  overflow-wrap: anywhere;
++}
+ .comic ol {
+   padding-left: 22px;
+   margin: 16px 0;
+@@ -236,6 +243,7 @@ textarea {
+   margin: 8px 0 0;
+   font-size: 13px;
+   color: #43603b;
++  overflow-wrap: anywhere;
+ }
+ .empty {
+   padding: 36px 0;
+diff --git a/tests/diary.spec.ts b/tests/diary.spec.ts
+index 0f08e2f..e3778c9 100644
+--- a/tests/diary.spec.ts
++++ b/tests/diary.spec.ts
+@@ -14,11 +14,12 @@ test('入力からモック漫画と履歴を再読込して削除できる', as
+   ).toBeVisible();
+   await page.reload();
+   await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
+-  await page.getByRole('link', { name: /漫画日記/ }).first().click();
++  await page
++    .getByRole('link', { name: /漫画日記/ })
++    .first()
++    .click();
+   await expect(page.getByRole('heading', { name: '過去の記録' })).toBeVisible();
+-  await expect(
+-    page.getByRole('link', { name: /図書館で本を読んだ。/ }).first(),
+-  ).toBeVisible();
++  await expect(page.getByRole('link', { name: /図書館で本を読んだ。/ }).first()).toBeVisible();
+   await page.getByRole('link', { name: '記録', exact: true }).click();
+   await expect(page.getByRole('heading', { name: '保存した記録', exact: true })).toBeVisible();
+   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toBeVisible();
+@@ -31,12 +32,19 @@ test('狭い画面で下書き保存とHTML風の文字を安全に表示でき
+   await page.setViewportSize({ width: 390, height: 844 });
+   await page.goto('/new');
+   await page.getByLabel('日記', { exact: true }).fill('<script>window.injected=true</script>');
++  await expect(page.locator('#summary-preview')).toHaveText(
++    '見出し：<script>window.injected=true</script>',
++  );
++  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
++    true,
++  );
+   await page.getByRole('checkbox').check();
+   await page.getByRole('button', { name: '下書き保存' }).click();
+   await expect(page).toHaveURL(/\/entries\//);
+   await expect(
+-    page.getByText('<script>window.injected=true</script>', { exact: true }),
++    page.getByRole('heading', { name: '<script>window.injected=true</script>' }),
+   ).toBeVisible();
++  await expect(page.locator('.diary')).toHaveText('<script>window.injected=true</script>');
+   expect(await page.evaluate(() => Reflect.get(window, 'injected'))).toBeUndefined();
+   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+     true,
