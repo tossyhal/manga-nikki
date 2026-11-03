@@ -162,12 +162,31 @@ begin
     );
   end if;
 
+  -- Match the policy-update trigger without granting UPDATE merely to acquire a row lock.
+  perform pg_catalog.pg_advisory_xact_lock(20261103, 10001);
+  -- Recheck after waiting for policy changes so an accepted request survives a concurrent stop.
+  select * into v_generation from public.generations g
+    where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
+  if found then
+    select * into v_entry from public.entries e
+      where e.id = p_entry_id and e.owner_id = p_actor_id for update;
+    if not found or not private.is_live_generation_entry(v_entry) then
+      raise exception using message = 'NOT_FOUND';
+    end if;
+    if v_generation.request_hash is distinct from v_request_hash then
+      raise exception using message = 'IDEMPOTENCY_CONFLICT';
+    end if;
+    return pg_catalog.jsonb_build_object(
+      'generation_id', v_generation.id,
+      'status', v_generation.status,
+      'status_url', '/api/v1/generations/' || v_generation.id::text
+    );
+  end if;
+
   if p_generation_enabled is distinct from true then
     raise exception using message = 'GENERATION_DISABLED';
   end if;
 
-  -- Match the policy-update trigger without granting UPDATE merely to acquire a row lock.
-  perform pg_catalog.pg_advisory_xact_lock(20261103, 10001);
   -- The global-total counter serializes admissions and makes the final slot atomic.
   select * into v_policy from private.generation_policy p where p.id = 1;
   if not found or not v_policy.enabled then
@@ -194,25 +213,6 @@ begin
     where c.scope = 'global_day' and c.subject is null and c.day_key = v_day for update;
   select * into v_user_day from private.quota_counters c
     where c.scope = 'user_day' and c.subject = p_actor_id and c.day_key = v_day for update;
-
-  -- A request that raced another request with the same key reuses its job without another charge.
-  select * into v_generation from public.generations g
-    where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
-  if found then
-    select * into v_entry from public.entries e
-      where e.id = p_entry_id and e.owner_id = p_actor_id for update;
-    if not found or not private.is_live_generation_entry(v_entry) then
-      raise exception using message = 'NOT_FOUND';
-    end if;
-    if v_generation.request_hash is distinct from v_request_hash then
-      raise exception using message = 'IDEMPOTENCY_CONFLICT';
-    end if;
-    return pg_catalog.jsonb_build_object(
-      'generation_id', v_generation.id,
-      'status', v_generation.status,
-      'status_url', '/api/v1/generations/' || v_generation.id::text
-    );
-  end if;
 
   select * into v_entry from public.entries e
     where e.id = p_entry_id and e.owner_id = p_actor_id for update;

@@ -526,30 +526,67 @@ try {
       'update private.generation_policy set enabled = true, global_daily_limit = 10, global_total_limit = 10;',
     ),
   );
-  const policyUpdateRace = await runBehindLock({
-    holderName: 'mn-db-policy-reserve-holder',
-    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
-    waiterPrefix: 'mn-db-policy-reserve-',
-    queries: [
-      `set role service_role; select public.reserve_generation('${reservationActors[4]}','${policyUpdateEntry}',1,'ffffffff-ffff-4fff-8fff-ffffffff0006',true);`,
+  const retryKey = 'ffffffff-ffff-4fff-8fff-ffffffff0006';
+  const retryHolderName = 'mn-db-policy-retry-holder';
+  const retryHolder = startSqlSession(retryHolderName);
+  let retryReservation;
+  let retryStop;
+  let retryReplay;
+  let retrySynchronizationError;
+  try {
+    retryHolder.write(
+      `begin;\nset local role service_role;\nselect pg_catalog.pg_advisory_xact_lock(20261103, 10001);\n\\echo ${retryHolderName}:lock-acquired\n`,
+    );
+    await retryHolder.waitForOutput(`${retryHolderName}:lock-acquired`);
+
+    retryReservation = sql(
+      `set role service_role; select public.reserve_generation('${reservationActors[4]}','${policyUpdateEntry}',1,'${retryKey}',true);`,
+      'mn-db-policy-retry-a',
+    );
+    await waitForLockWaiters('mn-db-policy-retry-a', 1);
+
+    retryStop = sql(
       'update private.generation_policy set enabled = false;',
-    ],
-  });
-  assert.equal(policyUpdateRace[1].code, 0);
-  const policyReservationSucceeded = policyUpdateRace[0].code === 0;
-  if (!policyReservationSucceeded) {
-    assert.match(policyUpdateRace[0].stderr, /GENERATION_DISABLED/);
+      'mn-db-policy-retry-stop',
+    );
+    await waitForLockWaiters('mn-db-policy-retry-stop', 1);
+
+    retryReplay = sql(
+      `set role service_role; select public.reserve_generation('${reservationActors[4]}','${policyUpdateEntry}',1,'${retryKey}',true);`,
+      'mn-db-policy-retry-b',
+    );
+    await waitForLockWaiters('mn-db-policy-retry-b', 1);
+  } catch (error) {
+    retrySynchronizationError = error;
+  } finally {
+    await retryHolder.finish(retrySynchronizationError ? 'rollback' : 'commit').catch((error) => {
+      retrySynchronizationError ??= error;
+    });
   }
+
+  const retryResults = await Promise.all(
+    [retryReservation, retryStop, retryReplay].filter(Boolean),
+  );
+  if (retrySynchronizationError) throw retrySynchronizationError;
+  const [reservationResult, stopResult, replayResult] = retryResults;
+  assert.equal(reservationResult.code, 0, reservationResult.stderr);
+  assert.equal(stopResult.code, 0, stopResult.stderr);
+  assert.equal(replayResult.code, 0, replayResult.stderr);
+  const reservationReceipt = JSON.parse(succeeded(reservationResult));
+  const replayReceipt = JSON.parse(succeeded(replayResult));
+  assert.deepEqual(replayReceipt, reservationReceipt);
   assert.equal(
     succeeded(
       await sql(`select (select enabled::text from private.generation_policy where id = 1) || ':' ||
         (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_day') || ':' ||
         (select count(*) from public.generations where owner_id = '${reservationActors[4]}') || ':' ||
-        (select count(*) from private.reservations where owner_id = '${reservationActors[4]}');`),
+        (select count(*) from private.reservations where owner_id = '${reservationActors[4]}') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'user_day' and subject = '${reservationActors[4]}');`),
     ),
-    policyReservationSucceeded ? 'false:4:28:1:1' : 'false:3:21:0:0',
+    'false:4:28:4:28:1:1:1:7',
   );
-  console.log('成功: policy更新と予約はadvisory lockで直列化');
+  console.log('成功: 予約・policy停止・同一キー再送の待機順でもreceiptとquotaを一件だけ維持');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
