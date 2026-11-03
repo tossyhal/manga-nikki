@@ -44,6 +44,7 @@ select test.assert(
     and has_table_privilege('service_role', 'public.generations', 'SELECT')
     and has_table_privilege('service_role', 'public.generations', 'INSERT')
     and has_table_privilege('service_role', 'public.generations', 'UPDATE')
+    and has_column_privilege('service_role', 'public.generations', 'is_mock', 'UPDATE')
     and not has_table_privilege('service_role', 'public.generations', 'DELETE')
     and not has_table_privilege('service_role', 'public.generations', 'TRUNCATE')
     and not has_table_privilege('service_role', 'public.generations', 'REFERENCES')
@@ -110,10 +111,10 @@ $$;
 select id as entry_id from public.entries
   where create_request_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' \gset
 insert into public.generations (
-  id, entry_id, owner_id, entry_revision, idempotency_key, request_hash, input_snapshot, model_profile_snapshot
+  id, entry_id, owner_id, entry_revision, idempotency_key, request_hash, input_snapshot, model_profile_snapshot, is_mock
 ) values (
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', :'entry_id',
-  '11111111-1111-4111-8111-111111111111', 2, gen_random_uuid(), 'fixture', '架空の脚本用入力', '{}'
+  '11111111-1111-4111-8111-111111111111', 2, gen_random_uuid(), 'fixture', '架空の脚本用入力', '{}', true
 );
 update public.entries set latest_generation_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' where id = :'entry_id';
 select test.expect_error(format('select public.update_entry(%L,%L,2,current_date,%L)',
@@ -135,11 +136,11 @@ select test.expect_error(format('update public.entries set latest_generation_id 
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', :'other_entry_id'), '23503');
 insert into public.generations (
   id, entry_id, owner_id, entry_revision, idempotency_key, request_hash,
-  input_snapshot, model_profile_snapshot, status
+  input_snapshot, model_profile_snapshot, status, is_mock
 ) values (
   'cccccccc-cccc-4ccc-8ccc-cccccccccccc', :'other_entry_id',
   '22222222-2222-4222-8222-222222222222', 1, gen_random_uuid(),
-  'fixture', '他人の架空日記', '{}', 'failed'
+  'fixture', '他人の架空日記', '{}', 'failed', false
 );
 update public.entries set latest_generation_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
   where id = :'other_entry_id';
@@ -161,9 +162,14 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
 select test.assert((select count(id) = 1 from public.entries), 'ユーザーBは自分の日記だけ読める');
 select test.assert((select count(id) = 1 from public.generations), 'ユーザーBは自分のジョブだけ読める');
+select test.assert((select count(id) = 1 from public.generations where is_mock = false), 'ユーザーBの生成由来metadataを読む');
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 select test.assert((select count(id) = 3 from public.entries), 'ユーザーAは自分の日記だけ読める');
 select test.assert((select count(id) = 1 from public.generations), '本人はジョブを読める');
+select test.assert((select count(id) = 1 from public.generations where is_mock = true), 'ユーザーAの固定結果由来を読む');
+select test.assert(has_column_privilege('authenticated', 'public.generations', 'is_mock', 'SELECT')
+  and not has_column_privilege('anon', 'public.generations', 'is_mock', 'SELECT'),
+  'is_mock列をauthenticatedだけが追加で読める');
 select test.expect_error('select input_snapshot from public.generations', '42501');
 select test.expect_error('select claim_token from public.generations', '42501');
 select test.expect_error('select create_request_hash from public.entries', '42501');
