@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { ComicDocument, EntryDetail } from '../../../shared/schemas';
+import { summarizeDiary } from '../../../shared/summary';
 import { api, generate, getEntry, getAssetUrl } from '../../lib/api';
 import { Comic } from '../comic/Comic';
 
@@ -116,7 +117,7 @@ function DetailContent({ id }: { id: string }) {
           <p className="eyebrow">
             {entry.diaryDate} / {generation ? (generation.mock ? 'モック漫画' : '漫画') : '下書き'}
           </p>
-          <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
+          <h1>{summarizeDiary(entry.body)}</h1>
           <output className="saved">開発サーバーへ仮保存しました。</output>
           {comicFromPreviousRevision && <output>編集前の日記から生成された漫画です。</output>}
           {generation?.status === 'succeeded' && (
