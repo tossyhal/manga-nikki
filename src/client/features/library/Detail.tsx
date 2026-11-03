@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import type { ComicDocument, EntryDetail } from '../../../shared/schemas';
+import {
+  jstToday,
+  updateEntrySchema,
+  type ComicDocument,
+  type Entry,
+  type EntryDetail,
+} from '../../../shared/schemas';
 import type { ClientConfig } from '../../lib/config';
-import { api, generate, getEntry, getAssetUrl } from '../../lib/api';
+import { ApiClientError, api, generate, getEntry, getAssetUrl } from '../../lib/api';
 import { Comic } from '../comic/Comic';
+import type { DiaryActivity } from '../diary/NewEntry';
 
 function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
   const [images, setImages] = useState<Record<string, string>>({});
@@ -34,11 +41,32 @@ function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
   );
 }
 
-function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
+function DetailContent({
+  id,
+  config,
+  onActivityChange,
+}: {
+  id: string;
+  config: ClientConfig;
+  onActivityChange: (activity: DiaryActivity) => void;
+}) {
   const navigate = useNavigate();
   const [entry, setEntry] = useState<EntryDetail | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftDate, setDraftDate] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [editErrorStatus, setEditErrorStatus] = useState<number | null>(null);
+  const draftDirty =
+    editing && entry !== null && (draftDate !== entry.diaryDate || draftBody !== entry.body);
+
+  useLayoutEffect(() => {
+    onActivityChange({ dirty: draftDirty, busy });
+  }, [busy, draftDirty, onActivityChange]);
+
+  useEffect(() => () => onActivityChange({ dirty: false, busy: false }), [onActivityChange]);
+
   useEffect(() => {
     let active = true;
     getEntry(id)
@@ -56,6 +84,106 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
   const pending = generation?.status === 'queued' || generation?.status === 'running';
   const comicFromPreviousRevision =
     generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
+
+  function beginEditing() {
+    if (!entry || pending) return;
+    setDraftDate(entry.diaryDate);
+    setDraftBody(entry.body);
+    setEditErrorStatus(null);
+    setError('');
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    if (!entry) return;
+    setDraftDate(entry.diaryDate);
+    setDraftBody(entry.body);
+    setEditErrorStatus(null);
+    setError('');
+    setEditing(false);
+  }
+
+  async function saveEdit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!entry || pending) return;
+    const parsed = updateEntrySchema.safeParse({
+      expectedRevision: entry.revision,
+      diaryDate: draftDate,
+      body: draftBody,
+    });
+    if (!parsed.success) {
+      setError('日付は今日以前、本文は1〜1,000文字で入力してください。');
+      setEditErrorStatus(null);
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    setEditErrorStatus(null);
+    try {
+      const updated = await api<Entry>(`/entries/${encodeURIComponent(entry.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(parsed.data),
+      });
+      setEntry((current) =>
+        current
+          ? {
+              ...current,
+              ...updated,
+              latestGeneration:
+                current.latestGenerationId === updated.latestGenerationId
+                  ? current.latestGeneration
+                  : null,
+            }
+          : current,
+      );
+      setDraftDate(updated.diaryDate);
+      setDraftBody(updated.body);
+      setEditing(false);
+      try {
+        const latest = await getEntry(id);
+        setEntry(latest);
+        setDraftDate(latest.diaryDate);
+        setDraftBody(latest.body);
+      } catch {
+        setError('変更は保存しましたが、詳細の最新状態を読み込めませんでした。');
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '変更を保存できませんでした。');
+      setEditErrorStatus(failure instanceof ApiClientError ? failure.status : null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reloadLatest() {
+    if (!entry) return;
+    if (
+      draftDirty &&
+      !window.confirm('編集中の入力を最新の記録で置き換えます。最新の記録を読み込みますか？')
+    )
+      return;
+
+    setBusy(true);
+    setError('');
+    try {
+      const latest = await getEntry(id);
+      setEntry(latest);
+      setDraftDate(latest.diaryDate);
+      setDraftBody(latest.body);
+      const latestIsPending =
+        latest.latestGeneration?.status === 'queued' ||
+        latest.latestGeneration?.status === 'running';
+      setEditing(!latestIsPending);
+      if (latestIsPending) setError('この記録は生成中のため編集できません。');
+      setEditErrorStatus(null);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '最新の記録を読み込めませんでした。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!pending) return;
     let active = true;
@@ -93,6 +221,7 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
     try {
       if (remove) {
         await api(`/entries/${entry.id}`, { method: 'DELETE' });
+        onActivityChange({ dirty: false, busy: false });
         navigate('/library');
       } else {
         await generate(entry);
@@ -139,31 +268,87 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
             </p>
           )}
           {generation?.status === 'cancelled' && <p>生成は中止されました。</p>}
-          <section>
-            <h2>元の日記</h2>
-            <p className="diary">{entry.body}</p>
-          </section>
-          <div className="actions">
-            {!entry.latestGeneration && (
-              <button
-                disabled={busy || config.dataMode !== 'mock' || !config.generationAvailable}
-                onClick={() => void act(false)}
-              >
-                {config.dataMode === 'mock' && config.generationAvailable
-                  ? 'モック漫画を見る'
-                  : '漫画生成は利用できません'}
-              </button>
-            )}
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm('この記録を削除しますか？')) void act(true);
-              }}
-            >
-              記録を削除
-            </button>
-          </div>
+          {editing && !pending ? (
+            <form onSubmit={(event) => void saveEdit(event)}>
+              <fieldset disabled={busy}>
+                <label htmlFor="edit-date">日付</label>
+                <input
+                  id="edit-date"
+                  type="date"
+                  value={draftDate}
+                  max={jstToday()}
+                  onChange={(event) => setDraftDate(event.target.value)}
+                  required
+                />
+                <label htmlFor="edit-body">日記</label>
+                <textarea
+                  id="edit-body"
+                  rows={8}
+                  value={draftBody}
+                  onChange={(event) => setDraftBody(event.target.value)}
+                  placeholder="今日は何がありましたか？"
+                  required
+                  aria-describedby="edit-count"
+                />
+                <p id="edit-count" className="hint">
+                  {[...draftBody.trim()].length} / 1,000文字
+                </p>
+              </fieldset>
+              <div className="actions">
+                <button disabled={busy || !draftDirty} type="submit">
+                  {busy ? '保存しています…' : '変更を保存'}
+                </button>
+                <button className="secondary" disabled={busy} type="button" onClick={cancelEditing}>
+                  編集をやめる
+                </button>
+                {editErrorStatus === 409 && (
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    type="button"
+                    onClick={() => void reloadLatest()}
+                  >
+                    最新の記録を読み込む
+                  </button>
+                )}
+              </div>
+            </form>
+          ) : (
+            <>
+              <section>
+                <h2>元の日記</h2>
+                <p className="diary">{entry.body}</p>
+              </section>
+              {!editing && (
+                <div className="actions">
+                  {!pending && (
+                    <button className="secondary" disabled={busy} onClick={beginEditing}>
+                      日記を編集
+                    </button>
+                  )}
+                  {!entry.latestGeneration && (
+                    <button
+                      disabled={busy || config.dataMode !== 'mock' || !config.generationAvailable}
+                      onClick={() => void act(false)}
+                    >
+                      {config.dataMode === 'mock' && config.generationAvailable
+                        ? 'モック漫画を見る'
+                        : '漫画生成は利用できません'}
+                    </button>
+                  )}
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm('この記録を削除しますか？')) void act(true);
+                    }}
+                  >
+                    記録を削除
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </>
       ) : (
         !error && <output>読み込んでいます…</output>
@@ -171,7 +356,13 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
     </>
   );
 }
-export function Detail({ config }: { config: ClientConfig }) {
+export function Detail({
+  config,
+  onActivityChange,
+}: {
+  config: ClientConfig;
+  onActivityChange: (activity: DiaryActivity) => void;
+}) {
   const { id = '' } = useParams();
-  return <DetailContent key={id} id={id} config={config} />;
+  return <DetailContent key={id} id={id} config={config} onActivityChange={onActivityChange} />;
 }

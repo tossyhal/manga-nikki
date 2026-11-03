@@ -16,6 +16,7 @@ type NewEntryProps = {
 export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
   const requestId = useRef(crypto.randomUUID());
+  const activeRef = useRef(true);
   const [initialDate] = useState(() => jstToday());
   const [saved, setSaved] = useState<Entry | null>(null);
   const [date, setDate] = useState(initialDate);
@@ -32,7 +33,13 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     onActivityChange({ dirty, busy });
   }, [busy, dirty, onActivityChange]);
 
-  useEffect(() => () => onActivityChange({ dirty: false, busy: false }), [onActivityChange]);
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      onActivityChange({ dirty: false, busy: false });
+    };
+  }, [onActivityChange]);
 
   async function persist(makeComic: boolean, registrationToken?: string) {
     const parsed = createEntrySchema.safeParse({
@@ -45,13 +52,23 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       setError('日付は今日以前、本文は1〜1,000文字で入力してください。');
       return;
     }
-    if (registrationToken) await registerAnonymousSession(registrationToken);
+    if (registrationToken) {
+      await registerAnonymousSession(registrationToken);
+      if (!activeRef.current) return;
+    }
     let entry = saved;
     if (!entry) {
       entry = await api<Entry>('/entries', { method: 'POST', body: JSON.stringify(parsed.data) });
+      if (!activeRef.current) return;
       setSaved(entry);
+      onActivityChange({ dirty: false, busy: makeComic });
     }
-    if (makeComic) await generate(entry);
+    if (makeComic) {
+      await generate(entry);
+      if (!activeRef.current) return;
+    }
+    if (!activeRef.current) return;
+    onActivityChange({ dirty: false, busy: false });
     navigate(`/entries/${entry.id}`);
   }
 
@@ -89,9 +106,10 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       }
       await persist(makeComic);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '保存できませんでした。');
+      if (activeRef.current)
+        setError(failure instanceof Error ? failure.message : '保存できませんでした。');
     } finally {
-      setBusy(false);
+      if (activeRef.current) setBusy(false);
     }
   }
 
@@ -112,9 +130,10 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     try {
       await persist(makeComic, captchaToken);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '保存できませんでした。');
+      if (activeRef.current)
+        setError(failure instanceof Error ? failure.message : '保存できませんでした。');
     } finally {
-      setBusy(false);
+      if (activeRef.current) setBusy(false);
     }
   }
 

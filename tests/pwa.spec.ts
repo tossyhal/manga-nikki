@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+
+const entryId = draftEntryDetailFixture.id;
 
 async function makeUpdateAvailable(page: import('@playwright/test').Page) {
   await page.addInitScript(() => Reflect.set(window, '__pwaUpdateCalls', 0));
@@ -53,6 +56,23 @@ test('未保存の日記入力中は更新を保留し、保存後も明示操�
   await expect(updateButton).toBeEnabled();
   await updateButton.click();
   await expect.poll(() => page.evaluate(() => Reflect.get(window, '__pwaUpdateCalls'))).toBe(1);
+});
+
+test('詳細の日記編集が未保存の間は手動PWA更新を保留する', async ({ page }) => {
+  await makeUpdateAvailable(page);
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: draftEntryDetailFixture }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '日記を編集' }).click();
+  const diary = page.getByLabel('日記', { exact: true });
+  await diary.fill('更新中に保護する詳細編集の架空日記');
+
+  await expect(page.getByRole('button', { name: '更新する' })).toBeDisabled();
+  await expect(diary).toHaveValue('更新中に保護する詳細編集の架空日記');
+  expect(await page.evaluate(() => Reflect.get(window, '__pwaUpdateCalls'))).toBe(0);
 });
 
 test('オフライン時に架空サンプルと利用制限を案内する', async ({ page }) => {
