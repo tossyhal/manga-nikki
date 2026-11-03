@@ -4,6 +4,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: 'tests',
+  testIgnore: ['pwa-preview.spec.ts', 'pwa-update.spec.ts'],
   use: { baseURL, trace: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {

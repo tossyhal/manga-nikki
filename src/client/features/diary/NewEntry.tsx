@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
@@ -6,11 +6,19 @@ import { api, generate } from '../../lib/api';
 import { registerAnonymousSession, getLiveAccessToken } from '../../lib/auth';
 import type { ClientConfig } from '../../lib/config';
 
-export function NewEntry({ config }: { config: ClientConfig }) {
+export type DiaryActivity = { dirty: boolean; busy: boolean };
+
+type NewEntryProps = {
+  config: ClientConfig;
+  onActivityChange: (activity: DiaryActivity) => void;
+};
+
+export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
   const requestId = useRef(crypto.randomUUID());
+  const [initialDate] = useState(() => jstToday());
   const [saved, setSaved] = useState<Entry | null>(null);
-  const [date, setDate] = useState(jstToday());
+  const [date, setDate] = useState(initialDate);
   const [body, setBody] = useState('');
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState('');
@@ -18,6 +26,13 @@ export function NewEntry({ config }: { config: ClientConfig }) {
   const [pendingSave, setPendingSave] = useState<boolean | null>(null);
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const canGenerate = config.dataMode === 'mock' && config.generationAvailable;
+  const dirty = saved === null && (body.length > 0 || date !== initialDate);
+
+  useLayoutEffect(() => {
+    onActivityChange({ dirty, busy });
+  }, [busy, dirty, onActivityChange]);
+
+  useEffect(() => () => onActivityChange({ dirty: false, busy: false }), [onActivityChange]);
 
   async function persist(makeComic: boolean, registrationToken?: string) {
     const parsed = createEntrySchema.safeParse({

@@ -6,9 +6,9 @@
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
 > 現在の状態（2026-11-03時点）
-> localhost限定の開発用モック基盤があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードのサーバーJWT検証境界は実装済みですが、Supabase DB接続・日記CRUD・実AI・Queue・PWAは未実装です。liveモードの個人APIは認証後も503を返します。
+> localhost限定の開発用モック基盤とPWAの基本機能があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードのサーバーJWT検証境界、日記DBのmigration・RLS・日記操作用RPCは実装済みです。隔離PostgreSQLテストと偽JWKSを使ったJWT検証テストを追加していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。実AI・Queueは未実装です。Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
 
-日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストを追加しました。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+liveモードの個人APIはJWT認証後も503を返します。Supabaseへの接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 
@@ -68,6 +68,22 @@
 | migration | DB構造の変更を順番に再現するファイル |
 | revision | 日記の改訂番号。古い画面からの更新の衝突を検出する |
 | 秘密情報 | APIキー・認証トークンなど。Supabaseの固有名称だけsecret keyと記す |
+
+## PWAのビルド確認
+
+PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
+
+```sh
+pnpm test:e2e:pwa
+```
+
+`pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
+
+手元で画面を確認する場合は、`pnpm build`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
+
+新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
+
+ローカルpreviewでの確認はAndroid Chrome・iPhone SafariのHTTPS実機確認の代わりにはなりません。実機インストール、standalone表示、更新の確認は公開前に別途行います。
 
 ## ライセンス・利用条件
 

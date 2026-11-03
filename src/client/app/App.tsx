@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
 import { Comic } from '../features/comic/Comic';
-import { NewEntry } from '../features/diary/NewEntry';
+import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
 import { getClientConfig, type ClientConfig } from '../lib/config';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
+import { PwaNotice } from './PwaNotice';
 
 const configUnavailableMessage = '現在、読み込めません。通信を確認して再読み込みしてください。';
 
@@ -44,6 +45,11 @@ function Home() {
 export function App() {
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
+  const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
+  const reportDiaryActivity = useCallback(
+    (activity: DiaryActivity) => setDiaryActivity(activity),
+    [],
+  );
   useEffect(() => {
     void getClientConfig()
       .then(setConfig)
@@ -75,6 +81,7 @@ export function App() {
                 ? configUnavailableMessage
                 : '環境を確認しています…'}
       </aside>
+      <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
       <main id="main">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -86,7 +93,7 @@ export function App() {
               ) : configError ? (
                 <p role="alert">{configUnavailableMessage}</p>
               ) : personalDataAvailable && config ? (
-                <NewEntry config={config} />
+                <NewEntry config={config} onActivityChange={reportDiaryActivity} />
               ) : (
                 <p>
                   保存機能は利用できません。<Link to="/">サンプルを見る</Link>
