@@ -9,7 +9,7 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-liveモードではSupabase access tokenの検証境界を実装していますが、検証後のDB・Queue・期限削除等は未実装です。liveモードの個人APIはJWT検証後も503を返し、モックrepositoryへ切り替えません。モックは再起動で消える一時メモリで、実環境への安全性を検証したものではありません。
+liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細の読み取りは利用者JWT + RLSとAPI側のowner条件を使い、作成・編集・論理削除はサーバー専用RPCを使います。日記詳細は既存の`latestGeneration`状態も読み取ります。generation受付・quota・独立した`GET /generations/:id`・画像Storage/署名URL・期限切れ物理削除・Queueは未実装で、該当APIは503を返します。live APIがモックrepositoryへ切り替わることはありません。モックは再起動で消える一時メモリで、実Supabase環境の結合確認は未実施です。
 
 liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。新規登録は保存操作と同意の後に限り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。現在、生成用CAPTCHAとlive生成フローは未接続のため、ブラウザからlive生成要求を送らず停止します。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
 
@@ -24,7 +24,7 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
   - 定義されていない未知のプロパティが特権項目へ紛れ込むのを防ぐため、リクエストはすべてZodのstrict schemaで検証し、未知のキーがあれば拒否します。
 - 認証と所有者判定
   - 保護されたAPIには`Authorization: Bearer <Supabase access token>`ヘッダーを付与します。
-  - `auth.getClaims(jwt)`でJWT署名と期限を検証し、サーバーがさらにissuerが`${SUPABASE_URL}/auth/v1`、audienceが`authenticated`、`sub`がUUID形式であることを確認します。検証済み`sub`だけをサーバー内の所有者として扱います。
+  - `auth.getClaims(jwt)`でJWT署名と期限を検証し、サーバーがさらにissuerが`${SUPABASE_URL}/auth/v1`、audienceが`authenticated`、`sub`がUUID形式であることを確認します。続けて`auth.getUser(jwt)`でAuthサーバーの現在のユーザーを照会し、ID一致を確認します。検証済み`sub`だけをサーバー内の所有者として扱います。即時失効を保証するものではなく、詳細は[OPERATIONS](OPERATIONS.md#認証とセッション失効の確認範囲)を参照してください。
   - JWKS取得などAuth依存先が利用できない場合は503、JWT不正やclaim不一致は401を返します。公開の`/health`・`/config`はJWTを要求しません。
   - リクエスト本文やクエリに`userId`は含めません（必ず検証済みJWTの`sub`から所有者を特定します）。
 - レスポンスとエラー形式
@@ -62,9 +62,11 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
 | `GET /generations/:generationId` | 必須 | `status` / `stage`、成功時は`ComicDocument`、失敗時は一般化した`error` |
 | `GET /assets/:assetId/url` | 必須 | 所有者確認後に`{ url, expiresAt }`を返す（署名URLの有効期限は60秒） |
 
+`GET /entries`の`nextCursor`は呼び出し側では不透明な値として扱います。live modeは`(diaryDate, id)`をURL-safe base64にして両方の降順順序を維持し、local-mockは既存のentry IDをcursorに使います。初回の`limit`省略時は20件、最大50件です。
+
 ### ステータスコードの共通ルール
 
-- 404 Not Found：他人のデータID、削除済みID、存在しないIDへのアクセスは、存在有無を推測されないよう一律で`404`を返します。
+- 404 Not Found：他人のデータID、削除済みID、期限切れID、存在しないIDへのアクセスは、存在有無を推測されないよう一律で`404`を返します。
 - 409 Conflict：
   - 自分の日記に対する更新・生成で`expectedRevision`が一致しない場合は`409`を返します。
   - 下書き作成（`POST /entries`）で同じ`createRequestId`が送られた場合、本文や日付が同じなら既存のEntryを返し（冪等）、異なる内容なら`409`を返します。
@@ -122,6 +124,7 @@ Content-Type: application/json
 
 - 匿名サインアップ用のTurnstileトークンと、漫画生成リクエスト用のTurnstileトークンは別々に取得します（1つのトークンを2回の検証に使い回すことはできません）。
 - 通信エラー等で同じ`Idempotency-Key`を使って既存リクエストの結果を再照会する場合は、新しいCAPTCHAトークンや追加の生成枠消費は要求しません。ただし、JWT認証・所有者・リクエストハッシュの一致は必ず再確認します。
+- APIサーバーは生成受付時に、JWTから得た所有者・entry・revision・`Idempotency-Key`でサーバー専用`find_generation_receipt` RPCを先に呼びます。receiptがあれば返し、`null`ならTurnstileを検証してから`reserve_generation`を呼びます。予約RPCも同じキーを再確認し、並行要求で既に予約済みなら既存receiptを返して追加quotaを消費しません。
 
 ---
 
@@ -173,7 +176,7 @@ type ComicDocument = {
 - `status`（6種類）：`queued` | `running` | `succeeded` | `failed` | `unknown` | `cancelled`
 - `stage`（進行段階）：`script`（脚本作成中） | `images`（画像描画中） | `saving`（保存中） | `null`
 
-共有型は`src/shared/schemas.ts`の`Generation`です。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
+共有型は`src/shared/schemas.ts`の`Generation`です。すべてのGenerationレスポンスには生成時の日記改訂番号`entryRevision`を含めます。これは漫画生成時点のEntryの`revision`で、後から日記を編集しても変わりません。HTTP v1のリクエスト契約は変更せず、このレスポンス項目を追加します。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、succeededの`entryRevision`が現在のEntryの`revision`より小さい場合は「編集前の日記から生成された漫画です。」と表示します。画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId, entryRevision = 1)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
 
 ### ポーリングと`unknown`状態の扱い
 
@@ -222,19 +225,23 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成ジョブ管理テーブルと`create_entry`・`update_entry`・`request_entry_deletion`のmigrationを追加済みです。RPCの具体的な引数、列の読み取り権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。画像保存・予算関連テーブル・生成RPC・アプリからの実接続は後続です。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成ジョブ管理テーブル、生成元`is_mock`、private予算台帳、`find_generation_receipt` / `reserve_generation` RPCのmigrationを追加済みです。日記CRUDのHTTP接続は実装済みですが、共有DBへmigrationはまだ適用していません。生成受付HTTP API・Queue・実AI・画像保存は後続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+
+`generations.is_mock`は生成元metadataです。後続のjob writerは固定結果なら`true`、実生成なら`false`を必ず設定します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
 ### テーブル設計
 
 | テーブル名 | 主なカラム | 主な制約・役割 |
 |---|---|---|
 | `public.entries` | `id`, `owner_id`, `create_request_id`, `diary_date`, `body`, `revision`, `latest_generation_id`, `consent_version`, `created_at`, `updated_at`, `deleted_at`, `expires_at` | PK `id`、`UNIQUE(owner_id, create_request_id)`、本文長・revisionのCHECK制約 |
-| `public.generations` | `id`, `entry_id`, `owner_id`, `entry_revision`, `idempotency_key`, `request_hash`, `input_snapshot`, `model_profile_snapshot`, `claim_token`, `deadline_at`, `status`, `stage`, `comic_json`, `error_code`, `created_at`, `updated_at`, `enqueued_at`, `started_at`, `completed_at`, `cancel_requested` | `UNIQUE(owner_id, idempotency_key)`、`status`のCHECK制約、entry所有者との整合性保証 |
+| `public.generations` | `id`, `entry_id`, `owner_id`, `entry_revision`, `idempotency_key`, `request_hash`, `input_snapshot`, `model_profile_snapshot`, `claim_token`, `deadline_at`, `status`, `stage`, `comic_json`, `error_code`, `is_mock`, `created_at`, `updated_at`, `enqueued_at`, `started_at`, `completed_at`, `cancel_requested` | `UNIQUE(owner_id, idempotency_key)`、`status`のCHECK制約、entry所有者との整合性保証。`is_mock`は生成元を記録し、NULLは由来不明 |
 | `public.assets` | `id`, `generation_id`, `owner_id`, `object_path`, `media_type`, `byte_size`, `width`, `height`, `created_at` | `UNIQUE(object_path)`、許可MIMEタイプ、ファイルサイズ上限の制約 |
 | `private.generation_policy` | `id=1`, `enabled`, `user_daily_limit`, `global_daily_limit`, `global_total_limit`, `budget_micro_usd`, `model_profile_json` | 初期値は`enabled=false`、全体枠/予算`0`。管理者のみ操作可能 |
 | `private.quota_counters` | `scope`, `subject`, `day_key`, `count`, `committed_micro_usd` | `(scope, subject, day_key)`の一意制約。並行予約時に行ロックして集計 |
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
 | `private.provider_attempts` | `generation_id`, `stage`, `call_index`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。AIモデルの重複呼び出しを防止 |
+
+`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。provider/modelなどの他設定はprofile snapshotに保持します。
 
 - 所有者とスキーマ保護：`owner_id`は検証済みJWTの`sub`から設定し、`entry`・`job`・`asset`の間でも所有者が一致することを照合します。`auth.users`はSupabase管理とし、`private`スキーマは外部Data APIへ公開しません。
 - 主なインデックス：`entries(owner_id, diary_date, id)`、`generations(owner_id, created_at)`、`generations(status, created_at)`、`assets(generation_id)`。
@@ -247,13 +254,18 @@ type ComicDocument = {
 | `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き件数上限と本文を検証 |
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
-| `reserve_generation` | 同上 | 所有者・同意・`revision`、冪等性、ユーザー枠/全体枠、予算金額を1トランザクションで原子的に検査・予約 |
+| `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
+| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
 | `claim_generation` | Queue Consumer | `queued`状態のジョブだけを`running`へ遷移させ、`claimToken`を発行 |
 | `begin_provider_attempt` | Queue Consumer | `claimToken`の一致と同一`(stage, call_index)`が未実行であることを検査し、`dispatched`を記録 |
 | `complete_generation` | Queue Consumer | `claimToken`、未削除状態、アセット数と所有権を検証し、生成結果を確定 |
 | `fail_or_hold_generation` | Consumer / 定期照合 | 外部AI呼び出し済みなら保守的に`held` / `consumed`を維持。外部未送信が確認できた場合のみ枠を`release`（返却） |
 
-- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・ジョブ作成・ポインタ更新を1トランザクションで処理します。カウンター行を作成した後、必ず「全体policy/total → 全体day → ユーザーday → entry/job」の固定順序で行ロックを取得し、キャンセル・解放処理でも同じロック順序を守ります。
+- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・ジョブ作成・ポインタ更新を1トランザクションで処理します。policy用2整数advisory transaction lock→global total→global day→user day→entry/jobの固定順序でロックし、キャンセル・解放処理でも同じ順を守ります。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して`reserve_generation`を呼びます。予約RPCは並行受付との競合に備えて内部でも既存キーを再確認します。
+- `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
+- `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
+- canonical requestはAPI v1・`entryId`・`expectedRevision`のJSONB表現をUTF-8 SHA-256化した値で、`find_generation_receipt`と`reserve_generation`が同じprivate helperを使用します。JSON body、単価、profile ID、残り枠をRPC引数で受けず、本文・profileはDB正本から取得します。
 
 ### Storage（画像保存）と削除・再試行のルール
 
