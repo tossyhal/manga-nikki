@@ -31,7 +31,8 @@ function isRetryableAuthError(error: { name?: string; status?: number }): boolea
   return (
     error.name === 'AuthRetryableFetchError' ||
     error.name === 'AuthUnknownError' ||
-    (typeof error.status === 'number' && (error.status === 0 || error.status >= 500))
+    (typeof error.status === 'number' &&
+      (error.status === 0 || error.status === 429 || error.status >= 500))
   );
 }
 

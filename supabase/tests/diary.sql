@@ -27,10 +27,29 @@ $$;
 grant execute on all functions in schema test to anon, authenticated, service_role;
 insert into auth.users(id) values
   ('11111111-1111-4111-8111-111111111111'),
-  ('22222222-2222-4222-8222-222222222222');
+  ('22222222-2222-4222-8222-222222222222'),
+  ('33333333-3333-4333-8333-333333333333');
+delete from auth.users where id = '33333333-3333-4333-8333-333333333333';
 
 set local role service_role;
 set local time zone 'Pacific/Honolulu';
+select test.assert(
+  has_table_privilege('service_role', 'public.entries', 'SELECT')
+    and has_table_privilege('service_role', 'public.entries', 'INSERT')
+    and has_table_privilege('service_role', 'public.entries', 'UPDATE')
+    and not has_table_privilege('service_role', 'public.entries', 'DELETE')
+    and not has_table_privilege('service_role', 'public.entries', 'TRUNCATE')
+    and not has_table_privilege('service_role', 'public.entries', 'REFERENCES')
+    and not has_table_privilege('service_role', 'public.entries', 'TRIGGER')
+    and has_table_privilege('service_role', 'public.generations', 'SELECT')
+    and has_table_privilege('service_role', 'public.generations', 'INSERT')
+    and has_table_privilege('service_role', 'public.generations', 'UPDATE')
+    and not has_table_privilege('service_role', 'public.generations', 'DELETE')
+    and not has_table_privilege('service_role', 'public.generations', 'TRUNCATE')
+    and not has_table_privilege('service_role', 'public.generations', 'REFERENCES')
+    and not has_table_privilege('service_role', 'public.generations', 'TRIGGER'),
+  'service_roleには必要なDMLだけを付与');
+select test.expect_error('delete from public.entries where false', '42501');
 do $$
 declare
   actor uuid := '11111111-1111-4111-8111-111111111111';
@@ -39,6 +58,9 @@ declare
   first_entry public.entries;
   result public.entries;
 begin
+  perform test.expect_error(format('select public.create_entry(%L,%L,%L,%L,%L)',
+    '33333333-3333-4333-8333-333333333333', gen_random_uuid(), today, '削除済みAuthユーザー', 'v1'),
+    'P0001', 'AUTH_REQUIRED');
   first_entry := public.create_entry(actor, request, today, E'\t　架空の日記😀\n', 'v1');
   perform test.assert(first_entry.body = '架空の日記😀' and first_entry.revision = 1, 'Unicode空白をtrimして作成');
   perform test.assert(first_entry.expires_at = first_entry.created_at + interval '30 days', '作成から30日で失効');

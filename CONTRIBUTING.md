@@ -120,9 +120,14 @@ DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 
+### 作業の分担とStacked PR
+
+- 親担当者が計画・作業範囲・base branchを決め、実装はfreshなGPT-6-Luna Maxで行います。Figmaデザインと漫画生成・保存の主担当は別メンバーですが、接続に必要な修正は担当PRに含めて構いません。
+- PRは通常`main`をbaseにします。Stacked PRは親branchをbaseにし、親側の修正を子branchへmergeして伝播させます。親PRがmergeされた後は子PRのbaseを`main`へ切り替えます。履歴の通常rebaseやforce pushは行いません。
+
 ### ① 作業ブランチの作成
 
-必ず最新の`main`ブランチから作業ブランチを作成し、「1タスク＝1PR」の小さな単位で進めます。
+通常は最新の`main`ブランチから作業ブランチを作成し、「1タスク＝1PR」の小さな単位で進めます。Stacked PRでは親担当者が指定した親branchから作成します。
 作業を始める前に、`git status`で未コミットの変更がないことを確認してください。
 
 ```sh
@@ -140,15 +145,15 @@ git switch -c feat/diary-form
 
 ### ③ PRの作成とレビュー
 
-1. ブランチをpushし、GitHub上でbaseブランチを`main`とするPRを作成します。
-2. PRの本文には「変更理由」「確認手順と結果」「未検証の項目」を記載します。画面の変更がある場合はスクリーンショットも添付してください（作業途中の場合はDraft PRにします）。
-3. レビューは変更者以外のチームメンバーに依頼します。
+1. PR作成前にCLIからfreshなOpus 5.5（medium）とGPT-6.1-sol（medium）の独立レビューを行い、指摘を修正して両方のレビューを通します。画面・操作の変更はその後`agent-browser`で実画面を確認します。
+2. ブランチをpushし、通常はbaseを`main`、Stacked PRは指定された親branchとしてPRを作成します。本文は[日本語PRテンプレート](.github/PULL_REQUEST_TEMPLATE.md)に沿って記載し、画面変更にはスクリーンショットを添付します（作業途中の場合はDraft PRにします）。
+3. レビューは変更者以外のチームメンバーにも依頼します。
    - 認証・RLS・RPC・予算制限・公開設定・DB migrationに関わる変更は、人間によるレビューを必須とします。
    - AIツールが生成したコードであっても、PRを出す担当者自身が「何を入力して何が出力されるか」「どう動作確認したか」を説明できるようにしてください。
 
 ### ④ マージとブランチの更新
 
-- マージ方法：レビュー承認後、Merge commitで統合します（Squash mergeやRebase mergeには変更しないでください）。
+- マージ方法：ユーザーがレビュー承認後にMerge commitで統合します（Squash mergeやRebase mergeには変更しないでください）。
 - 禁止事項：`main`ブランチへの直接コミット、`force push`、他人のコミット履歴の書き換えは禁止です。
 - CIの必須化：GitHub ActionsのCIをrequired check（マージ必須条件）に設定するのは、実際に成功するジョブが動いてからにします。
 - 作業中に`main`が進んだ場合：

@@ -15,7 +15,7 @@ grant execute on function private.trim_diary_body(text) to service_role;
 
 create table public.entries (
   id uuid primary key default gen_random_uuid(),
-  owner_id uuid not null references auth.users(id),
+  owner_id uuid not null constraint entries_owner_id_fkey references auth.users(id),
   create_request_id uuid not null,
   -- 編集後の再送でも、作成時と同じ要求かを判定する。
   create_request_hash bytea not null check (octet_length(create_request_hash) = 32),
@@ -83,7 +83,8 @@ grant select (
   id, entry_id, owner_id, entry_revision, status, stage, comic_json, error_code,
   created_at, updated_at, completed_at, cancel_requested
 ) on public.generations to authenticated;
-grant select, insert, update, delete on public.entries, public.generations to service_role;
+revoke all on public.entries, public.generations from service_role;
+grant select, insert, update on public.entries, public.generations to service_role;
 
 create policy entries_read_own on public.entries for select to authenticated
   using (owner_id = (select auth.uid()) and deleted_at is null and expires_at > now());
@@ -103,6 +104,7 @@ as $$
 declare
   v_body text := private.trim_diary_body(p_body);
   v_hash bytea;
+  v_constraint text;
   v_entry public.entries;
 begin
   if p_actor_id is null then raise exception using message = 'AUTH_REQUIRED'; end if;
@@ -134,10 +136,18 @@ begin
       and latest_generation_id is null) >= 20 then
     raise exception using message = 'DRAFT_LIMIT_REACHED';
   end if;
-  insert into public.entries (
-    owner_id, create_request_id, create_request_hash, diary_date, body, consent_version
-  ) values (p_actor_id, p_create_request_id, v_hash, p_diary_date, v_body, p_consent_version)
-  returning * into v_entry;
+  begin
+    insert into public.entries (
+      owner_id, create_request_id, create_request_hash, diary_date, body, consent_version
+    ) values (p_actor_id, p_create_request_id, v_hash, p_diary_date, v_body, p_consent_version)
+    returning * into v_entry;
+  exception when foreign_key_violation then
+    get stacked diagnostics v_constraint = constraint_name;
+    if v_constraint = 'entries_owner_id_fkey' then
+      raise exception using message = 'AUTH_REQUIRED';
+    end if;
+    raise;
+  end;
   return v_entry;
 end;
 $$;
