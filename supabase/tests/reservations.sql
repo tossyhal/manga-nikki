@@ -130,6 +130,8 @@ select (public.create_entry('33333333-3333-4333-8333-333333333333', gen_random_u
 select (public.create_entry('33333333-3333-4333-8333-333333333333', gen_random_uuid(), current_date, '期限精算用の架空日記', 'v1')).id as entry_c2 \gset
 select (public.create_entry('44444444-4444-4444-8444-444444444444', gen_random_uuid(), current_date, '画像上限の架空日記', 'v1')).id as entry_d1 \gset
 select (public.create_entry('44444444-4444-4444-8444-444444444444', gen_random_uuid(), current_date, '画像失敗再送確認用の架空日記', 'v1')).id as entry_d2 \gset
+select (public.create_entry('44444444-4444-4444-8444-444444444444', gen_random_uuid(), current_date, '削除後の結果記録用の架空日記', 'v1')).id as entry_e1 \gset
+select (public.create_entry('44444444-4444-4444-8444-444444444444', gen_random_uuid(), current_date, '期限後の結果記録用の架空日記', 'v1')).id as entry_e2 \gset
 select test.assert(public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
   'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1') is null, '未登録キーの照会はNULLを返す');
 select test.assert((select count(*) = 0 from private.quota_counters)
@@ -505,7 +507,8 @@ select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,tru
   '22222222-2222-4222-8222-222222222222', :'entry_b1'::uuid,
   '11111111-aaaa-4aaa-8aaa-aaaaaaaa0004'), 'P0001', 'GENERATION_DISABLED');
 reset role;
-update private.generation_policy set model_profile_json =
+update private.generation_policy set user_daily_limit = 10, global_daily_limit = 10,
+  global_total_limit = 10, budget_micro_usd = 100, model_profile_json =
   '{"profile_id":"fictional-real-shaped-v1","is_mock":false,"max_cost_micro_usd":1,"script":{"model":"fictional-script"},"image":{"model":"fictional-image"}}'::jsonb
 where id = 1;
 set local role service_role;
@@ -515,6 +518,65 @@ select test.assert((select is_mock is false
   and model_profile_snapshot ->> 'profile_id' = 'fictional-real-shaped-v1'
   from public.generations where id = (:'receipt_b1'::jsonb ->> 'generation_id')::uuid),
   '架空profileでもCmax正数を検証しis_mockを固定');
+
+select public.reserve_generation('44444444-4444-4444-8444-444444444444', :'entry_e1'::uuid, 1,
+  '17171717-1717-4171-8171-171717171717', true) as receipt_e1 \gset
+select (:'receipt_e1'::jsonb ->> 'generation_id') as generation_e1 \gset
+select public.claim_generation(:'generation_e1'::uuid) as claim_e1 \gset
+select (:'claim_e1'::jsonb ->> 'claim_token') as claim_token_e1 \gset
+select public.begin_provider_attempt(:'generation_e1'::uuid, :'claim_token_e1'::uuid,
+  'script', 1, true) as attempt_e1 \gset
+select (:'attempt_e1'::jsonb ->> 'attempt_id') as attempt_id_e1 \gset
+select public.request_entry_deletion('44444444-4444-4444-8444-444444444444', :'entry_e1'::uuid);
+select test.expect_error(format('select public.finish_provider_attempt(%L,%L,%L,''failed'',''fictional-delete-request'')',
+  :'generation_e1', '00000000-0000-4000-8000-000000000003', :'attempt_id_e1'), 'P0001', 'CLAIM_LOST');
+select public.finish_provider_attempt(:'generation_e1'::uuid, :'claim_token_e1'::uuid,
+  :'attempt_id_e1'::uuid, 'failed', 'fictional-delete-request') as finished_e1 \gset
+select test.assert(:'finished_e1'::jsonb ->> 'state' = 'failed'
+  and :'finished_e1'::jsonb ->> 'request_id' = 'fictional-delete-request'
+  and (select state = 'failed' and request_id = 'fictional-delete-request'
+    from private.provider_attempts where id = :'attempt_id_e1'::uuid),
+  '削除要求後も送信済みattemptの確定結果とrequest_idを記録');
+select (select count || ':' || committed_micro_usd from private.quota_counters
+  where scope = 'global_total') as quota_before_delete_settlement \gset
+select public.fail_or_hold_generation(:'generation_e1'::uuid, :'claim_token_e1'::uuid,
+  'failed') as settled_e1 \gset
+select test.assert(:'settled_e1'::jsonb ->> 'status' = 'cancelled'
+  and :'settled_e1'::jsonb ->> 'reservation_state' = 'consumed'
+  and not (:'settled_e1'::jsonb ->> 'released')::boolean
+  and (select state = 'consumed' from private.reservations where generation_id = :'generation_e1'::uuid)
+  and :'quota_before_delete_settlement' = (select count || ':' || committed_micro_usd
+    from private.quota_counters where scope = 'global_total'),
+  '削除後の既知結果は枠を消費し、quotaを返さない');
+
+select public.reserve_generation('44444444-4444-4444-8444-444444444444', :'entry_e2'::uuid, 1,
+  '18181818-1818-4181-8181-181818181818', true) as receipt_e2 \gset
+select (:'receipt_e2'::jsonb ->> 'generation_id') as generation_e2 \gset
+select public.claim_generation(:'generation_e2'::uuid) as claim_e2 \gset
+select (:'claim_e2'::jsonb ->> 'claim_token') as claim_token_e2 \gset
+select public.begin_provider_attempt(:'generation_e2'::uuid, :'claim_token_e2'::uuid,
+  'script', 1, true) as attempt_e2 \gset
+select (:'attempt_e2'::jsonb ->> 'attempt_id') as attempt_id_e2 \gset
+update public.entries set expires_at = pg_catalog.clock_timestamp() - interval '1 second'
+  where id = :'entry_e2'::uuid;
+select public.finish_provider_attempt(:'generation_e2'::uuid, :'claim_token_e2'::uuid,
+  :'attempt_id_e2'::uuid, 'succeeded', 'fictional-expired-request') as finished_e2 \gset
+select test.assert(:'finished_e2'::jsonb ->> 'state' = 'succeeded'
+  and :'finished_e2'::jsonb ->> 'request_id' = 'fictional-expired-request'
+  and (select state = 'succeeded' and request_id = 'fictional-expired-request'
+    from private.provider_attempts where id = :'attempt_id_e2'::uuid),
+  '保存期限後も送信済みattemptの確定結果とrequest_idを記録');
+select (select count || ':' || committed_micro_usd from private.quota_counters
+  where scope = 'global_total') as quota_before_expiry_settlement \gset
+select public.fail_or_hold_generation(:'generation_e2'::uuid, :'claim_token_e2'::uuid,
+  'failed') as settled_e2 \gset
+select test.assert(:'settled_e2'::jsonb ->> 'status' = 'cancelled'
+  and :'settled_e2'::jsonb ->> 'reservation_state' = 'consumed'
+  and not (:'settled_e2'::jsonb ->> 'released')::boolean
+  and (select state = 'consumed' from private.reservations where generation_id = :'generation_e2'::uuid)
+  and :'quota_before_expiry_settlement' = (select count || ':' || committed_micro_usd
+    from private.quota_counters where scope = 'global_total'),
+  '期限後の既知結果は枠を消費し、quotaを返さない');
 
 update public.entries set deleted_at = statement_timestamp() where id = :'entry_a1'::uuid;
 update public.entries set expires_at = statement_timestamp() - interval '1 second' where id = :'entry_a2'::uuid;

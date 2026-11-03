@@ -34,7 +34,7 @@
   - 利用枠・予算・試行履歴（`quota` / `policy` / `attempts`）は`private`スキーマに置き、外部へ非公開とします。
   - サーバー専用RPCの実行権限（`EXECUTE`）は、`PUBLIC`・`anon`・`authenticated`から明示的に剥奪（REVOKE）します。
   - 関数は原則`SECURITY INVOKER`とし、どうしても`SECURITY DEFINER`が必要な場合は「空の`search_path`指定・スキーマ完全修飾名・関数内部での所有者検証」を必須とします。
-  - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTだけを許可します。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
+  - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
@@ -175,6 +175,7 @@
 ### 障害発生時の対応（インシデント対応）
 
 - 異常な課金やAIプロバイダ障害：ただちにDBの`private.generation_policy.enabled = false`に変更して生成を止め、必要に応じてAPIキー自体を失効させます。
+- 削除・保存期限・claim期限を越えて送信済みprovider応答が戻った場合も、attemptの確定stateとrequest IDを記録してから精算します。結果記録でjobや日記を再表示させず、既知費用の枠は返却しません。
 - `unknown`ジョブの発生：プロバイダの`requestId`を使って管理画面やログで実行有無を調査し、自動での再呼び出しは行いません。
 - Supabase Authの障害：代替として「全員共通のログインアカウント」を配るような危険な回避策はとらず、架空サンプルの閲覧へ誘導します。
 - デプロイ不具合：問題のあるWorkerは直前の正常なバージョンへロールバックし、DBの不整合は自動逆マイグレーションや破壊的な`reset`ではなく、互換性を確認した修正用migrationで直します。

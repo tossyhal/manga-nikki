@@ -18,7 +18,7 @@ pnpm test:db
 - `tests/diary.sql`はトランザクションをロールバックし、実際に`anon`・ユーザーA/Bの`authenticated`・`service_role`へ切り替えて検証します。
 - `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・receipt照会の副作用がないこと・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
 - `tests/generation_queue.sql`は停止中のmock専用予約・実profile拒否・fixture完了とconsumed台帳・未送信release・削除/期限照合・未配送再送抑止・unknown/heldとRPC権限を検証します。実AIや外部Queueは呼び出しません。
-- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠を検証します。
+- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算を検証します。
 - 実SupabaseのAuth・PostgREST・Storageを経由するテストは別途必要です。この検証はPostgreSQLの制約・RLS・RPCを対象にします。
 
 ## 保存API担当との接続契約
@@ -34,10 +34,10 @@ pnpm test:db
 | `reserve_generation` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid`, `p_generation_enabled boolean` | SQL JSONB `{"generation_id":"…","status":"queued","status_url":"/api/v1/generations/…"}`; API maps to `GenerationReceipt` camelCase |
 | `reserve_mock_generation` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid` | local-connected専用。receiptを先に照会し、policy lock下で有効なmock profileのみ既存の`reserve_generation(..., true)`へ渡す。実profileは拒否 |
 | `get_generation_quota` | `p_actor_id uuid` | JST残数・active generation・次回resetと、DB policy / global枠 / 予算を反映したavailabilityを内部JSONBで返す |
-| `claim_generation` | `p_generation_id uuid` | claimできた場合はsnapshot・`claim_token`・`deadline_at`を含むJSONB、重複配信・削除・期限切れ・cancel要求済みjobは`null`。claim期限は15分 |
-| `begin_provider_attempt` | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean` | JSONB `{"attempt_id":"…","generation_id":"…","stage":"script|images","call_index":1,"mode":"mock|provider","is_mock":true}`。script成功後の初回image開始と同じtransactionでstageをimagesへ進めます。scriptは1回、imageはprofileの`max_image_calls`まで連番で開始可能。次のimageは直前の成功後だけ許可し、失敗後は再送しない。mockは`mode=mock`で返り外部AIへ送信しない |
+| `claim_generation` | `p_generation_id uuid` | claimできた場合はsnapshot・`claim_token`・`deadline_at`を含むJSONB、重複配信・削除・期限切れ・cancel要求済みjobは`null`。日記期限を全ロック取得後に確認し、その時刻から15分のclaim期限を設定 |
+| `begin_provider_attempt` | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean` | JSONB `{"attempt_id":"…","generation_id":"…","stage":"script|images","call_index":1,"mode":"mock|provider","is_mock":true}`。全ロック取得後の現在時刻でclaim期限/entry/cancel/policyを再確認します。script成功後の初回image開始と同じtransactionでstageを進め、scriptは1回、imageはprofileの`max_image_calls`まで連番で開始可能。mockは`mode=mock`で返り外部AIへ送信しない |
 | `finish_provider_attempt` | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null` | JSONB `{"attempt_id":"…","state":"succeeded|failed|unknown","request_id":null,"finished_at":"…","is_mock":true}`。同じ結果の再送は冪等 |
-| `fail_or_hold_generation` | `p_generation_id uuid`, `p_claim_token uuid`（queued jobや期限切れclaimは`null`）, `p_terminal_status text` (`failed` / `cancelled`) | JSONB `{"generation_id":"…","status":"failed|cancelled|unknown","reservation_state":"released|consumed|held","released":true}`。外部未送信の証拠がある場合だけ予約を返却 |
+| `fail_or_hold_generation` | `p_generation_id uuid`, `p_claim_token uuid`（queued jobや期限切れclaimは`null`）, `p_terminal_status text` (`failed` / `cancelled`) | JSONB `{"generation_id":"…","status":"failed|cancelled|unknown","reservation_state":"released|consumed|held","released":true}`。全ロック後に期限を再確認し、外部未送信の証拠がある場合だけ予約を返却 |
 | `complete_mock_generation` | `p_generation_id uuid`, `p_claim_token uuid`, `p_comic_json jsonb` | 期限内・未削除・mock profile・script/image attempt成功・固定comic schemaを検証してcomic JSONとconsumed台帳状態を確定。画像binaryやStorageは扱わない |
 | `mark_generation_enqueued` | `p_generation_id uuid` | 再送間隔を記録し、未配送queued jobの即時Cron再送を抑える |
 | `list_generation_reconcile_candidates` | `p_limit integer`（最大50、default 25） | service_role専用。再送・削除/期限cancel・期限切れrunning照合に必要なgeneration ID/actionだけを返す |
@@ -82,11 +82,11 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - `reserve_generation`のDB結果はSQL snake_caseのJSONBです。API境界で`generation_id` / `status` / `status_url`をHTTP `GenerationReceipt`の`generationId` / `status` / `statusUrl`へmapし、内部snapshot、profile、費用、reservationをレスポンスへ含めません。
 - 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactive jobは1つだけです。`is_mock`は生成元の公開metadataで、固定結果ならtrue、実生成ならfalseを必ず設定し、NULLを既定値でfalseに埋めません。Queue Consumerはlocal-connectedで固定mockだけを実行します。実AI・private Storage・実画像保存用完了RPCは未実装です。
 - `latest_generation_id`を保持したまま編集し、`revision`だけを増やします。画面側は`entry_revision`との差から編集前の漫画であることを表示できます。
-- `claim_generation`はQueueの重複配信を含め、`queued` jobの1回目だけを`running`にし、15分のclaim期限を設定します。戻り値にはQueue Consumerだけが使う日記・profile snapshotとclaim tokenを含みます。重複claimや削除・期限切れ・キャンセル要求済みjobは`null`です。claim後の期限切れjobは自動で再claimしません。
-- `begin_provider_attempt`はentry/jobのキャンセル状態、claim tokenと期限、reservation、DB policyを再確認します。実AIはWorkerの`p_generation_enabled=true`とDB policyの`enabled=true`を両方要求します。`is_mock=true`はDB snapshotからのみ判定し、`p_generation_enabled=false`でも`mode=mock`のattemptだけを開始できます。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定時1、上限4）連番で開始でき、前のimageが成功した場合に限り次へ進みます。最初のimage開始時には、scriptの成功を確認して`generations.stage`を`script`から`images`へ同transactionで進めます。失敗後の再送はせず、`dispatched` / `unknown`が残る間も次の呼出しを拒否します。attempt行は外部送信前にcommitします。mock attemptも`is_mock=true`として台帳へ記録し、provider送信経路には渡しません。
+- `claim_generation`はQueueの重複配信を含め、`queued` jobの1回目だけを`running`にします。日記有効期限は全ロック取得後の時刻で確認し、その時刻から15分のclaim期限を設定します。戻り値にはQueue Consumerだけが使う日記・profile snapshotとclaim tokenを含みます。重複claimや削除・期限切れ・cancel要求済みjobは`null`です。claim後の期限切れjobは自動再claimしません。
+- `begin_provider_attempt`は全ロック取得後の現在時刻でentry/jobの有効性、cancel状態、claim token/期限、reservation、DB policyを再確認します。実AIはWorkerの`p_generation_enabled=true`とDB policyの`enabled=true`を両方要求します。`is_mock=true`はDB snapshotからのみ判定し、`p_generation_enabled=false`でも`mode=mock`だけを開始できます。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）連番で開始でき、前のimageの成功後に次へ進みます。最初のimage開始時には`stage`を同transactionで進めます。attempt行は外部送信前にcommitします。mock attemptはAI providerへ渡しません。
 - profileの`max_image_calls`はDB policy内だけで設定できるoptional整数で、許容値は1〜4、未指定時は1です。`max_cost_micro_usd`はscript 1回と設定したimage呼出し数の最大費用を含めます。HTTPリクエストからこの値を受け取りません。
-- `finish_provider_attempt`は`dispatched` attemptだけを確定します。`request_id`は後から入力するproviderの不透明な照会IDで、最大200文字、mockではnullです。`unknown`は自動再実行せず、job精算で予約を保持します。
-- `fail_or_hold_generation`はqueued / runningのみをterminalへ遷移し、terminal再送や古いclaimで状態を上書きしません。non-mock attemptに`dispatched` / `unknown`があればjobを`unknown`、reservationを`held`にします。non-mock attemptの既知結果や確定したmock結果は予約最大額を`consumed`にし、attemptが無いか未確定のmockのみで外部未送信が証明できる場合は`released`にして、global total・元のJST日付のglobal day/user day counterを1回だけ戻します。日記削除・期限切れは消費済み枠を戻しません。
+- `finish_provider_attempt`はrunning job・一致するclaim token・reserved reservation・dispatch済みattemptを再確認します。外部送信は済んでいるため、削除要求・日記期限・claim期限後でもknown resultとrequest IDを記録します。terminal job・古いtoken・精算済みreservationは変更しません。`request_id`はnullableかつ最大200文字、mockではnullです。`unknown`は自動再実行しません。
+- `fail_or_hold_generation`は全ロック取得後の現在時刻でclaim期限を確認し、queued / runningのみをterminalへ遷移させます。non-mockの`dispatched` / `unknown` attemptが残ればjobを`unknown`、reservationを`held`にします。non-mockの既知結果または確定したmock結果は予約最大額を`consumed`にし、外部未送信を証明できる場合だけ`released`へ変更します。releaseは元のJST日のcounterへ1回だけ戻し、terminal job・古いclaim・二重精算では状態やcounterを変更しません。
 
 ## 適用と後続作業
 
