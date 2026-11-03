@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
 import { Comic } from '../features/comic/Comic';
-import { NewEntry } from '../features/diary/NewEntry';
+import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
+import { PwaNotice } from './PwaNotice';
 
 function Home() {
   return (
@@ -40,6 +41,11 @@ function Home() {
 }
 export function App() {
   const [available, setAvailable] = useState<boolean | null>(null);
+  const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
+  const reportDiaryActivity = useCallback(
+    (activity: DiaryActivity) => setDiaryActivity(activity),
+    [],
+  );
   useEffect(() => {
     fetch('/api/v1/config')
       .then(async (response) => {
@@ -70,6 +76,7 @@ export function App() {
             ? '環境を確認しています…'
             : 'サンプル閲覧用 / 保存・生成はこの環境では利用できません'}
       </aside>
+      <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
       <main id="main">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -79,7 +86,7 @@ export function App() {
               available === null ? (
                 <output>読み込んでいます…</output>
               ) : available ? (
-                <NewEntry />
+                <NewEntry onActivityChange={reportDiaryActivity} />
               ) : (
                 <p>
                   保存機能は利用できません。<Link to="/">サンプルを見る</Link>

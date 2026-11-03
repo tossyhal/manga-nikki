@@ -1,17 +1,32 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
 import { api, generate } from '../../lib/api';
 
-export function NewEntry() {
+export type DiaryActivity = { dirty: boolean; busy: boolean };
+
+type NewEntryProps = {
+  onActivityChange: (activity: DiaryActivity) => void;
+};
+
+export function NewEntry({ onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
   const requestId = useRef(crypto.randomUUID());
+  const [initialDate] = useState(() => jstToday());
   const [saved, setSaved] = useState<Entry | null>(null);
-  const [date, setDate] = useState(jstToday());
+  const [date, setDate] = useState(initialDate);
   const [body, setBody] = useState('');
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const dirty = saved === null && (body.length > 0 || date !== initialDate);
+
+  useEffect(() => {
+    onActivityChange({ dirty, busy });
+  }, [busy, dirty, onActivityChange]);
+
+  useEffect(() => () => onActivityChange({ dirty: false, busy: false }), [onActivityChange]);
+
   async function save(makeComic: boolean) {
     setError('');
     const parsed = createEntrySchema.safeParse({
