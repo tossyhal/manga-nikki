@@ -7,6 +7,7 @@ import {
   type Entry,
   type EntryDetail,
 } from '../../../shared/schemas';
+import { summarizeDiary } from '../../../shared/summary';
 import type { ClientConfig } from '../../lib/config';
 import { ApiClientError, api, generate, getEntry, getAssetUrl } from '../../lib/api';
 import { Comic } from '../comic/Comic';
@@ -278,7 +279,7 @@ function DetailContent({
           <p className="eyebrow">
             {entry.diaryDate} / {generation ? (generation.mock ? 'モック漫画' : '漫画') : '下書き'}
           </p>
-          <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
+          <h1>{summarizeDiary(entry.body)}</h1>
           <output className="saved">
             {config.dataMode === 'mock'
               ? '開発サーバーへ仮保存しました。'
