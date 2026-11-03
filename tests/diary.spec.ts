@@ -110,7 +110,7 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
 
   await page.goto('/');
   await expect(page.locator('.notice')).toHaveText(
-    'サンプル閲覧用 / 保存・生成はこの環境では利用できません',
+    'サンプルを表示しています。保存・生成は利用できません。',
   );
   await expect(page.getByText('サンプルの一日')).toBeVisible();
   await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
@@ -135,7 +135,7 @@ test('liveホームは履歴取得と匿名登録を始めない', async ({ page
   });
 
   await page.goto('/');
-  await expect(page.locator('.notice')).toHaveText('匿名利用 / 保存前に利用条件をご確認ください');
+  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
   await expect(page.getByText('サンプルの一日')).toBeVisible();
   await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
   await page.waitForLoadState('networkidle');
