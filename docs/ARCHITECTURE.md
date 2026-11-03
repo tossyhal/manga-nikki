@@ -70,7 +70,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 - Queue設定：1本、初期値は`batch size: 1`・`concurrency: 2`。
 - 時間制限の目安：AIプロバイダ呼び出しのtimeoutは120秒、ジョブ全体の完了目標は10分、進行が15分停止したものは`unknown`候補とします。
-- 定期処理（Cron）：未配送ジョブの照合は1分おき、期限切れデータの掃除は日次（1日1回）とし、Workersの実行制限と実測値を踏まえて調整します（詳細は担当PRで具体化）。
+- 定期処理（Cron）：未配送jobの照合は1分おき、期限切れデータの掃除は日次（1日1回）を想定します。期限切れ物理削除RPCとserver専用cleanup serviceは実装済みですが、Scheduled handlerとの接続とStorage実測は未完了です。Workersの実行制限と実測値を踏まえて調整します。
 - ※ 開発内部でのAIモデル比較実験は同期処理で行っても構いませんが、その実験用コードをそのまま外部へ公開しません。
 
 ---
@@ -81,7 +81,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。日記詳細から最新jobの状態も読み取れます。quota・生成受付・`/generations/:id`・画像Storage/署名URL・Queueは未実装のため503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。日記詳細から最新jobの状態も読み取れます。期限切れ物理削除RPCとserver専用cleanup serviceを追加しましたが、quota・生成受付・`/generations/:id`・画像保存/署名URL・Queueとcleanupの定期呼出は未実装のため、該当APIは503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|

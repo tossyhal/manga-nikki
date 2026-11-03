@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。生成受付API、Queue Consumer、実AI、画像Storageは未実装です。初期policyは停止中です。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`migrations/20261103040000_retention_cleanup.sql`は`public.assets`、tombstone・監査台帳、期限切れ物理削除RPCを追加します。日記CRUD HTTP接続とserver専用cleanup serviceは実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。生成受付API、Queue Consumer、実AI、画像保存/署名URLは未実装です。初期policyは停止中です。
 
 ## 検証
 
@@ -17,12 +17,13 @@ pnpm test:db
 - `tests/bootstrap.sql`は隔離DB専用です。Supabase管理のロール、最小限の`auth.users`、JWTの`sub`を読む`auth.uid()`を再現します。共有DBや本番には適用しません。
 - `tests/diary.sql`はトランザクションをロールバックし、実際に`anon`・ユーザーA/Bの`authenticated`・`service_role`へ切り替えて検証します。
 - `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・receipt照会の副作用がないこと・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
-- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算を検証します。
+- `tests/retention.sql`はasset owner/effective-entry RLS、path制約、active job待ち、stale lease、Storage成功後のfinalize、held台帳・provider ID保持、counter不変、tombstoneを検証します。Storageの独立API・RLSは対象外です。
+- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算、owner advisory lock下のpurge/create replay競合を検証します。
 - 実SupabaseのAuth・PostgREST・Storageを経由するテストは別途必要です。この検証はPostgreSQLの制約・RLS・RPCを対象にします。
 
 ## 保存API担当との接続契約
 
-書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERT・`state`列UPDATEできます。provider attempt ledgerはSELECT・INSERTでき、UPDATEは`state`・`request_id`・`finished_at`列に限定します。どちらのprivate ledgerもDELETE権限はありません。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
+書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、通常の関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERT・`state`列UPDATEできます。provider attempt ledgerはSELECT・INSERTでき、UPDATEは`state`・`request_id`・`finished_at`列に限定します。どちらのprivate ledgerもDELETE権限はありません。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。retention finalizeは`SECURITY DEFINER`のservice_role専用RPCに閉じ、service_roleへentry/job/ledgerのDELETE権限は与えません。`createServerRpcClient`はRPC専用のままです。Storage cleanupはincoming Authorizationを受け取らないserver-only clientから`comics`のremove/listだけを行います。
 
 | RPC | 引数 | 戻り値 |
 |---|---|---|
@@ -86,6 +87,10 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 
 この作業では共有Supabaseへの適用は行いません。人間のレビュー後、DB担当が接続先と既存migration履歴を確認し、採用したSupabase CLIのmigration手順で適用します。適用対象は`migrations/`だけです。`tests/bootstrap.sql`やテスト用クラスタを本番へ持ち込まないでください。
 
-画像保存・Storage権限、Queue実行権と完了確定、期限切れの物理削除・匿名ユーザー削除は後続migrationで追加します。予約のconsumed / held / 安全なreleaseは実行migrationで追加済みです。物理削除時には画像削除後、日記の`latest_generation_id`を外してjob→日記の順に消す必要があります。加えて`entries`を物理削除すると`(owner_id, create_request_id)`の重複記録も消えるため、後続実装では冪等性tombstone等を保持し、削除後の古い`createRequestId`再送で日記を再作成できないようにしてください。現在の外部キーは意図しない連鎖削除を行いません。
+期限切れentryの物理削除RPCとserver専用cleanup service、`public.assets` metadata契約を追加済みです。claimは削除対象entryとDB上のasset pathを15分leaseへ固定し、Storage通信の完了後にfinalizeします。finalizeはpolicy advisory lock→owner advisory lock→entry→jobの順に再ロックし、active jobなし・期限対象・同じpath集合・Storage成功を確認後、provider attempts / reservationsを削除前にprivateの最小監査台帳へ移します。quota counterは変更しません。entryの`latest_generation_id`を外し、asset→job→entryの順に物理削除します。
+
+`private.entry_tombstones`は本文なしのowner / `create_request_id` / purged entry IDを保持し、物理削除後の古い作成再送を`NOT_FOUND`にします。createとpurgeの競合は同じowner advisory lockで直列化します。cleanup serviceをCron / Queueへ接続する作業は後続です。
+
+Supabase Storage schemaは隔離PostgreSQLのtest bootstrapに含めていません。private bucketと`storage.objects`のRESTRICTIVE deny policyは、Storage APIが有効な環境でだけ`supabase/storage/comics-bucket.sql`を適用します。Storage保存・asset登録・署名URL発行は別担当の後続作業です。アップロードが削除と競合して未参照objectを残す可能性があるため、保存workerはupload前とmetadata登録前のcancel / expiryを再確認します。自動孤児掃除は未実装です。24時間を超えてactive jobもDB metadataもないobjectだけをdashboardで照合し、手動削除して件数を記録します。
 
 公式資料: [Database Functions](https://supabase.com/docs/guides/database/functions)、[Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)、[Database Migrations](https://supabase.com/docs/guides/deployment/database-migrations)。

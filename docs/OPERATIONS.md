@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> liveモードの日記CRUDとサーバー認証境界、private生成policy・原子的な予約DB基盤を追加しました。共有DBへの適用・実Supabase結合確認、generation / quota API接続、Queue・実AI接続は未完了です。予約の隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> liveモードの日記CRUDとサーバー認証境界、private生成policy・原子的な予約DB基盤、期限切れentryの物理削除RPC・cleanup serviceを追加しました。共有DBへの適用・実Supabase結合確認、cleanupのScheduled handler接続、generation / quota API接続、Queue・実AI接続は未完了です。Storage bucket/RLS設定はStorage APIを含むSupabase環境用の別SQLです。予約の隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -37,6 +37,7 @@
   - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
+  - `comics` bucketは`supabase/storage/comics-bucket.sql`をStorage schemaが有効なSupabase環境で適用し、private・許可MIME・8MiB制限を設定します。同SQLは`storage.objects`に`anon` / `authenticated`の全操作を拒否するRESTRICTIVE policyを作り、他bucketのpolicyには影響させません。Storage schemaを含まない隔離PostgreSQLの`pnpm test:db`では適用しません。
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
@@ -183,6 +184,9 @@
 
 - 本人の削除操作または作成から30日で、閲覧と新しい署名URLの発行を止めます。
 - Storageの物理画像→DBメタデータの順に削除します。障害やプロジェクト休止で失敗した場合は復旧後に再試行します。
+- 独立cleanup serviceは最大10 entryをclaimし、15分lease中にStorage `remove`と`list`確認を行います。定期実行への接続は未実装です。期限切れ・削除済みentryにactive jobが残る場合はclaimされず、Queue側の`fail_or_hold_generation`がjobとreservationを先に確定します。
+- cleanup serviceがStorage `remove`に失敗、または`list`でobjectが残っていると確認した場合、entry本文・asset metadata・jobを保持します。leaseが切れた後に再試行し、全pathが存在しない場合だけDB finalizeします。
+- 保存workerはアップロード前とmetadata登録/完了確定前にentryの期限・削除状態とjob cancel状態を再確認し、削除されたjobへ遅れてasset metadataを登録しません。アップロードが論理削除と競合した場合はStorage孤児を残す可能性があるため、24時間を超えてactive jobもasset metadataもないobjectだけを、storage dashboardのlistとDB `assets.object_path`の照合後に手動削除します。照合件数と削除件数を記録し、同じ確認を再実施します。自動孤児掃除は未実装です。
 - 発行済み署名URLの最大60秒の残存、外部AIの保持、DBバックアップは別の制約として事前に説明します。
 - 未参照画像・古い匿名ユーザー・残存ジョブも確認して掃除します。
 - 大会後は実AIを停止するか、継続予算・正式認証・保存期間を改めて合意します。

@@ -9,7 +9,7 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細の読み取りは利用者JWT + RLSとAPI側のowner条件を使い、作成・編集・論理削除はサーバー専用RPCを使います。日記詳細は既存の`latestGeneration`状態も読み取ります。generation受付・quota・独立した`GET /generations/:id`・画像Storage/署名URL・期限切れ物理削除・Queueは未実装で、該当APIは503を返します。live APIがモックrepositoryへ切り替わることはありません。モックは再起動で消える一時メモリで、実Supabase環境の結合確認は未実施です。
+liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細の読み取りは利用者JWT + RLSとAPI側のowner条件を使い、作成・編集・論理削除はサーバー専用RPCを使います。日記詳細は既存の`latestGeneration`状態も読み取ります。期限切れ・削除済み日記のStorage→DB物理削除RPCとserver専用cleanup serviceを追加しましたが、Cron / Queueからの呼出接続は未実装です。generation受付・quota・独立した`GET /generations/:id`・画像保存/署名URL・Queueは未実装で、該当APIは503を返します。live APIがモックrepositoryへ切り替わることはありません。モックは再起動で消える一時メモリで、実Supabase環境の結合確認は未実施です。
 
 DBにはclaim・provider attempt・失敗時の安全精算RPCを追加済みです。HTTP受付やQueue Workerからはまだ呼び出しておらず、共有Supabaseへの適用も未実施です。
 
@@ -236,6 +236,10 @@ type ComicDocument = {
 | `public.entries` | `id`, `owner_id`, `create_request_id`, `diary_date`, `body`, `revision`, `latest_generation_id`, `consent_version`, `created_at`, `updated_at`, `deleted_at`, `expires_at` | PK `id`、`UNIQUE(owner_id, create_request_id)`、本文長・revisionのCHECK制約 |
 | `public.generations` | `id`, `entry_id`, `owner_id`, `entry_revision`, `idempotency_key`, `request_hash`, `input_snapshot`, `model_profile_snapshot`, `claim_token`, `deadline_at`, `status`, `stage`, `comic_json`, `error_code`, `is_mock`, `created_at`, `updated_at`, `enqueued_at`, `started_at`, `completed_at`, `cancel_requested` | `UNIQUE(owner_id, idempotency_key)`、`status`のCHECK制約、entry所有者との整合性保証。`is_mock`は生成元を記録し、NULLは由来不明 |
 | `public.assets` | `id`, `generation_id`, `owner_id`, `object_path`, `media_type`, `byte_size`, `width`, `height`, `created_at` | `UNIQUE(object_path)`、許可MIMEタイプ、ファイルサイズ上限の制約 |
+| `private.entry_tombstones` | `owner_id`, `create_request_id`, `entry_id`, `purged_at` | 本文を含めず、物理削除後の古い作成要求を`NOT_FOUND`にする |
+| `private.retention_cleanup_leases` | `entry_id`, `owner_id`, `claim_token`, `lease_expires_at`, `object_paths` | 外部Storage削除中の短期leaseと、claim時点の対象pathを保持 |
+| `private.retained_generation_ledger` | `generation_id`, `owner_id`, job状態、予約日・金額・reservation状態 | 削除後もbudget監査に必要な最小台帳を保持 |
+| `private.retained_provider_attempts` | attempt / generation / owner ID、stage、call index、mock、state、provider request ID、時刻 | provider照会に必要な最小情報を保持。本文・prompt・scriptは保存しない |
 | `private.generation_policy` | `id=1`, `enabled`, `user_daily_limit`, `global_daily_limit`, `global_total_limit`, `budget_micro_usd`, `model_profile_json` | 初期値は`enabled=false`、全体枠/予算`0`。管理者のみ操作可能 |
 | `private.quota_counters` | `scope`, `subject`, `day_key`, `count`, `committed_micro_usd` | `(scope, subject, day_key)`の一意制約。並行予約時に行ロックして集計 |
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
@@ -244,6 +248,7 @@ type ComicDocument = {
 `generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。optionalな`max_image_calls`は整数`1`〜`4`で、未指定時は`1`です。`max_cost_micro_usd`はscript 1回と`max_image_calls`までのimage呼出し最大費用を含めます。provider/modelなどの他設定はprofile snapshotに保持します。
 
 - 所有者とスキーマ保護：`owner_id`は検証済みJWTの`sub`から設定し、`entry`・`job`・`asset`の間でも所有者が一致することを照合します。`auth.users`はSupabase管理とし、`private`スキーマは外部Data APIへ公開しません。
+- `assets`はauthenticatedに`id`・`generation_id`のみをSELECT許可し、owner一致かつentry有効期限内のRLSを適用します。`object_path`をJWT側へ公開せず、直接書き込みと`anon`アクセスを禁止します。
 - 主なインデックス：`entries(owner_id, diary_date, id)`、`generations(owner_id, created_at)`、`generations(status, created_at)`、`assets(generation_id)`。
 - スナップショットとポインタ更新：生成予約時点の日記本文とモデル設定をsnapshotカラムへ固定し、`entries.latest_generation_id`を更新します（後から古いジョブが完了しても、新しいポインタを上書きしません）。
 
@@ -259,10 +264,13 @@ type ComicDocument = {
 | `claim_generation` | Queue Consumer | `p_generation_id uuid`。queued jobを1Consumerだけがrunningへ移し、全ロック取得後から15分の`claim_token`を設定。日記/profile snapshotとtoken/deadlineを返す。再claim不可のjobや削除・期限切れ・cancel要求済みjobは`null` |
 | `begin_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean`。全ロック取得後の現在時刻でclaim期限・entry・cancel・policyを再検査し、送信前にattemptを記録。script成功後の最初のimages開始と同じtransactionで`stage`も進める。返値`{attempt_id,generation_id,stage,call_index,mode,is_mock}`。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）成功ごとに次を許可。`mode=mock`は実AIを呼ばない専用経路で、`GENERATION_ENABLED=false`でもprofile由来`is_mock=true`だけを許可 |
 | `finish_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null`。running job・一致するclaim token・reserved枠に属するdispatch済みattemptだけを`succeeded` / `failed` / `unknown`に確定。同じ確定値の再送だけ冪等。削除・期限切れ後に届いた送信済み結果も記録 |
-| `complete_generation` | Queue Consumer（未実装） | 保存契約PRで追加。`claimToken`、未削除状態、アセット数と所有権を検証し、生成結果を確定 |
+| `complete_generation` | Queue Consumer（未実装） | 保存契約PRで追加。policy advisory lock→entry→jobの順にロックし、`claimToken`、未削除・期限内・cancelなし、アセット数と所有権を検証して生成結果を確定。asset登録も同じRPC transaction内で行う |
 | `fail_or_hold_generation` | Consumer / 定期照合 | `p_generation_id uuid`, `p_claim_token uuid`（queued jobは`null`）, `p_terminal_status text`（`failed` / `cancelled`）。未送信が証明できる場合だけreservationをreleaseし、結果不明はjob `unknown` / reservation `held`、結果既知は最大予約額を`consumed` |
+| `claim_retention_cleanup` | 定期cleanup service | dueかつactive jobがないentryを最大10件claimし、15分lease・claim token・DB登録済み画像path snapshotを返す。Storage通信中はDB transactionを保持しない |
+| `finalize_retention_cleanup` | 定期cleanup service | Storage削除成功後だけ実行する。lease/token・期限・active jobなし・claim時点と同じasset path集合を再確認して台帳をprivateへ移し、asset→job→entryを削除する。quota counterは変更しない |
 
 - デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- 物理削除のfinalizeもpolicy advisory lock→owner advisory lock→entry→jobの順で処理します。期限切れ/削除済みentryにqueued / running jobがあればcleanup claimから除外し、Queue側の`fail_or_hold_generation`によるcancel・精算が終わるまでmetadataを保持します。
 - APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して`reserve_generation`を呼びます。予約RPCは並行受付との競合に備えて内部でも既存キーを再確認します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
 - `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
@@ -277,12 +285,13 @@ type ComicDocument = {
 
 - 保存先と制限
   - バケット名：`comics`（privateバケット）
-  - オブジェクトパス：`<ownerId>/<generationId>/<assetId>.<ext>`
+  - オブジェクトパス：`<ownerId>/<generationId>/<assetId>.<ext>`。DBはUUIDとMIMEに対応する拡張子（`.png` / `.jpg` / `.webp`）がowner・generation・asset IDと完全一致することを検証します。
   - 許可する画像形式：`PNG` / `JPEG` / `WebP`のみ（拡張子だけでなく実データのバイナリでも検証）。任意の外部URL・SVG・HTMLは受け付けません。
   - サイズ上限（暫定）：1画像あたり最大8 MiB、1つの4コマ漫画あたり合計16 MiB、アセット数は1個（`page`）または4個（`panels`）。
 - 障害時の再試行とデータ削除の順序
   - 保存パスを決定論的に固定し、再試行時に同じ画像か識別できるようにします。Storageへの画像アップロード成功後にDB更新が失敗した場合は、AIを再実行せずアップロード済みの既存画像から完了確定を行います。
   - 削除処理の順序：「① entryの論理削除 → ② ジョブのキャンセルフラグ設定 → ③ Storageの物理画像削除 → ④ DBメタデータの消去」の順に行います。画像を消す前にDB上のパス情報を消してしまわないようにし、未参照の孤児画像も定期掃除します。
+  - cleanupは各画像の`remove`後にprivate bucketを`list`して対象pathが存在しないことを確認してからfinalizeします。一部成功・一覧障害・claim lease切れではDB metadataを保持し、後のclaimで全pathを再試行します。孤児Storage objectの自動照合は未実装です。
   - 予算台帳の保持：ユーザーが日記やスナップショットを削除しても、消費済みの生成回数や支出金額のカウンターは元に戻しません（予算管理に必要な最小限の識別子・金額・状態だけを個人情報と切り離して残します）。
 
 ---
