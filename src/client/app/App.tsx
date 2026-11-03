@@ -1,12 +1,58 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
+import type { Entry } from '../../shared/schemas';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry } from '../features/diary/NewEntry';
+import { EntryHistory } from '../features/library/EntryHistory';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
+import { getEntries } from '../lib/api';
 
-function Home() {
+function RecentRecords() {
+  const [recent, setRecent] = useState<Entry[] | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  useEffect(() => {
+    let active = true;
+    getEntries({ limit: 5 })
+      .then((result) => {
+        if (active) setRecent(result.items);
+      })
+      .catch((failure: Error) => {
+        if (active) {
+          setRecent([]);
+          setHistoryError(failure.message);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return (
+    <section>
+      <h2>過去の記録</h2>
+      {historyError && (
+        <p role="alert" className="error">
+          {historyError}
+        </p>
+      )}
+      {recent === null ? (
+        <output>読み込んでいます…</output>
+      ) : recent.length === 0 ? (
+        <p>まだ保存した日記はありません。書いた記録は、要約を見出しにしてここに並びます。</p>
+      ) : (
+        <>
+          <EntryHistory entries={recent} />
+          <p>
+            <Link to="/library">すべての記録を見る →</Link>
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function Home({ available }: { available: boolean | null }) {
   return (
     <>
       <p className="eyebrow">一日を、4つの場面に。</p>
@@ -24,6 +70,7 @@ function Home() {
         </Link>
         <Link to="/library">保存した記録を見る →</Link>
       </div>
+      {available === true && <RecentRecords />}
       <section className="sample">
         <h2>サンプルの一日</h2>
         <p>{sampleDiary}</p>
@@ -33,6 +80,7 @@ function Home() {
             [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
           }}
           mock
+          titleAs="h3"
         />
       </section>
     </>
@@ -72,7 +120,7 @@ export function App() {
       </aside>
       <main id="main">
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<Home available={available} />} />
           <Route
             path="/new"
             element={

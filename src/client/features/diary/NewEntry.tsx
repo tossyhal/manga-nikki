@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
-import { api, generate } from '../../lib/api';
+import { summarizeDiary } from '../../../shared/summary';
+import { createEntry, generate } from '../../lib/api';
 
 export function NewEntry() {
   const navigate = useNavigate();
@@ -32,7 +33,7 @@ export function NewEntry() {
     try {
       let entry = saved;
       if (!entry) {
-        entry = await api<Entry>('/entries', { method: 'POST', body: JSON.stringify(parsed.data) });
+        entry = await createEntry(parsed.data);
         setSaved(entry);
       }
       if (makeComic) await generate(entry);
@@ -72,10 +73,13 @@ export function NewEntry() {
             onChange={(e) => setBody(e.target.value)}
             placeholder="今日は何がありましたか？"
             required
-            aria-describedby="count"
+            aria-describedby="count summary-preview"
           />
           <p id="count" className="hint">
             {[...body.trim()].length} / 1,000文字
+          </p>
+          <p id="summary-preview" className="summary-preview">
+            見出し：{body.trim() ? summarizeDiary(body) : '本文の先頭から自動で作ります'}
           </p>
           <label className="consent">
             <input
