@@ -64,13 +64,28 @@ async function signToken(claims: Record<string, unknown>): Promise<string> {
   return `${input}.${Buffer.from(signature).toString('base64url')}`;
 }
 
-function jwksFetch(environment: Environment, status = 200): typeof fetch {
+function jwksFetch(environment: Environment, status = 200, userStatus = 200): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
-    if (request.url !== `${environment.SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
-      return new Response('not found', { status: 404 });
-    if (status !== 200) return new Response('unavailable', { status });
-    return Response.json({ keys: [publicJwk] });
+    if (request.url === `${environment.SUPABASE_URL}/auth/v1/.well-known/jwks.json`) {
+      if (status !== 200) return new Response('unavailable', { status });
+      return Response.json({ keys: [publicJwk] });
+    }
+    if (request.url === `${environment.SUPABASE_URL}/auth/v1/user`) {
+      if (userStatus !== 200)
+        return Response.json({ message: 'user unavailable' }, { status: userStatus });
+      const token = request.headers.get('Authorization')?.replace(/^Bearer /, '') ?? '';
+      const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
+      return Response.json({
+        id: claims.sub,
+        aud: 'authenticated',
+        role: 'authenticated',
+        app_metadata: {},
+        user_metadata: {},
+        created_at: '2026-01-01T00:00:00.000Z',
+      });
+    }
+    return new Response('not found', { status: 404 });
   };
 }
 
@@ -79,7 +94,10 @@ async function liveRequest(
   token: string | undefined,
   fetcher: typeof fetch,
 ) {
-  const app = createApp({ authFetch: fetcher });
+  const app = createApp({
+    authFetch: fetcher,
+    supabaseFetch: async () => new Response(null, { status: 503 }),
+  });
   return app.request(
     'https://app.example/api/v1/entries',
     { headers: token ? { Authorization: `Bearer ${token}` } : {} },
@@ -97,6 +115,14 @@ describe('Supabase access token boundary', () => {
       verifySupabaseAccessToken(environment, token, jwksFetch(environment)),
     ).resolves.toBe(claims.sub);
     expect((await liveRequest(environment, token, jwksFetch(environment))).status).toBe(503);
+  }, 15000);
+
+  it('rejects a token when the Auth server no longer returns its user', async () => {
+    const environment = liveEnvironment();
+    const token = await signToken(baseClaims(environment));
+    const response = await liveRequest(environment, token, jwksFetch(environment, 200, 401));
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe('AUTH_REQUIRED');
   });
 
   it('rejects a forged signature and non-Bearer or malformed authorization values', async () => {

@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, NavLink, Route, Routes } from 'react-router';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useBlocker,
+  useOutletContext,
+  type BlockerFunction,
+  type RouteObject,
+} from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
@@ -9,6 +17,13 @@ import { Detail } from '../features/library/Detail';
 import { PwaNotice } from './PwaNotice';
 
 const configUnavailableMessage = '現在、読み込めません。通信を確認して再読み込みしてください。';
+
+type AppContext = {
+  config: ClientConfig | null;
+  configError: boolean;
+  personalDataAvailable: boolean;
+  onActivityChange: (activity: DiaryActivity) => void;
+};
 
 function Home() {
   return (
@@ -42,20 +57,104 @@ function Home() {
     </>
   );
 }
-export function App() {
+function NewEntryRoute() {
+  const { config, configError, personalDataAvailable, onActivityChange } =
+    useOutletContext<AppContext>();
+  if (!config && !configError) return <output>読み込んでいます…</output>;
+  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  if (personalDataAvailable && config)
+    return <NewEntry config={config} onActivityChange={onActivityChange} />;
+  return (
+    <p>
+      保存機能は利用できません。<Link to="/">サンプルを見る</Link>
+    </p>
+  );
+}
+
+function LibraryRoute() {
+  const { config, configError, personalDataAvailable } = useOutletContext<AppContext>();
+  if (!config && !configError) return <output>読み込んでいます…</output>;
+  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  return personalDataAvailable ? (
+    <Library />
+  ) : (
+    <p>記録の閲覧はこのサンプル環境では利用できません。</p>
+  );
+}
+
+function DetailRoute() {
+  const { config, configError, personalDataAvailable, onActivityChange } =
+    useOutletContext<AppContext>();
+  if (!config && !configError) return <output>読み込んでいます…</output>;
+  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  return personalDataAvailable && config ? (
+    <Detail config={config} onActivityChange={onActivityChange} />
+  ) : (
+    <p>記録の閲覧はこのサンプル環境では利用できません。</p>
+  );
+}
+
+function NotFound() {
+  return (
+    <>
+      <h1>ページが見つかりません。</h1>
+      <Link to="/">ホームへ戻る</Link>
+    </>
+  );
+}
+
+function App() {
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
   const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
-  const reportDiaryActivity = useCallback(
-    (activity: DiaryActivity) => setDiaryActivity(activity),
+  const diaryActivityRef = useRef(diaryActivity);
+  const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
+    diaryActivityRef.current = activity;
+    setDiaryActivity(activity);
+  }, []);
+  const shouldBlockNavigation = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) => {
+      const leavingPage =
+        currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search;
+      const { dirty, busy } = diaryActivityRef.current;
+      return leavingPage && (dirty || busy);
+    },
     [],
   );
+  const blocker = useBlocker(shouldBlockNavigation);
   useEffect(() => {
     void getClientConfig()
       .then(setConfig)
       .catch(() => setConfigError(true));
   }, []);
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    const { dirty, busy } = diaryActivityRef.current;
+    const message = busy
+      ? '保存などの処理中です。この画面を離れると結果を確認できなくなることがあります。移動しますか？'
+      : dirty
+        ? '未保存の入力があります。画面を離れると入力内容が失われます。移動しますか？'
+        : 'この画面を離れますか？';
+    if (window.confirm(message)) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+  useLayoutEffect(() => {
+    if (!diaryActivity.dirty && !diaryActivity.busy) return;
+    const preventUnloading = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnloading);
+    return () => window.removeEventListener('beforeunload', preventUnloading);
+  }, [diaryActivity.dirty, diaryActivity.busy]);
   const personalDataAvailable = config !== null && config.dataMode !== 'sample';
+  const context: AppContext = {
+    config,
+    configError,
+    personalDataAvailable,
+    onActivityChange: reportDiaryActivity,
+  };
   return (
     <>
       <a className="skip" href="#main">
@@ -83,64 +182,21 @@ export function App() {
       </aside>
       <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
       <main id="main">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route
-            path="/new"
-            element={
-              !config && !configError ? (
-                <output>読み込んでいます…</output>
-              ) : configError ? (
-                <p role="alert">{configUnavailableMessage}</p>
-              ) : personalDataAvailable && config ? (
-                <NewEntry config={config} onActivityChange={reportDiaryActivity} />
-              ) : (
-                <p>
-                  保存機能は利用できません。<Link to="/">サンプルを見る</Link>
-                </p>
-              )
-            }
-          />
-          <Route
-            path="/library"
-            element={
-              !config && !configError ? (
-                <output>読み込んでいます…</output>
-              ) : configError ? (
-                <p role="alert">{configUnavailableMessage}</p>
-              ) : personalDataAvailable ? (
-                <Library />
-              ) : (
-                <p>記録の閲覧はこのサンプル環境では利用できません。</p>
-              )
-            }
-          />
-          <Route
-            path="/entries/:id"
-            element={
-              !config && !configError ? (
-                <output>読み込んでいます…</output>
-              ) : configError ? (
-                <p role="alert">{configUnavailableMessage}</p>
-              ) : personalDataAvailable ? (
-                <Detail />
-              ) : (
-                <p>記録の閲覧はこのサンプル環境では利用できません。</p>
-              )
-            }
-          />
-          <Route
-            path="*"
-            element={
-              <>
-                <h1>ページが見つかりません。</h1>
-                <Link to="/">ホームへ戻る</Link>
-              </>
-            }
-          />
-        </Routes>
+        <Outlet context={context} />
       </main>
       <footer>漫画日記 / 開発プレビュー</footer>
     </>
   );
 }
+
+export const appRoute: RouteObject = {
+  path: '/',
+  element: <App />,
+  children: [
+    { index: true, element: <Home /> },
+    { path: 'new', element: <NewEntryRoute /> },
+    { path: 'library', element: <LibraryRoute /> },
+    { path: 'entries/:id', element: <DetailRoute /> },
+    { path: '*', element: <NotFound /> },
+  ],
+};
