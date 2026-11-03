@@ -170,3 +170,19 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   await expect(page.locator('.entries > li')).toHaveCount(1);
   await expect(page.getByText('保存だけ成功した架空の日記', { exact: true })).toBeVisible();
 });
+
+test('390px幅の履歴では200文字の日記を40文字の要約で表示する', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const body = 'A'.repeat(200);
+  const summary = `${'A'.repeat(39)}…`;
+  await page.goto('/new');
+  await page.getByLabel('日記', { exact: true }).fill(body);
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page).toHaveURL(/\/entries\//);
+  await page.getByRole('link', { name: '← 記録の一覧' }).click();
+  await expect(page.locator('.entries strong')).toHaveText(summary);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});

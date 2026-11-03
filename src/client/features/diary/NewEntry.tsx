@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
-import { RegistrationCaptcha } from './RegistrationCaptcha';
-import { api, generate } from '../../lib/api';
-import { registerAnonymousSession, getLiveAccessToken } from '../../lib/auth';
+import { summarizeDiary } from '../../../shared/summary';
+import { createEntry, generate } from '../../lib/api';
+import { getLiveAccessToken, registerAnonymousSession } from '../../lib/auth';
 import type { ClientConfig } from '../../lib/config';
+import { RegistrationCaptcha } from './RegistrationCaptcha';
 
 export type DiaryActivity = { dirty: boolean; busy: boolean };
 
@@ -48,7 +49,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     if (registrationToken) await registerAnonymousSession(registrationToken);
     let entry = saved;
     if (!entry) {
-      entry = await api<Entry>('/entries', { method: 'POST', body: JSON.stringify(parsed.data) });
+      entry = await createEntry(parsed.data);
       setSaved(entry);
     }
     if (makeComic) await generate(entry);
@@ -158,10 +159,13 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             onChange={(event) => setBody(event.target.value)}
             placeholder="今日は何がありましたか？"
             required
-            aria-describedby="count"
+            aria-describedby="count summary-preview"
           />
           <p id="count" className="hint">
             {[...body.trim()].length} / 1,000文字
+          </p>
+          <p id="summary-preview" className="summary-preview">
+            見出し：{body.trim() ? summarizeDiary(body) : '本文の先頭から自動で作ります'}
           </p>
           <label className="consent">
             <input

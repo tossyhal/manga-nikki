@@ -101,6 +101,7 @@ h1 {
   line-height: 1.55;
   letter-spacing: 0.04em;
   margin: 10px 0 24px;
+  overflow-wrap: anywhere;
 }
 h2 {
   font-size: 20px;
@@ -159,6 +160,12 @@ section {
 .comic img {
   width: 100%;
   height: auto;
+}
+.comic .comic-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .comic ol {
   padding-left: 22px;
@@ -246,10 +253,19 @@ textarea {
   font-size: 12px;
   color: #56704e;
 }
-.entries p {
-  margin: 10px 0 0;
+.entries strong {
+  display: block;
+  clear: both;
+  margin-top: 10px;
+  font-size: 18px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+}
+.summary-preview {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #43603b;
+  overflow-wrap: anywhere;
 }
 .empty {
   padding: 36px 0;

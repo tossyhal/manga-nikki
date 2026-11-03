@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { ComicDocument, EntryDetail } from '../../../shared/schemas';
-import type { ClientConfig } from '../../lib/config';
+import { summarizeDiary } from '../../../shared/summary';
 import { api, generate, getEntry, getAssetUrl } from '../../lib/api';
+import type { ClientConfig } from '../../lib/config';
 import { Comic } from '../comic/Comic';
 
 function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
@@ -117,7 +118,7 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
           <p className="eyebrow">
             {entry.diaryDate} / {generation ? (generation.mock ? 'モック漫画' : '漫画') : '下書き'}
           </p>
-          <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
+          <h1>{summarizeDiary(entry.body)}</h1>
           <output className="saved">
             {config.dataMode === 'mock'
               ? '開発サーバーへ仮保存しました。'
@@ -171,6 +172,7 @@ function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
     </>
   );
 }
+
 export function Detail({ config }: { config: ClientConfig }) {
   const { id = '' } = useParams();
   return <DetailContent key={id} id={id} config={config} />;
