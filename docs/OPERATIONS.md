@@ -40,7 +40,7 @@
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
   - `supabase/storage/comics-bucket.sql`はStorage APIが有効な環境だけで、`storage.buckets` / `storage.objects`を管理できるroleから適用します。local Supabaseでは検証済みの`supabase_admin`を使います（table ownerは`supabase_storage_admin`、CLI3の`postgres`には権限不足）。cloudの適用roleは未検証です。`service_role`へDDL権限を足さず、プラットフォーム既定のRLSを維持します。
-  - local Supabaseではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、service_role upload / remove、およびrestrictive policyの分離を検証しました。cloudのStorage API接続は未検証です。
+  - local Supabaseではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを検証しました。広域authenticated permissive policy下でもcomicsは拒否され、別bucket操作は阻害されませんでした。cloudのStorage API接続は未検証です。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
   - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
