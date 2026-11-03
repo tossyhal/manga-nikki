@@ -13,6 +13,7 @@ SUPABASE_PUBLISHABLE_KEY=""
 # Worker専用秘密情報。サーバーRPC clientのみで使い、.env.localへコピーせず値をコミットしない。
 SUPABASE_SECRET_KEY=""
 TURNSTILE_SECRET_KEY=""
+TURNSTILE_ALLOWED_HOSTNAMES="localhost,127.0.0.1"
 # 候補用・未承認。実モデルを選んだ場合のみ使う。Workers AIはbindingを別途設定する。
 GEMINI_API_KEY=""
 # 上限・モデルprofileはprivate.generation_policyで管理。承認までは0/disabled。

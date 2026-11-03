@@ -4,7 +4,12 @@ import { cloudflare } from '@cloudflare/vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const isReleaseBuild = ['staging', 'production'].includes(
+  process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
+);
+
 export default defineConfig({
+  envDir: isReleaseBuild ? false : undefined,
   plugins: [
     react(),
     tailwindcss(),
@@ -34,7 +39,7 @@ export default defineConfig({
         clientsClaim: false,
       },
     }),
-    cloudflare(),
+    cloudflare(isReleaseBuild ? { config: { secrets: { required: [] } } } : undefined),
   ],
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
   preview: { host: '127.0.0.1', port: 4173, strictPort: true },

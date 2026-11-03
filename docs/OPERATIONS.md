@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> liveモードの日記CRUDとサーバー認証境界、private生成policy・原子的な予約DB基盤を追加しました。共有DBへの適用・実Supabase結合確認、generation / quota API接続、Queue・実AI接続は未完了です。予約の隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> local-connectedの生成受付・quota / status API・Queue経由の固定mock処理と未配送/期限照合を追加しました。共有DBへの適用・実Supabase / Queue / Turnstile結合確認、実AI・Storage画像保存は未実施です。隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -26,7 +26,7 @@
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込みはsecret専用RPC経由です。`reserve_generation` RPCは実装済みですがgeneration / quota APIからは未接続で、該当API・Queue・Storageは未実装です。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・mock予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。real profileの受付とlive-demoの新しい実AI生成、private Storage保存は未接続です。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -34,14 +34,14 @@
   - 利用枠・予算・試行履歴（`quota` / `policy` / `attempts`）は`private`スキーマに置き、外部へ非公開とします。
   - サーバー専用RPCの実行権限（`EXECUTE`）は、`PUBLIC`・`anon`・`authenticated`から明示的に剥奪（REVOKE）します。
   - 関数は原則`SECURITY INVOKER`とし、どうしても`SECURITY DEFINER`が必要な場合は「空の`search_path`指定・スキーマ完全修飾名・関数内部での所有者検証」を必須とします。
-  - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTだけを許可します。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
+  - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
-  - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば返し、`null`ならCAPTCHA検証後に`reserve_generation`を呼びます。予約RPCも並行要求に備えて既存キーを再確認します。
+  - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
   - 同じ`Idempotency-Key`による通信再送では新たなCAPTCHAや生成枠を消費しませんが、JWT認証・有効な本人entry・リクエストハッシュは必ず再確認します。
   - ハッカソン会場など同一IPアドレスから多数のアクセスがあり匿名登録が制限される場合は、架空サンプルの閲覧へ誘導します。
 
@@ -53,8 +53,11 @@
 
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
 - Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
-- 公開用scriptsを実装する際は環境別のフロント設定を分け、ローカルの`.env.local`等がstaging/productionのビルドへ混入しないことを生成物で確認します。公開用コマンドは現時点で未実装です。
+- `pnpm build:staging` / `pnpm build:production`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
+- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。
+- release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
+- local-connectedの例は`dev.vars.local-connected.example`です。値を設定して`.dev.vars.local-connected`へコピーし、`CLOUDFLARE_ENV=local-connected pnpm dev`で開発環境を選びます。`TURNSTILE_SECRET_KEY`と`TURNSTILE_ALLOWED_HOSTNAMES`がない場合、生成受付は停止します。例に含まれるSupabase URLはplaceholderで、実接続情報や秘密値はGitへ入れません。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
 
 ### プロンプトインジェクション・XSS・SSRF対策
@@ -95,6 +98,7 @@
 - 承認予算 $B$ に対する生成可能回数の上限：
   $$\text{生成数候補} = \lfloor B / C_{\max} \rfloor$$
 - 金額はすべて整数（`micro USD` = $10^{-6}$ USD単位）で予約計算し、モデルの単価や出力トークン上限が不明な状態では外部公開しません（税金・為替変動・別用途のクラウド請求は別途余裕を見ます）。
+- 現行DB RPCはscriptを1回、imagesをprofileの`max_image_calls`回まで（整数1〜4、未指定時1）に制限します。`max_cost_micro_usd`にはこの最大呼出し数を含めます。失敗後の自動再送はせず、同じstageの次imageは直前の成功後だけ開始できます。
 
 | 予約状態（`state`） | 生成枠・予算金額の扱い |
 |---|---|
@@ -106,7 +110,7 @@
 - 予算運用の厳守ルール：
   - 生成成功時に「事前見積もり（$C_{\max}$）と実際の消費額の差額」が出ても、MVPでは自動的に余り枠として再利用しません。
   - ユーザーが後から日記を削除したり日付を変更しても、過去に消費した回数や支出カウンターは減らしません。
-  - AI SDKの自動リトライ機能は無効化するか、最大リトライ回数分を最初から $C_{\max}$ の予算に含めます。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。
+  - AI SDKの自動リトライ機能は無効にします。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。再試行機能を別途承認する場合は、呼出し上限と$C_{\max}$を同時に見直します。
   - Queueのメッセージ再試行（retry）によって同じAI呼び出しを再実行せず、`unknown` / `held`状態にして人間が調査します。
 
 ### 実AI有効化前の承認記録ルール
@@ -128,11 +132,11 @@
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - Static Assets、Queue（バインディング名`GENERATION_QUEUE`）、Queue Consumer、Cron Triggers、および環境別の秘密情報と公開環境変数を設定します。
+   - local-connectedのQueue consumer / Cronは`wrangler.jsonc`に定義済みです。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2、未配送照合Cronは1分です。Wranglerの環境設定は各envへbindingが継承されないため、live-demo用のQueueは本作業で作成・有効化していません。remote Queue作成やdeployも行っていません。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
-   - 「標準検査（lint / typecheck / test / build） → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 少数の実生成による計測」の順に進めます。
-   - ビルドとデプロイは対象環境を明示し、最初は手動デプロイで構いません。
+   - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
+   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在デプロイ用scriptはありません。この作業では実デプロイを行っていません。
    - ストレージ容量・転送量・WorkerのCPU/メモリ・Queueの利用枠を実アカウントで確認します。
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
@@ -143,7 +147,7 @@
 ## 5. 公開前チェックリスト
 
 - 通常CIは実際の秘密情報を使わず、モック環境でlint・型検査・unit・build・E2Eを実行します。
-- DB/Queue統合は隔離環境、実AI確認は承認された少数の架空日記だけで行います。
+- local-connectedのDB / Queue結合は隔離環境と固定mockだけで行います。実AI確認は別承認後、承認された少数の架空日記だけで行います。
 - **PRのCIへ本番の秘密情報を渡しません。**`pull_request_target`で未信頼コードを実行せず、Actionsの版と権限を固定・最小化します。
 
 | 確認するテスト状況・シナリオ | 合格条件（すべて満たすこと） |
@@ -155,7 +159,7 @@
 | 同一`Idempotency-Key`の同時リクエスト / 異なる内容、最後の1枠への同時リクエスト | 生成ジョブと枠予約は1件だけ作られ、別内容は`409`、予算・回数上限の超過が起きない |
 | 匿名ユーザーIDの再作成、全体/期間/金額上限への到達、キルスイッチ停止時 | ユーザーを作り直しても全体上限で止まり、停止時は未開始のAIプロバイダを一切呼ばない |
 | サインアップ用と生成用のTurnstileトークン使い回し、会場等の同一IPからの多人数利用 | トークン使い回しは拒否され、IP制限時は意図通り架空サンプル画面へ案内される |
-| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | AIプロバイダの呼び出し回数が増えず、定期再送で復旧するか`unknown` / `held`として安全に止まる |
+| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mock重複配信はclaimで1回だけ処理し、未配送は照合で再送する。実AI経路は未接続で、将来は結果不明を`unknown` / `held`として安全に止める |
 | Storage保存成功後のDB失敗、古いジョブの遅延完了、生成中の日記削除 | AIの再生成が起きず、新しい`latest_generation_id`が巻き戻らず、削除済みデータが復活しない |
 | JST日付境界（0時またぎ）、30日保存期限切れ / 削除処理中のStorage障害 | 元の予約日のカウンターだけで精算され、画面からは即座に非表示となり削除が裏で再試行される |
 | 通信切断・ページ再訪・PWA更新・キャッシュ・HTMLや命令文の入力 | 新規ジョブの勝手な作成、入力中の本文消失、個人データのキャッシュ残留、スクリプト実行が起きない |
@@ -173,6 +177,7 @@
 ### 障害発生時の対応（インシデント対応）
 
 - 異常な課金やAIプロバイダ障害：ただちにDBの`private.generation_policy.enabled = false`に変更して生成を止め、必要に応じてAPIキー自体を失効させます。
+- 削除・保存期限・claim期限を越えて送信済みprovider応答が戻った場合も、attemptの確定stateとrequest IDを記録してから精算します。結果記録でjobや日記を再表示させず、既知費用の枠は返却しません。
 - `unknown`ジョブの発生：プロバイダの`requestId`を使って管理画面やログで実行有無を調査し、自動での再呼び出しは行いません。
 - Supabase Authの障害：代替として「全員共通のログインアカウント」を配るような危険な回避策はとらず、架空サンプルの閲覧へ誘導します。
 - デプロイ不具合：問題のあるWorkerは直前の正常なバージョンへロールバックし、DBの不整合は自動逆マイグレーションや破壊的な`reset`ではなく、互換性を確認した修正用migrationで直します。
@@ -204,6 +209,8 @@
   - [Supabase APIキーの扱い](https://supabase.com/docs/guides/getting-started/api-keys)
   - [Cloudflare Turnstileサーバーサイド検証](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
   - [Cloudflare Workers Secrets管理](https://developers.cloudflare.com/workers/configuration/secrets/)
+  - [Cloudflare Workers Vite pluginの環境選択](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/)
+  - [Cloudflare Workers Vite pluginのbuild成果物とdeploy](https://developers.cloudflare.com/workers/vite-plugin/reference/migrating-from-wrangler-dev/)
 - 利用枠・料金プラン
   - [Supabase Pricing](https://supabase.com/pricing)
   - [Cloudflare Workers Pricing](https://developers.cloudflare.com/workers/platform/pricing/)

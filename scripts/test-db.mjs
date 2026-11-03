@@ -188,6 +188,46 @@ async function runBehindLock({ holderName, lockSql, waiterPrefix, queries }) {
   return results;
 }
 
+async function runBehindEntryUntilDeadline({
+  entryId,
+  waiterName,
+  query,
+  updateDeadlineSql,
+  deadlineExpression,
+}) {
+  const holderName = `${waiterName}-holder`;
+  const lockMarker = `${holderName}:lock-acquired`;
+  const deadlineMarker = `${holderName}:deadline-passed`;
+  const holder = startSqlSession(holderName);
+  let queryPromise;
+  let synchronizationError;
+
+  try {
+    holder.write(
+      `begin;\nset local role service_role;\nselect id from public.entries where id = '${entryId}' for update;\n\\echo ${lockMarker}\n`,
+    );
+    await holder.waitForOutput(lockMarker);
+
+    queryPromise = sql(query, waiterName);
+    await waitForLockWaiters(waiterName, 1);
+
+    holder.write(
+      `${updateDeadlineSql};\nselect pg_catalog.pg_sleep(greatest(0, extract(epoch from ((${deadlineExpression}) - pg_catalog.clock_timestamp())) + 0.1));\n\\echo ${deadlineMarker}\n`,
+    );
+    await holder.waitForOutput(deadlineMarker);
+  } catch (error) {
+    synchronizationError = error;
+  } finally {
+    await holder.finish(synchronizationError ? 'rollback' : 'commit').catch((error) => {
+      synchronizationError ??= error;
+    });
+  }
+
+  const result = queryPromise ? await queryPromise : undefined;
+  if (synchronizationError) throw synchronizationError;
+  return result;
+}
+
 async function cleanup() {
   cleaningUp = true;
   try {
@@ -320,8 +360,10 @@ try {
   }
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
+  console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -445,7 +487,7 @@ try {
     queries: Array.from(
       { length: 6 },
       () =>
-        `set role service_role; select public.reserve_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}',true);`,
+        `set role service_role; select public.reserve_mock_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}');`,
     ),
   });
   const duplicateReceipts = duplicateReservations.map((result) => JSON.parse(succeeded(result)));
@@ -458,7 +500,7 @@ try {
     ),
     '1:1:1:7',
   );
-  console.log('成功: 同一キー6並列予約はjob・reservation・予算計上が各1件');
+  console.log('成功: 同一キー6並列mock予約はjob・reservation・予算計上が各1件');
 
   const differentEntriesSameActor = await runBehindLock({
     holderName: 'mn-db-reserve-user-active-holder',
@@ -587,6 +629,260 @@ try {
     'false:4:28:4:28:1:1:1:7',
   );
   console.log('成功: 予約・policy停止・同一キー再送の待機順でもreceiptとquotaを一件だけ維持');
+
+  const executionActors = [
+    'bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc',
+    'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+  ];
+  const executionEntries = succeeded(
+    await sql(`
+      insert into auth.users(id) values ${executionActors.map((id) => `('${id}')`).join(',')};
+      update private.generation_policy set enabled = true, user_daily_limit = 10,
+        global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
+        model_profile_json = '{"profile_id":"fictional-execution-v1","is_mock":false,"max_cost_micro_usd":1}'::jsonb;
+      set role service_role;
+      select (public.create_entry('${executionActors[0]}',gen_random_uuid(),current_date,'claim競合の架空日記','v1')).id;
+      select (public.create_entry('${executionActors[1]}',gen_random_uuid(),current_date,'cancel競合の架空日記','v1')).id;
+    `),
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(executionEntries.length, 2);
+  const [claimEntry, cancelEntry] = executionEntries;
+  const executionGenerationIds = [];
+  for (const [index, entryId] of [claimEntry, cancelEntry].entries()) {
+    const actor = executionActors[index];
+    const key =
+      index === 0 ? 'dededede-dede-4ded-8ded-dededededede' : 'efefefef-efef-4fef-8fef-efefefefefef';
+    const receipt = JSON.parse(
+      succeeded(
+        await sql(
+          `set role service_role; select public.reserve_generation('${actor}','${entryId}',1,'${key}',true);`,
+        ),
+      ),
+    );
+    executionGenerationIds.push(receipt.generation_id);
+  }
+  const [claimGeneration, cancelGeneration] = executionGenerationIds;
+
+  const duplicateClaims = await runBehindLock({
+    holderName: 'mn-db-claim-duplicate-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-claim-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () => `set role service_role; select public.claim_generation('${claimGeneration}');`,
+    ),
+  });
+  const acquiredClaims = duplicateClaims.map((result) => succeeded(result)).filter(Boolean);
+  assert.equal(acquiredClaims.length, 1);
+  const acquiredClaim = JSON.parse(acquiredClaims[0]);
+  assert.equal(acquiredClaim.generation_id, claimGeneration);
+  assert.ok(acquiredClaim.claim_token);
+  const duplicateBegins = await runBehindLock({
+    holderName: 'mn-db-attempt-duplicate-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-attempt-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () =>
+        `set role service_role; select public.begin_provider_attempt('${claimGeneration}','${acquiredClaim.claim_token}','script',1,true);`,
+    ),
+  });
+  assert.equal(duplicateBegins.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    duplicateBegins.filter(
+      (result) => result.code !== 0 && result.stderr.includes('ATTEMPT_UNRESOLVED'),
+    ).length,
+    5,
+  );
+  const heldClaimResult = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_or_hold_generation('${claimGeneration}','${acquiredClaim.claim_token}','failed');`,
+      ),
+    ),
+  );
+  assert.equal(heldClaimResult.status, 'unknown');
+  assert.equal(heldClaimResult.reservation_state, 'held');
+  assert.equal(
+    succeeded(
+      await sql(
+        `select count(*) from private.provider_attempts where generation_id = '${claimGeneration}';`,
+      ),
+    ),
+    '1',
+  );
+  console.log('成功: 6並列claimは1 Consumerだけが取得し、同一provider attemptは1回だけ開始');
+
+  const cancelClaim = JSON.parse(
+    succeeded(
+      await sql(`set role service_role; select public.claim_generation('${cancelGeneration}');`),
+    ),
+  );
+  const counterBeforeCancelRace = succeeded(
+    await sql(
+      "select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total';",
+    ),
+  );
+  const cancelDispatchRace = await runBehindLock({
+    holderName: 'mn-db-cancel-dispatch-holder',
+    lockSql: `select id from public.entries where id = '${cancelEntry}' for update`,
+    waiterPrefix: 'mn-db-cancel-dispatch-',
+    queries: [
+      `set role service_role; select public.begin_provider_attempt('${cancelGeneration}','${cancelClaim.claim_token}','script',1,true);`,
+      `set role service_role; select public.request_entry_deletion('${executionActors[1]}','${cancelEntry}');`,
+    ],
+  });
+  const [dispatchResult, deleteResult] = cancelDispatchRace;
+  assert.equal(deleteResult.code, 0, deleteResult.stderr);
+  const cancelResult = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_or_hold_generation('${cancelGeneration}','${cancelClaim.claim_token}','cancelled');`,
+      ),
+    ),
+  );
+  const cancelRaceAttemptCount = Number(
+    succeeded(
+      await sql(
+        `select count(*) from private.provider_attempts where generation_id = '${cancelGeneration}';`,
+      ),
+    ),
+  );
+  const counterAfterCancelRace = succeeded(
+    await sql(
+      "select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total';",
+    ),
+  );
+  if (dispatchResult.code === 0) {
+    assert.equal(JSON.parse(succeeded(dispatchResult)).mode, 'provider');
+    assert.equal(cancelRaceAttemptCount, 1);
+    assert.equal(cancelResult.status, 'unknown');
+    assert.equal(cancelResult.reservation_state, 'held');
+    assert.equal(counterAfterCancelRace, counterBeforeCancelRace);
+  } else {
+    assert.match(dispatchResult.stderr, /GENERATION_CANCELLED/);
+    assert.equal(cancelRaceAttemptCount, 0);
+    assert.equal(cancelResult.status, 'cancelled');
+    assert.equal(cancelResult.reservation_state, 'released');
+    const [beforeCount, beforeCost] = counterBeforeCancelRace.split(':').map(Number);
+    const [afterCount, afterCost] = counterAfterCancelRace.split(':').map(Number);
+    assert.equal(afterCount, beforeCount - 1);
+    assert.equal(afterCost, beforeCost - 1);
+  }
+  console.log('成功: cancelとprovider dispatchの競合で、外部送信済み枠を誤返却しない');
+
+  const timeCheckActors = [
+    '12345678-1234-4234-8234-123456789012',
+    '23456789-2345-4345-8345-234567890123',
+    '34567890-3456-4456-8456-345678901234',
+  ];
+  const timeCheckEntries = succeeded(
+    await sql(`
+      insert into auth.users(id) values ${timeCheckActors.map((id) => `('${id}')`).join(',')};
+      update private.generation_policy set enabled = true, user_daily_limit = 10,
+        global_daily_limit = 100, global_total_limit = 100, budget_micro_usd = 100000,
+        model_profile_json = '{"profile_id":"fictional-time-check-v1","is_mock":false,"max_cost_micro_usd":1}'::jsonb;
+      set role service_role;
+      ${timeCheckActors
+        .map(
+          (actor, index) =>
+            `select (public.create_entry('${actor}',gen_random_uuid(),current_date,'期限判定用の架空日記${index + 1}','v1')).id;`,
+        )
+        .join('\n')}
+    `),
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(timeCheckEntries.length, 3);
+
+  const timeCheckGenerationIds = [];
+  for (const [index, entryId] of timeCheckEntries.entries()) {
+    const receipt = JSON.parse(
+      succeeded(
+        await sql(
+          `set role service_role; select public.reserve_generation('${timeCheckActors[index]}','${entryId}',1,'${`4567890${index}-4567-4567-8567-45678901234${index}`}',true);`,
+        ),
+      ),
+    );
+    timeCheckGenerationIds.push(receipt.generation_id);
+  }
+  const [expiryClaimGeneration, expiryBeginGeneration, expirySettleGeneration] =
+    timeCheckGenerationIds;
+
+  const expiryClaimResult = await runBehindEntryUntilDeadline({
+    entryId: timeCheckEntries[0],
+    waiterName: 'mn-db-claim-entry-expiry',
+    query: `set role service_role; select public.claim_generation('${expiryClaimGeneration}');`,
+    updateDeadlineSql: `update public.entries set expires_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${timeCheckEntries[0]}'`,
+    deadlineExpression: `(select expires_at from public.entries where id = '${timeCheckEntries[0]}')`,
+  });
+  assert.equal(expiryClaimResult.code, 0, expiryClaimResult.stderr);
+  assert.equal(succeeded(expiryClaimResult), '');
+  assert.equal(
+    succeeded(
+      await sql(
+        `select status || ':' || (select state from private.reservations where generation_id = '${expiryClaimGeneration}') from public.generations where id = '${expiryClaimGeneration}';`,
+      ),
+    ),
+    'queued:reserved',
+  );
+
+  const expiryBeginClaim = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.claim_generation('${expiryBeginGeneration}');`,
+      ),
+    ),
+  );
+  const expiryBeginResult = await runBehindEntryUntilDeadline({
+    entryId: timeCheckEntries[1],
+    waiterName: 'mn-db-begin-claim-expiry',
+    query: `set role service_role; select public.begin_provider_attempt('${expiryBeginGeneration}','${expiryBeginClaim.claim_token}','script',1,true);`,
+    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${expiryBeginGeneration}'`,
+    deadlineExpression: `(select deadline_at from public.generations where id = '${expiryBeginGeneration}')`,
+  });
+  assert.notEqual(expiryBeginResult.code, 0, expiryBeginResult.stdout);
+  assert.match(expiryBeginResult.stderr, /CLAIM_EXPIRED/);
+  assert.equal(
+    succeeded(
+      await sql(
+        `select count(*) from private.provider_attempts where generation_id = '${expiryBeginGeneration}';`,
+      ),
+    ),
+    '0',
+  );
+
+  const expirySettleClaim = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.claim_generation('${expirySettleGeneration}');`,
+      ),
+    ),
+  );
+  const expirySettleResult = await runBehindEntryUntilDeadline({
+    entryId: timeCheckEntries[2],
+    waiterName: 'mn-db-settle-claim-expiry',
+    query: `set role service_role; select public.fail_or_hold_generation('${expirySettleGeneration}',null,'failed');`,
+    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${expirySettleGeneration}'`,
+    deadlineExpression: `(select deadline_at from public.generations where id = '${expirySettleGeneration}')`,
+  });
+  assert.equal(expirySettleResult.code, 0, expirySettleResult.stderr);
+  const settledExpiredGeneration = JSON.parse(succeeded(expirySettleResult));
+  assert.equal(settledExpiredGeneration.status, 'failed');
+  assert.equal(settledExpiredGeneration.reservation_state, 'released');
+  assert.equal(
+    succeeded(
+      await sql(
+        `select status || ':' || (select state from private.reservations where generation_id = '${expirySettleGeneration}') from public.generations where id = '${expirySettleGeneration}';`,
+      ),
+    ),
+    'failed:released',
+  );
+  assert.ok(expiryBeginClaim.claim_token);
+  assert.ok(expirySettleClaim.claim_token);
+  console.log('成功: entry/claim期限を待つRPCはロック取得後の時刻で判定');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);

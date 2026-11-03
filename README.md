@@ -5,8 +5,8 @@
 日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
-> 現在の状態（2026-11-03時点）
-> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードはJWT検証とSupabase DBの日記一覧・詳細・作成・編集・削除に対応しています。生成受付・quota・`/generations/:id`・画像Storage/署名URL・実AI・Queueは未接続です。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
+> 現在の状態（2026-11-04時点）
+> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedには生成受付・quota・生成状態取得・Queue・期限照合の固定mock経路を実装し、成功時の画像URLは公開の架空サンプルを返します。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage・署名URL、画像保存、30日期限の物理削除は未接続で、新しい実AI生成は停止しています。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
 
 日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 
@@ -70,6 +70,8 @@
 | 秘密情報 | APIキー・認証トークンなど。Supabaseの固有名称だけsecret keyと記す |
 
 ## PWAのビルド確認
+
+環境別の公開準備buildは`pnpm build:staging`または`pnpm build:production`で行います。どちらも`dist/`の成果物検査までで、Cloudflareへの公開はしません。実デプロイは別途承認後にだけ`pnpm exec wrangler deploy`を手動実行します。対象環境のビルド設定と公開手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)および[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)を参照してください。
 
 PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
 

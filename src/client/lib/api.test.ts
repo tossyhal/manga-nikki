@@ -41,7 +41,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('API error guidance', () => {
   it('gives retry guidance when public configuration cannot be loaded', async () => {
@@ -128,6 +131,19 @@ describe('API error guidance', () => {
     expect((generationInit.headers as Headers).get('Authorization')).toMatch(/^Bearer mock:/);
     expect(generationInit.body).toContain('"captchaToken":""');
     expect((generationInit.headers as Headers).get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('refuses development mock authentication outside Vite dev mode', async () => {
+    vi.stubEnv('DEV', false);
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(mockConfig));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api('/entries')).rejects.toMatchObject({
+      code: 'MOCK_AUTH_DISABLED',
+      status: 503,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/config', { cache: 'no-store' });
   });
 
   it('blocks live generation without a fresh CAPTCHA before sending a personal request', async () => {

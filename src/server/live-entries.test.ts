@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { pageComic } from '../shared/fixtures';
 import { createApp } from './app';
 import { mockEnvironment, type Environment } from './mode';
@@ -209,8 +209,15 @@ function createSupabaseBoundary() {
   };
 }
 
-function appWith(boundary: ReturnType<typeof createSupabaseBoundary>) {
-  return createApp({ authFetch: boundary.authFetch, supabaseFetch: boundary.supabaseFetch });
+function appWith(
+  boundary: ReturnType<typeof createSupabaseBoundary>,
+  turnstileFetch?: typeof fetch,
+) {
+  return createApp({
+    authFetch: boundary.authFetch,
+    supabaseFetch: boundary.supabaseFetch,
+    turnstileFetch,
+  });
 }
 
 async function apiRequest(
@@ -220,6 +227,7 @@ async function apiRequest(
   path: string,
   method = 'GET',
   body?: unknown,
+  extraHeaders: Record<string, string> = {},
 ) {
   return app.request(
     `https://app.example/api/v1${path}`,
@@ -227,6 +235,7 @@ async function apiRequest(
       method,
       headers: {
         Authorization: `Bearer ${token}`,
+        ...extraHeaders,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -527,7 +536,7 @@ describe('live diary HTTP API', () => {
     expect((await storedLiveSource.json()).latestGeneration.mock).toBe(false);
   });
 
-  it('hides another owner’s and expired entries, returns delete receipts, and keeps generation/assets unavailable', async () => {
+  it('hides another owner’s and expired entries and maps generation dependencies safely', async () => {
     const environment = liveEnvironment();
     const owner = crypto.randomUUID();
     const token = await accessToken(environment, owner);
@@ -567,7 +576,7 @@ describe('live diary HTTP API', () => {
     const generation = await apiRequest(app, environment, token, `/generations/${generationId}`);
     const asset = await apiRequest(app, environment, token, `/assets/${assetId}/url`);
     expect([quota.status, generate.status, generation.status, asset.status]).toEqual([
-      503, 503, 503, 503,
+      503, 400, 404, 404,
     ]);
   });
 
@@ -588,5 +597,323 @@ describe('live diary HTTP API', () => {
     expect((await response.json()).error.code).toBe('DEPENDENCY_UNAVAILABLE');
     expect(boundary.rpcCalls).toHaveLength(0);
     expect(boundary.readCalls).toHaveLength(0);
+  });
+});
+
+describe('live generation HTTP API', () => {
+  function connectedEnvironment(queue = { send: vi.fn(async () => undefined) }): Environment {
+    return {
+      ...liveEnvironment(),
+      TURNSTILE_SECRET_KEY: 'turnstile-test-secret',
+      TURNSTILE_ALLOWED_HOSTNAMES: 'app.example,localhost',
+      GENERATION_QUEUE: queue,
+    };
+  }
+
+  it('replays an existing receipt without checking CAPTCHA or enqueueing again', async () => {
+    const environment = connectedEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const queue = environment.GENERATION_QUEUE as { send: ReturnType<typeof vi.fn> };
+    const turnstileFetch = vi.fn<typeof fetch>();
+    const app = appWith(boundary, turnstileFetch);
+    const generationId = crypto.randomUUID();
+    const entryId = crypto.randomUUID();
+    const idempotencyKey = crypto.randomUUID();
+    boundary.rpcOverrides.set('find_generation_receipt', {
+      status: 200,
+      body: {
+        generation_id: generationId,
+        status: 'queued',
+        status_url: `/api/v1/generations/${generationId}`,
+      },
+    });
+
+    const response = await apiRequest(
+      app,
+      environment,
+      token,
+      `/entries/${entryId}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'already-used-token' },
+      { 'Idempotency-Key': idempotencyKey },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      generationId,
+      status: 'queued',
+      statusUrl: `/api/v1/generations/${generationId}`,
+    });
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual(['find_generation_receipt']);
+    expect(turnstileFetch).not.toHaveBeenCalled();
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+
+  it('validates the generation-only CAPTCHA, reserves once, and enqueues only the generation ID', async () => {
+    const environment = connectedEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const generationId = crypto.randomUUID();
+    const entryId = crypto.randomUUID();
+    const idempotencyKey = crypto.randomUUID();
+    const queue = environment.GENERATION_QUEUE as { send: ReturnType<typeof vi.fn> };
+    boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
+    boundary.rpcOverrides.set('reserve_mock_generation', {
+      status: 200,
+      body: {
+        generation_id: generationId,
+        status: 'queued',
+        status_url: `/api/v1/generations/${generationId}`,
+      },
+    });
+    boundary.rpcOverrides.set('mark_generation_enqueued', { status: 200, body: true });
+    const turnstileFetch: typeof fetch = vi.fn(async (input, init) => {
+      const request = new Request(input, init);
+      const form = await request.formData();
+      expect(new URL(request.url).hostname).toBe('challenges.cloudflare.com');
+      expect(form.get('secret')).toBe('turnstile-test-secret');
+      expect(form.get('response')).toBe('fresh-generation-token');
+      return Response.json({ success: true, hostname: 'app.example', action: 'generate' });
+    });
+    const app = appWith(boundary, turnstileFetch);
+
+    const response = await apiRequest(
+      app,
+      environment,
+      token,
+      `/entries/${entryId}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+      { 'Idempotency-Key': idempotencyKey },
+    );
+
+    expect(response.status).toBe(202);
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual([
+      'find_generation_receipt',
+      'reserve_mock_generation',
+      'mark_generation_enqueued',
+    ]);
+    expect(itemAt(boundary.rpcCalls, 1).body).toEqual({
+      p_actor_id: owner,
+      p_entry_id: entryId,
+      p_expected_revision: 1,
+      p_idempotency_key: idempotencyKey,
+    });
+    expect(queue.send).toHaveBeenCalledExactlyOnceWith({ generationId });
+    expect(turnstileFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns accepted when queue delivery fails so scheduled reconciliation can retry it', async () => {
+    const environment = connectedEnvironment({
+      send: vi.fn(async () => {
+        throw new Error('queue unavailable');
+      }),
+    });
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const generationId = crypto.randomUUID();
+    boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
+    boundary.rpcOverrides.set('reserve_mock_generation', {
+      status: 200,
+      body: {
+        generation_id: generationId,
+        status: 'queued',
+        status_url: `/api/v1/generations/${generationId}`,
+      },
+    });
+    const turnstileFetch: typeof fetch = async () =>
+      Response.json({ success: true, hostname: 'app.example', action: 'generate' });
+    const app = appWith(boundary, turnstileFetch);
+    const response = await apiRequest(
+      app,
+      environment,
+      token,
+      `/entries/${crypto.randomUUID()}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+
+    expect(response.status).toBe(202);
+    expect((await response.json()).generationId).toBe(generationId);
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual([
+      'find_generation_receipt',
+      'reserve_mock_generation',
+    ]);
+  });
+
+  it('rejects wrong Turnstile action and hostname and treats outages as 503', async () => {
+    const environment = connectedEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
+    for (const result of [
+      { success: true, hostname: 'app.example', action: 'signup' },
+      { success: true, hostname: 'evil.example', action: 'generate' },
+    ]) {
+      const deniedApp = appWith(boundary, async () => Response.json(result));
+      const denied = await apiRequest(
+        deniedApp,
+        environment,
+        token,
+        `/entries/${crypto.randomUUID()}/generations`,
+        'POST',
+        { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+        { 'Idempotency-Key': crypto.randomUUID() },
+      );
+      expect(denied.status).toBe(403);
+      expect((await denied.json()).error.code).toBe('CAPTCHA_FAILED');
+    }
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual([
+      'find_generation_receipt',
+      'find_generation_receipt',
+    ]);
+
+    const unavailable = appWith(boundary, async () => {
+      throw new Error('siteverify timeout');
+    });
+    const failed = await apiRequest(
+      unavailable,
+      environment,
+      token,
+      `/entries/${crypto.randomUUID()}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error.code).toBe('DEPENDENCY_UNAVAILABLE');
+  });
+
+  it('returns live quota data without exposing policy details and gates actual real generation', async () => {
+    const environment = connectedEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    boundary.rpcOverrides.set('get_generation_quota', {
+      status: 200,
+      body: {
+        remaining_today: 0,
+        active_generation_id: null,
+        reset_at: '2026-11-04T00:00:00+09:00',
+        generation_available: true,
+        profile_is_mock: false,
+      },
+    });
+    const app = appWith(boundary);
+    const quota = await apiRequest(app, environment, token, '/me/quota');
+    const quotaBody = await quota.json();
+    expect(quota.status).toBe(200);
+    expect(quotaBody).toEqual({
+      remainingToday: 0,
+      activeGenerationId: null,
+      resetAt: '2026-11-03T15:00:00.000Z',
+      generationAvailable: false,
+    });
+    expect(quotaBody).not.toHaveProperty('profileIsMock');
+
+    const liveDemo: Environment = {
+      ...environment,
+      APP_ENV: 'production',
+      DATA_MODE: 'live',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+    };
+    const liveDemoApp = appWith(boundary);
+    const config = await liveDemoApp.request('https://app.example/api/v1/config', {}, liveDemo);
+    expect((await config.json()).generationAvailable).toBe(false);
+    const stopped = await apiRequest(
+      liveDemoApp,
+      liveDemo,
+      token,
+      `/entries/${crypto.randomUUID()}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'unused' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(stopped.status).toBe(503);
+    expect((await stopped.json()).error.code).toBe('GENERATION_DISABLED');
+  });
+
+  it('disables local-connected ingress without a Queue binding', async () => {
+    const environment = connectedEnvironment();
+    delete environment.GENERATION_QUEUE;
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
+    const turnstileFetch = vi.fn<typeof fetch>();
+    const app = appWith(boundary, turnstileFetch);
+
+    const config = await app.request('https://app.example/api/v1/config', {}, environment);
+    expect((await config.json()).generationAvailable).toBe(false);
+    const response = await apiRequest(
+      app,
+      environment,
+      token,
+      `/entries/${crypto.randomUUID()}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe('GENERATION_DISABLED');
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual(['find_generation_receipt']);
+    expect(turnstileFetch).not.toHaveBeenCalled();
+  });
+
+  it('reads only the owner’s unexpired generation and maps its deterministic sample asset', async () => {
+    const environment = connectedEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const generationId = crypto.randomUUID();
+    const entry = entryRow(owner, crypto.randomUUID(), { latest_generation_id: null });
+    const comic = {
+      ...pageComic,
+      visual: { kind: 'page' as const, assetId: generationId, textMode: 'external' as const },
+    };
+    boundary.entries.push(entry);
+    boundary.generations.push({
+      id: generationId,
+      entry_id: entry.id,
+      owner_id: owner,
+      entry_revision: 1,
+      status: 'succeeded',
+      stage: null,
+      comic_json: comic,
+      is_mock: true,
+    });
+    const app = appWith(boundary);
+
+    const generation = await apiRequest(app, environment, token, `/generations/${generationId}`);
+    expect(generation.status).toBe(200);
+    expect((await generation.json()).comic.visual.assetId).toBe(generationId);
+    const asset = await apiRequest(app, environment, token, `/assets/${generationId}/url`);
+    expect(asset.status).toBe(200);
+    expect(await asset.json()).toMatchObject({ url: '/sample-comic.svg' });
+
+    const foreignToken = await accessToken(environment, crypto.randomUUID());
+    const foreign = await apiRequest(
+      app,
+      environment,
+      foreignToken,
+      `/generations/${generationId}`,
+    );
+    expect(foreign.status).toBe(404);
+    const assetRead = boundary.readCalls.find((call) => call.url.pathname.endsWith('/generations'));
+    expect(assetRead?.url.searchParams.get('owner_id')).toBe(`eq.${owner}`);
+    expect(assetRead?.url.searchParams.get('id')).toBe(`eq.${generationId}`);
+
+    itemAt(boundary.generations, 0).is_mock = false;
+    const realAsset = await apiRequest(app, environment, token, `/assets/${generationId}/url`);
+    expect(realAsset.status).toBe(404);
+    expect((await realAsset.json()).error.code).toBe('NOT_FOUND');
   });
 });

@@ -79,6 +79,12 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
+`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`dev.vars.local-connected.example`を編集し、`.dev.vars.local-connected`へコピーして、開発用Supabaseにレビュー済みmigrationを適用してから次のように起動します。Turnstile検証用secretと許可hostnameがない状態では生成受付が停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
+
+```sh
+CLOUDFLARE_ENV=local-connected pnpm dev
+```
+
 ## 3. 初期基盤の範囲
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
@@ -97,7 +103,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 ## 4. 標準コマンド一覧
 
-初期基盤のコマンドと日記DBテストは実装済みです。公開用コマンドは後続で追加し、package.jsonの`scripts`を正本とします。
+初期基盤のコマンドと日記DBテスト、環境を明示したstaging/productionビルドを用意しています。`package.json`の`scripts`を正本とします。
 
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
@@ -107,14 +113,28 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | `pnpm test` | Vitestの非watch実行 | 実装済み |
 | `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
 | `pnpm build` | ビルド検証。公開しない | 実装済み |
+| `pnpm build:staging` / `pnpm build:production` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
+| `pnpm test:release-environment` | 隔離fixtureで環境変数の混入を検査 | 実装済み |
 | `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
 | `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
-| `pnpm build:staging` / `pnpm build:production` | 環境別ビルド | 公開準備時 |
-| `pnpm deploy:staging` / `pnpm deploy:production` | 承認済み環境への公開 | 公開準備時 |
 
 `pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはUbuntuだけで実行し、mise-actionで同じ版を導入します。同じブランチの古い実行はキャンセルします。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
+
+### 環境別ビルド
+
+staging / productionのビルドは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+
+```sh
+pnpm build:staging
+pnpm build:production
+pnpm preview
+```
+
+Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
+
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。デプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
 
 DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
 
@@ -192,6 +212,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- liveモードの日記CRUDはSupabase DBへ接続します。Auth `getClaims` / `getUser`、日記一覧・詳細・作成・編集・論理削除を実装済みです。日記詳細から最新jobの状態は読み取れますが、quota・生成受付・`/generations/:id`・画像Storage/署名URL・実AI・Queue・30日期限削除は未実装で、該当する個人APIは認証後も503を返します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
+- liveモードの日記CRUD・quota・生成受付・`/generations/:id`はSupabase接続です。local-connectedは生成専用Turnstile、mock profile限定予約、固定fixture Queue処理、未配送再送・期限照合を実装しています。実Supabase / Queue / Turnstile結合、共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage/署名URL、物理削除は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
 - ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
