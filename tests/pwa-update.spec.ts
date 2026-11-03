@@ -38,7 +38,14 @@ async function startFixtureServer() {
           'Cache-Control': 'no-store',
           'Content-Type': 'application/json; charset=utf-8',
         });
-        response.end(JSON.stringify({ dataMode: 'mock', generationAvailable: true }));
+        response.end(
+          JSON.stringify({
+            dataMode: 'mock',
+            generationAvailable: true,
+            consentVersion: 'v1',
+            retentionDays: 30,
+          }),
+        );
         return;
       }
 
