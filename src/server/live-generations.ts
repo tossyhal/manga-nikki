@@ -221,7 +221,7 @@ async function verifyGenerationCaptcha(context: GenerationContext, token: string
 
   if (
     !result.success ||
-    result.action !== 'generate_comic' ||
+    result.action !== 'generate' ||
     !result.hostname ||
     !hostnames.includes(result.hostname.toLowerCase())
   )

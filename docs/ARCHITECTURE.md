@@ -81,19 +81,21 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。日記詳細から最新jobの状態も読み取れます。quota・生成受付・`/generations/:id`・画像Storage/署名URL・Queueは未実装のため503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。`/assets/:id/url`は本人の有効なmock jobだけに公開サンプル画像を返し、Storage署名URLを発行しません。live-demoの新しい実AI生成は未実装のため常に停止し、実AI・Storageのprivate保存と署名URLも未接続です。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、mock生成ではfalseのまま使います。preview-sampleでは生成受付を無効にします。実Supabase等の結合と共有DBへのmigration適用は未実施です。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
 | `local-mock` | `development` | `mock` | `mock` | `false` | localhost限定の仮ユーザー・仮保存・固定漫画 |
-| `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・固定漫画で結合確認 |
+| `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・Queue経由の固定mock漫画で結合確認。Queue/Turnstile secretsがなければ新規受付は停止 |
 | `preview-sample` | `staging`または`production` | `sample` | `mock` | `false` | 架空サンプルだけ。匿名登録・個人データAPI・生成受付は無効 |
 | `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、承認後`true` | 本物Auth・private保存・Queue。停止中も本人の履歴は閲覧可能 |
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
 - `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
 - 実AIは`live-demo`で環境変数とDBの`enabled`が両方有効、かつ予算・認証・Queue等の公開条件を満たす場合だけ呼びます。他モードでの`GENERATION_ENABLED=true`は拒否します。
-- モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`の見本です。
+- local-connectedのmock予約は`reserve_mock_generation`だけで行い、DB policyが有効かつmock profileのときに限ります。実profileはこの経路から予約できません。
+- Queueには`{ generationId }`だけを送ります。Worker Consumerはmock profileだけを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合は未配送queuedを再送し、15分を過ぎたrunningはRPC結果に従ってfailed / unknown / heldを確定します。unknownを自動再実行しません。
+- モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`、`dev.vars.local-connected.example`はSupabase接続を設定する開発用見本です。共有DBへのmigration適用前にlocal-connectedを有効なDBへ接続しないでください。
 
 ### PWA（Progressive Web App）の設計方針
 

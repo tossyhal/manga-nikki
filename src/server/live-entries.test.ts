@@ -676,7 +676,7 @@ describe('live generation HTTP API', () => {
       expect(new URL(request.url).hostname).toBe('challenges.cloudflare.com');
       expect(form.get('secret')).toBe('turnstile-test-secret');
       expect(form.get('response')).toBe('fresh-generation-token');
-      return Response.json({ success: true, hostname: 'app.example', action: 'generate_comic' });
+      return Response.json({ success: true, hostname: 'app.example', action: 'generate' });
     });
     const app = appWith(boundary, turnstileFetch);
 
@@ -726,7 +726,7 @@ describe('live generation HTTP API', () => {
       },
     });
     const turnstileFetch: typeof fetch = async () =>
-      Response.json({ success: true, hostname: 'app.example', action: 'generate_comic' });
+      Response.json({ success: true, hostname: 'app.example', action: 'generate' });
     const app = appWith(boundary, turnstileFetch);
     const response = await apiRequest(
       app,
@@ -746,18 +746,19 @@ describe('live generation HTTP API', () => {
     ]);
   });
 
-  it('rejects wrong Turnstile action or hostname and treats verification outages as 503', async () => {
+  it('rejects wrong Turnstile action and hostname and treats outages as 503', async () => {
     const environment = connectedEnvironment();
     const owner = crypto.randomUUID();
     const token = await accessToken(environment, owner);
     const boundary = createSupabaseBoundary();
     boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
-    const app = appWith(boundary, async () =>
-      Response.json({ success: true, hostname: 'evil.example', action: 'signup' }),
-    );
-    const request = () =>
-      apiRequest(
-        app,
+    for (const result of [
+      { success: true, hostname: 'app.example', action: 'signup' },
+      { success: true, hostname: 'evil.example', action: 'generate' },
+    ]) {
+      const deniedApp = appWith(boundary, async () => Response.json(result));
+      const denied = await apiRequest(
+        deniedApp,
         environment,
         token,
         `/entries/${crypto.randomUUID()}/generations`,
@@ -765,11 +766,13 @@ describe('live generation HTTP API', () => {
         { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
         { 'Idempotency-Key': crypto.randomUUID() },
       );
-
-    const denied = await request();
-    expect(denied.status).toBe(403);
-    expect((await denied.json()).error.code).toBe('CAPTCHA_FAILED');
-    expect(boundary.rpcCalls.map((call) => call.name)).toEqual(['find_generation_receipt']);
+      expect(denied.status).toBe(403);
+      expect((await denied.json()).error.code).toBe('CAPTCHA_FAILED');
+    }
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual([
+      'find_generation_receipt',
+      'find_generation_receipt',
+    ]);
 
     const unavailable = appWith(boundary, async () => {
       throw new Error('siteverify timeout');
@@ -798,7 +801,7 @@ describe('live generation HTTP API', () => {
         remaining_today: 0,
         active_generation_id: null,
         reset_at: '2026-11-04T00:00:00+09:00',
-        generation_available: false,
+        generation_available: true,
         profile_is_mock: false,
       },
     });
@@ -835,6 +838,34 @@ describe('live generation HTTP API', () => {
     );
     expect(stopped.status).toBe(503);
     expect((await stopped.json()).error.code).toBe('GENERATION_DISABLED');
+  });
+
+  it('disables local-connected ingress without a Queue binding', async () => {
+    const environment = connectedEnvironment();
+    delete environment.GENERATION_QUEUE;
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    boundary.rpcOverrides.set('find_generation_receipt', { status: 200, body: null });
+    const turnstileFetch = vi.fn<typeof fetch>();
+    const app = appWith(boundary, turnstileFetch);
+
+    const config = await app.request('https://app.example/api/v1/config', {}, environment);
+    expect((await config.json()).generationAvailable).toBe(false);
+    const response = await apiRequest(
+      app,
+      environment,
+      token,
+      `/entries/${crypto.randomUUID()}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: 'fresh-generation-token' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error.code).toBe('GENERATION_DISABLED');
+    expect(boundary.rpcCalls.map((call) => call.name)).toEqual(['find_generation_receipt']);
+    expect(turnstileFetch).not.toHaveBeenCalled();
   });
 
   it('reads only the owner’s unexpired generation and maps its deterministic sample asset', async () => {

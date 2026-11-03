@@ -5,7 +5,7 @@
 
 ### 初期基盤の実装範囲
 
-localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`generationAvailable`はこの基盤ではlocal-mockだけtrueです。
+localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`/config.generationAvailable`はlocal-mockと、Queue・生成用Turnstileが設定済みのlocal-connectedだけtrueです。local-connectedでの最終的な受付可否は`GET /me/quota`の値も確認します。
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
@@ -207,7 +207,7 @@ type ComicDocument = {
 | HTTP | Error Code | クライアント側の対応・画面表示 |
 |---|---|---|
 | `400` | `INVALID_INPUT` | 入力内容（文字数や日付など）の該当箇所を修正するよう案内 |
-| `401` | `AUTH_REQUIRED` / `AUTH_EXPIRED` | 既存の匿名セッションを更新。無断で別の新しい匿名ユーザーを作らない |
+| `401` | `AUTH_REQUIRED` | 既存の匿名セッションを更新。無断で別の新しい匿名ユーザーを作らない |
 | `403` | `CAPTCHA_FAILED` / `CONSENT_REQUIRED` | 新しいTurnstileチャレンジの取得、または利用同意画面の表示 |
 | `404` | `NOT_FOUND` | 対象のデータが存在しない旨を表示 |
 | `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
