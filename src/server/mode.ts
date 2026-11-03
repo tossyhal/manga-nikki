@@ -4,6 +4,9 @@ export const environmentSchema = z.object({
   DATA_MODE: z.enum(['mock', 'live', 'sample']),
   AI_MODE: z.enum(['mock', 'live']),
   GENERATION_ENABLED: z.enum(['true', 'false']).default('false'),
+  SUPABASE_URL: z.string().optional(),
+  SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
+  SUPABASE_SECRET_KEY: z.string().optional(),
 });
 export type Environment = z.infer<typeof environmentSchema>;
 export type Mode = 'local-mock' | 'local-connected' | 'preview-sample' | 'live-demo';

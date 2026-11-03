@@ -16,6 +16,7 @@
     "format:check": "oxfmt --check ."
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "hono": "^4.13.14",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
