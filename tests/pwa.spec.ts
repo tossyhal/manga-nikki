@@ -60,9 +60,8 @@ test('オフライン時に架空サンプルと利用制限を案内する', as
   await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
   await page.context().setOffline(true);
 
-  await expect(page.getByRole('status')).toContainText('オフラインです。');
-  await expect(page.getByRole('status')).toContainText(
-    '日記本文や生成画像はオフライン用に保存しません。',
-  );
+  const offlineNotice = page.getByRole('status').filter({ hasText: 'オフラインです。' });
+  await expect(offlineNotice).toContainText('オフラインです。');
+  await expect(offlineNotice).toContainText('日記本文や生成画像はオフライン用に保存しません。');
   await expect(page.locator('.sample img')).toBeVisible();
 });
