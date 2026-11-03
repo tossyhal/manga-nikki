@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mockEnvironment, type Environment } from './mode';
 import {
+  cleanRetainedEntriesForScheduledEnvironment,
   createRetentionCleanupService,
   RetentionCleanupError,
   type RetentionCleanupRpc,
@@ -60,6 +61,104 @@ function storageFor(existing: Set<string>): RetentionStorage & {
     })),
   };
 }
+
+describe('scheduled retention cleanup mode gate', () => {
+  it('does not access personal data for sample or malformed modes', async () => {
+    let requests = 0;
+    const fetcher: typeof fetch = async () => {
+      requests += 1;
+      return Response.json([]);
+    };
+    const localMock: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'development',
+      DATA_MODE: 'mock',
+      AI_MODE: 'mock',
+      GENERATION_ENABLED: 'false',
+    };
+    const sample: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'production',
+      DATA_MODE: 'sample',
+    };
+    const malformed = { ...mockEnvironment, APP_ENV: 'invalid' } as unknown as Environment;
+
+    await expect(
+      cleanRetainedEntriesForScheduledEnvironment(localMock, fetcher),
+    ).resolves.toBeUndefined();
+    await expect(
+      cleanRetainedEntriesForScheduledEnvironment(sample, fetcher),
+    ).resolves.toBeUndefined();
+    await expect(
+      cleanRetainedEntriesForScheduledEnvironment(malformed, fetcher),
+    ).resolves.toBeUndefined();
+    expect(requests).toBe(0);
+  });
+
+  it('allows cleanup in a stopped live-demo mode', async () => {
+    const requests: Request[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push(new Request(input, init));
+      return Response.json([]);
+    };
+    const liveDemo: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'production',
+      DATA_MODE: 'live',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'false',
+      SUPABASE_URL: 'https://retention-test.supabase.co',
+      SUPABASE_SECRET_KEY: 'sb_secret_test_only',
+    };
+
+    const summaryLog = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      await expect(cleanRetainedEntriesForScheduledEnvironment(liveDemo, fetcher)).resolves.toEqual(
+        {
+          claimed: 0,
+          deleted: 0,
+          retrying: 0,
+          stale: 0,
+        },
+      );
+      expect(summaryLog).toHaveBeenCalledExactlyOnceWith('retention_cleanup_summary', {
+        claimed: 0,
+        deleted: 0,
+        retrying: 0,
+        stale: 0,
+      });
+    } finally {
+      summaryLog.mockRestore();
+    }
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      '/rest/v1/rpc/claim_retention_cleanup',
+    ]);
+  });
+
+  it('does not reach storage or finalization when the claim dependency fails', async () => {
+    const requests: Request[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push(new Request(input, init));
+      return Response.json({ message: 'private dependency detail' }, { status: 503 });
+    };
+    const liveDemo: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'production',
+      DATA_MODE: 'live',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'false',
+      SUPABASE_URL: 'https://retention-test.supabase.co',
+      SUPABASE_SECRET_KEY: 'sb_secret_test_only',
+    };
+
+    await expect(cleanRetainedEntriesForScheduledEnvironment(liveDemo, fetcher)).rejects.toThrow(
+      'RETENTION_CLEANUP_UNAVAILABLE',
+    );
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      '/rest/v1/rpc/claim_retention_cleanup',
+    ]);
+  });
+});
 
 describe('retention cleanup service', () => {
   it('removes verified owner paths before calling the finalize RPC', async () => {
@@ -168,6 +267,7 @@ describe('retention cleanup service', () => {
 
     await expect(service.cleanDueEntries()).rejects.toThrow('RETENTION_CLEANUP_UNAVAILABLE');
     await expect(service.cleanDueEntries()).rejects.not.toThrow('private value');
+    expect(rpc.finalize).not.toHaveBeenCalled();
   });
 });
 

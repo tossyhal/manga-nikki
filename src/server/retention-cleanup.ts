@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Environment } from './mode';
+import { resolveMode, type Environment, type Mode } from './mode';
 import { createServerRpcClient } from './supabase-clients';
 import { createServerStorageRemovalClient } from './supabase-storage';
 
@@ -77,7 +77,12 @@ export function createRetentionCleanupService(
 
   return {
     async cleanDueEntries(): Promise<RetentionCleanupSummary> {
-      const claimed = await rpc.claim(limit);
+      let claimed: RpcResult;
+      try {
+        claimed = await rpc.claim(limit);
+      } catch {
+        throw new RetentionCleanupError();
+      }
       if (claimed.error !== null) throw new RetentionCleanupError();
       const tasks = tasksFromRpc(claimed.data);
       const summary: RetentionCleanupSummary = {
@@ -121,7 +126,12 @@ export function createRetentionCleanupService(
           continue;
         }
 
-        const finalized = await rpc.finalize(task.entry_id, task.claim_token);
+        let finalized: RpcResult;
+        try {
+          finalized = await rpc.finalize(task.entry_id, task.claim_token);
+        } catch {
+          throw new RetentionCleanupError();
+        }
         if (finalized.error !== null || typeof finalized.data !== 'boolean')
           throw new RetentionCleanupError();
         if (finalized.data) summary.deleted += 1;
@@ -151,4 +161,24 @@ export function createRetentionCleanupServiceForEnvironment(
   };
   const storage = createServerStorageRemovalClient(environment, fetcher);
   return createRetentionCleanupService(rpc, storage, limit);
+}
+
+export async function cleanRetainedEntriesForScheduledEnvironment(
+  environment: Environment,
+  fetcher?: typeof fetch,
+): Promise<RetentionCleanupSummary | undefined> {
+  let mode: Mode;
+  try {
+    mode = resolveMode(environment, false);
+  } catch {
+    return undefined;
+  }
+  if (mode !== 'local-connected' && mode !== 'live-demo') return undefined;
+
+  const summary = await createRetentionCleanupServiceForEnvironment(
+    environment,
+    fetcher,
+  ).cleanDueEntries();
+  console.info('retention_cleanup_summary', summary);
+  return summary;
 }

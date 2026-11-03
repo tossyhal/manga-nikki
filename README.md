@@ -6,7 +6,7 @@
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
 > 現在の状態（2026-11-04時点）
-> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedには生成受付・quota・生成状態取得・Queue・期限照合の固定mock経路を実装し、成功時の画像URLは公開の架空サンプルを返します。期限切れ日記の物理削除RPCとserver専用cleanup serviceもありますが、Scheduled handler接続は未実装です。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage・署名URL、画像保存は未接続で、新しい実AI生成は停止しています。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
+> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedには生成受付・quota・生成状態取得・Queue・期限照合の固定mock経路を実装し、成功時の画像URLは公開の架空サンプルを返します。期限削除は1分ごとの生成照合と別に日次Scheduled handlerへ接続し、`local-connected`と`live-demo`だけがStorage→DB cleanupを実行します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage・署名URL、画像保存は未接続で、新しい実AI生成は停止しています。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
 
 日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 

@@ -58,6 +58,35 @@ function queueMessage(body: unknown) {
   return { body, ack: vi.fn(), retry: vi.fn() };
 }
 
+describe('scheduled generation reconciliation mode gate', () => {
+  it('does not access personal data in sample or malformed modes', async () => {
+    const queue = { send: vi.fn(async () => undefined) };
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json([]));
+    const localMock: Environment = {
+      ...environment(queue),
+      APP_ENV: 'development',
+      DATA_MODE: 'mock',
+      AI_MODE: 'mock',
+      GENERATION_ENABLED: 'false',
+    };
+    const sample: Environment = {
+      ...environment(queue),
+      APP_ENV: 'production',
+      DATA_MODE: 'sample',
+      AI_MODE: 'mock',
+      GENERATION_ENABLED: 'false',
+    };
+    const malformed = { ...environment(queue), DATA_MODE: 'invalid' } as unknown as Environment;
+
+    await reconcileGenerationQueue(localMock, fetcher);
+    await reconcileGenerationQueue(sample, fetcher);
+    await reconcileGenerationQueue(malformed, fetcher);
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+});
+
 describe('generation queue consumer', () => {
   it.each([600, 1000])(
     'completes a claimed mock generation with a %i-code-point supplementary-character snapshot',

@@ -1,4 +1,6 @@
--- Supabase Storage API有効環境でのみ適用する。Storage schemaを含まない隔離DB用ではない。
+-- Supabase Storage API有効環境でのみ、storage.buckets / storage.objectsに必要な管理権限を持つroleで適用する。
+-- local Supabaseではsupabase_adminを使う。table ownerはsupabase_storage_adminで、CLI3のpostgresには権限がなかった。
+-- Storage schemaを含まない隔離DB用ではなく、cloudの適用roleは未検証。service_roleのDDL権限を前提にしない。
 begin;
 
 do $$
@@ -18,7 +20,6 @@ on conflict (id) do update set
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
 
-alter table storage.objects enable row level security;
 drop policy if exists comics_deny_direct_user_access on storage.objects;
 create policy comics_deny_direct_user_access on storage.objects
   as restrictive for all to anon, authenticated

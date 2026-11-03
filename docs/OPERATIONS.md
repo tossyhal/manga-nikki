@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> local-connectedの生成受付・quota / status API・Queue経由の固定mock処理と未配送/期限照合を追加しました。期限切れ日記の物理削除RPCとserver専用cleanup serviceもありますが、Scheduled handlerへの接続は未実装です。共有DBへの適用・実Supabase / Queue / Turnstile結合確認、実AI・Storage画像保存は未実施です。隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> local-connectedの生成受付・quota / status API・Queue経由の固定mock処理と未配送/期限照合、期限切れentryのScheduled cleanup接続を追加しました。共有DBへの適用・実Supabase / Queue / Turnstile / Storage API結合確認、実AI・Storage画像保存は未実施です。隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -39,6 +39,8 @@
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
+  - `supabase/storage/comics-bucket.sql`はStorage APIが有効な環境だけで、`storage.buckets` / `storage.objects`を管理できるroleから適用します。local Supabaseでは検証済みの`supabase_admin`を使います（table ownerは`supabase_storage_admin`、CLI3の`postgres`には権限不足）。cloudの適用roleは未検証です。`service_role`へDDL権限を足さず、プラットフォーム既定のRLSを維持します。
+  - local Supabaseではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、service_role upload / remove、およびrestrictive policyの分離を検証しました。cloudのStorage API接続は未検証です。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
   - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
@@ -68,7 +70,7 @@
 
 ### ログ出力の禁止事項
 
-- ログに残してよいもの：`requestId`、`generationId`、`stage` / `status`、処理時間、一般化した`errorCode`、画像バイト数、`modelId`、トークン等の`usage`のみ。
+- ログに残してよいもの：`requestId`、`generationId`、`stage` / `status`、処理時間、一般化した`errorCode`、画像バイト数、`modelId`、トークン等の`usage`、期限削除のaggregate件数（`claimed` / `deleted` / `retrying` / `stale`）のみ。
 - ログに出してはいけないもの：
   - 日記の本文・AIへのプロンプト
   - JWT・Cookie・`Authorization`ヘッダー・各種APIキー
@@ -132,7 +134,7 @@
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - local-connectedのQueue consumer / Cronは`wrangler.jsonc`に定義済みです。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2、未配送照合Cronは1分です。Wranglerの環境設定は各envへbindingが継承されないため、live-demo用のQueueは本作業で作成・有効化していません。remote Queue作成やdeployも行っていません。
+   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。staging/productionにも日次Cronを準備しますが、初期`DATA_MODE=sample`のmode gateにより個人DB/Storageへ接続せず、Queue bindingもありません。Cron設定だけでremote Queue作成やdeployは行っていません。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
    - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
@@ -184,8 +186,12 @@
 
 ### データ削除とハッカソン終了後の処理
 
-- 本人の削除操作または作成から30日で、閲覧と新しい署名URLの発行を止めます。
-- Storageの物理画像→DBメタデータの順に削除します。障害やプロジェクト休止で失敗した場合は復旧後に再試行します。
+- 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
+- `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
+- 1分のgeneration reconcileが動く環境では、取消済み・期限切れjobを既存の安全な精算RPCへ渡します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
+- Storage `remove`後に`list`でpath不在を確認できた時だけDB finalizeし、asset→job→entryを消します。remove/list障害ではDB metadata・jobを残し、すでに消えた画像は次回の`remove`と`list`確認で安全に再試行します。
+- 日次batch上限を超えたdue entryは次の日次実行以降に残ります。Storage障害のentryも15分lease失効後に再claim可能ですが、同じ日の日次Cronは再実行しないため、通常の再試行機会は次回日次実行です。active jobがsettleした後も、cleanup実行は次の日次枠まで待つことがあります。物理消去を30日以内に保証するものではありません。
+- cleanup結果のaggregate logは`claimed` / `deleted` / `retrying` / `stale`の件数だけで、owner・本文・object path・claim tokenは記録しません。claim/finalize RPCの依存障害は一般化したエラーでCron invocationを失敗扱いにします。retryingはStorage remove/list失敗、staleはlease/token/期限/path集合の再検証不一致です。
 - 発行済み署名URLの最大60秒の残存、外部AIの保持、DBバックアップは別の制約として事前に説明します。
 - 未参照画像・古い匿名ユーザー・残存ジョブも確認して掃除します。
 - 大会後は実AIを停止するか、継続予算・正式認証・保存期間を改めて合意します。

@@ -46,9 +46,10 @@
           },
         ],
       },
-      "triggers": { "crons": ["* * * * *"] },
+      "triggers": { "crons": ["* * * * *", "0 15 * * *"] },
     },
     "staging": {
+      "triggers": { "crons": ["0 15 * * *"] },
       "vars": {
         "APP_ENV": "staging",
         "DATA_MODE": "sample",
@@ -62,6 +63,7 @@
       },
     },
     "production": {
+      "triggers": { "crons": ["0 15 * * *"] },
       "vars": {
         "APP_ENV": "production",
         "DATA_MODE": "sample",
