@@ -97,6 +97,7 @@ declare
   v_reservation private.reservations;
   v_claim_token uuid;
   v_deadline timestamptz;
+  v_now timestamptz;
 begin
   if p_generation_id is null then raise exception using message = 'INVALID_INPUT'; end if;
 
@@ -110,9 +111,11 @@ begin
   select * into v_generation from public.generations g where g.id = p_generation_id for update;
   select * into v_reservation from private.reservations r
     where r.generation_id = p_generation_id for update;
+  v_now := pg_catalog.clock_timestamp();
 
   if v_generation.status <> 'queued' or v_reservation.state <> 'reserved'
-    or v_generation.cancel_requested or not private.is_live_generation_entry(v_entry)
+    or v_generation.cancel_requested or v_entry.deleted_at is not null
+    or v_entry.expires_at <= v_now
     or v_generation.is_mock is null then
     return null;
   end if;
@@ -121,11 +124,11 @@ begin
   end if;
 
   v_claim_token := pg_catalog.gen_random_uuid();
-  v_deadline := pg_catalog.statement_timestamp() + interval '15 minutes';
+  v_deadline := v_now + interval '15 minutes';
   update public.generations set status = 'running', stage = 'script',
     claim_token = v_claim_token, deadline_at = v_deadline,
-    started_at = coalesce(started_at, pg_catalog.statement_timestamp()),
-    updated_at = pg_catalog.statement_timestamp()
+    started_at = coalesce(started_at, v_now),
+    updated_at = v_now
     where id = p_generation_id;
 
   return pg_catalog.jsonb_build_object(
@@ -159,7 +162,7 @@ declare
   v_attempt private.provider_attempts;
   v_last_call_index integer;
   v_max_image_calls integer := 1;
-  v_now timestamptz := pg_catalog.statement_timestamp();
+  v_now timestamptz;
 begin
   if p_generation_id is null or p_claim_token is null
     or p_stage not in ('script', 'images') or p_stage is null
@@ -178,6 +181,7 @@ begin
   select * into v_generation from public.generations g where g.id = p_generation_id for update;
   select * into v_reservation from private.reservations r
     where r.generation_id = p_generation_id for update;
+  v_now := pg_catalog.clock_timestamp();
 
   if v_generation.status <> 'running'
     or v_generation.claim_token is distinct from p_claim_token then
@@ -186,7 +190,8 @@ begin
   if v_generation.deadline_at is null or v_generation.deadline_at <= v_now then
     raise exception using message = 'CLAIM_EXPIRED';
   end if;
-  if v_generation.cancel_requested or not private.is_live_generation_entry(v_entry) then
+  if v_generation.cancel_requested or v_entry.deleted_at is not null
+    or v_entry.expires_at <= v_now then
     raise exception using message = 'GENERATION_CANCELLED';
   end if;
   if v_reservation.state <> 'reserved' then
@@ -284,10 +289,9 @@ returns jsonb language plpgsql security invoker set search_path = ''
 as $$
 declare
   v_generation public.generations;
-  v_entry public.entries;
   v_reservation private.reservations;
   v_attempt private.provider_attempts;
-  v_now timestamptz := pg_catalog.statement_timestamp();
+  v_now timestamptz;
 begin
   if p_generation_id is null or p_claim_token is null or p_attempt_id is null
     or p_state not in ('succeeded', 'failed', 'unknown') or p_state is null
@@ -299,7 +303,7 @@ begin
   if not found then raise exception using message = 'NOT_FOUND'; end if;
   v_reservation := private.lock_generation_quota(p_generation_id);
 
-  select * into v_entry from public.entries e
+  perform 1 from public.entries e
     where e.id = v_generation.entry_id and e.owner_id = v_generation.owner_id for update;
   if not found then raise exception using message = 'NOT_FOUND'; end if;
   select * into v_generation from public.generations g where g.id = p_generation_id for update;
@@ -308,16 +312,11 @@ begin
   select * into v_attempt from private.provider_attempts a
     where a.id = p_attempt_id and a.generation_id = p_generation_id for update;
   if not found then raise exception using message = 'ATTEMPT_NOT_FOUND'; end if;
+  v_now := pg_catalog.clock_timestamp();
 
   if v_generation.status <> 'running'
     or v_generation.claim_token is distinct from p_claim_token then
     raise exception using message = 'CLAIM_LOST';
-  end if;
-  if v_generation.deadline_at is null or v_generation.deadline_at <= v_now then
-    raise exception using message = 'CLAIM_EXPIRED';
-  end if;
-  if v_generation.cancel_requested or not private.is_live_generation_entry(v_entry) then
-    raise exception using message = 'GENERATION_CANCELLED';
   end if;
   if v_reservation.state <> 'reserved' then
     raise exception using message = 'GENERATION_TERMINAL';
@@ -369,7 +368,7 @@ declare
   v_terminal_status text;
   v_reservation_state text;
   v_updated integer;
-  v_now timestamptz := pg_catalog.statement_timestamp();
+  v_now timestamptz;
 begin
   if p_generation_id is null or p_terminal_status not in ('failed', 'cancelled')
     or p_terminal_status is null then
@@ -386,6 +385,7 @@ begin
   select * into v_generation from public.generations g where g.id = p_generation_id for update;
   select * into v_reservation from private.reservations r
     where r.generation_id = p_generation_id for update;
+  v_now := pg_catalog.clock_timestamp();
 
   if v_generation.status not in ('queued', 'running') then
     return pg_catalog.jsonb_build_object(
@@ -420,7 +420,8 @@ begin
   if v_unknown then
     v_terminal_status := 'unknown';
     v_reservation_state := 'held';
-  elsif v_generation.cancel_requested or not private.is_live_generation_entry(v_entry) then
+  elsif v_generation.cancel_requested or v_entry.deleted_at is not null
+    or v_entry.expires_at <= v_now then
     v_terminal_status := 'cancelled';
     if v_known then
       v_reservation_state := 'consumed';
