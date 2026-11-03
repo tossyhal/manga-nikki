@@ -22,14 +22,14 @@ function environment(queue = { send: vi.fn(async () => undefined) }): Environmen
   };
 }
 
-function claim(isMock = true) {
+function claim(isMock = true, inputSnapshot = '架空のテスト日記') {
   return {
     generation_id: generationId,
     entry_id: '33333333-3333-4333-8333-333333333333',
     owner_id: '44444444-4444-4444-8444-444444444444',
     entry_revision: 1,
     is_mock: isMock,
-    input_snapshot: '架空のテスト日記',
+    input_snapshot: inputSnapshot,
     model_profile_snapshot: {
       profile_id: 'fixed-test-v1',
       is_mock: isMock,
@@ -59,6 +59,113 @@ function queueMessage(body: unknown) {
 }
 
 describe('generation queue consumer', () => {
+  it.each([600, 1000])(
+    'completes a claimed mock generation with a %i-code-point supplementary-character snapshot',
+    async (codePointCount) => {
+      const calls: { name: string; body: Record<string, unknown> }[] = [];
+      const inputSnapshot = '😀'.repeat(codePointCount);
+      const fetcher = rpcFetcher((name, body) => {
+        if (name === 'claim_generation') return claim(true, inputSnapshot);
+        if (name === 'begin_provider_attempt')
+          return {
+            attempt_id:
+              body.p_stage === 'script'
+                ? '55555555-5555-4555-8555-555555555555'
+                : '66666666-6666-4666-8666-666666666666',
+            generation_id: generationId,
+            stage: body.p_stage,
+            call_index: 1,
+            mode: 'mock',
+            is_mock: true,
+          };
+        if (name === 'finish_provider_attempt')
+          return {
+            attempt_id: body.p_attempt_id,
+            state: 'succeeded',
+            request_id: null,
+            finished_at: '2026-11-04T00:00:00Z',
+            is_mock: true,
+          };
+        if (name === 'complete_mock_generation')
+          return {
+            generation_id: generationId,
+            status: 'succeeded',
+            reservation_state: 'consumed',
+          };
+        throw new Error(`unexpected rpc: ${name}`);
+      }, calls);
+      const message = queueMessage({ generationId });
+
+      await consumeGenerationQueue(
+        { queue: 'manga-nikki-generations-local-connected', messages: [message] },
+        environment(),
+        fetcher,
+      );
+
+      expect(message.ack).toHaveBeenCalledOnce();
+      expect(message.retry).not.toHaveBeenCalled();
+      expect(calls.map((call) => call.name)).toEqual([
+        'claim_generation',
+        'begin_provider_attempt',
+        'finish_provider_attempt',
+        'begin_provider_attempt',
+        'finish_provider_attempt',
+        'complete_mock_generation',
+      ]);
+    },
+  );
+
+  it('does not settle a malformed claim without a validated claim token', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const invalidClaim = { ...claim(), claim_token: 'untrusted-token' };
+    const fetcher = rpcFetcher((name) => {
+      if (name === 'claim_generation') return invalidClaim;
+      throw new Error(`unexpected rpc: ${name}`);
+    }, calls);
+    const message = queueMessage({ generationId });
+
+    await consumeGenerationQueue(
+      { queue: 'manga-nikki-generations-local-connected', messages: [message] },
+      environment(),
+      fetcher,
+    );
+
+    expect(message.retry).toHaveBeenCalledOnce();
+    expect(message.ack).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.name)).toEqual(['claim_generation']);
+  });
+
+  it('releases an unsubmitted claim whose snapshot exceeds the code-point limit', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const fetcher = rpcFetcher((name) => {
+      if (name === 'claim_generation') return claim(true, '😀'.repeat(1001));
+      if (name === 'fail_or_hold_generation')
+        return {
+          generation_id: generationId,
+          status: 'failed',
+          reservation_state: 'released',
+          released: true,
+        };
+      throw new Error(`unexpected rpc: ${name}`);
+    }, calls);
+    const message = queueMessage({ generationId });
+
+    await consumeGenerationQueue(
+      { queue: 'manga-nikki-generations-local-connected', messages: [message] },
+      environment(),
+      fetcher,
+    );
+
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.name)).toEqual(['claim_generation', 'fail_or_hold_generation']);
+    expect(calls[1]?.body).toEqual({
+      p_generation_id: generationId,
+      p_claim_token: claimToken,
+      p_terminal_status: 'failed',
+    });
+  });
+
   it('claims a duplicate delivery once and completes only the fixed mock attempts', async () => {
     const calls: { name: string; body: Record<string, unknown> }[] = [];
     let claimCount = 0;

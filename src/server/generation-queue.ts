@@ -10,13 +10,20 @@ import {
 import { resolveMode } from './mode';
 
 const queueBodySchema = z.strictObject({ generationId: z.uuid() });
+const claimIdentitySchema = z.object({
+  generation_id: z.uuid(),
+  claim_token: z.uuid(),
+});
 const claimSchema = z.object({
   generation_id: z.uuid(),
   entry_id: z.uuid(),
   owner_id: z.uuid(),
   entry_revision: z.number().int().positive(),
   is_mock: z.boolean(),
-  input_snapshot: z.string().min(1).max(1000),
+  input_snapshot: z.string().refine((value) => {
+    const count = [...value].length;
+    return count >= 1 && count <= 1000;
+  }),
   model_profile_snapshot: z.record(z.string(), z.unknown()),
   claim_token: z.uuid(),
   deadline_at: z.iso.datetime({ offset: true }),
@@ -156,7 +163,20 @@ export async function processGenerationMessage(
   });
   if (claimValue === null) return 'duplicate';
   const claim = claimSchema.safeParse(claimValue);
-  if (!claim.success || claim.data.generation_id !== generationId) {
+  if (!claim.success) {
+    const claimIdentity = claimIdentitySchema.safeParse(claimValue);
+    if (!claimIdentity.success || claimIdentity.data.generation_id !== generationId) {
+      throw new Error('GENERATION_CLAIM_INVALID');
+    }
+    await failClaimedGeneration(
+      environment,
+      fetcher,
+      claimIdentity.data.generation_id,
+      claimIdentity.data.claim_token,
+    );
+    return 'failed';
+  }
+  if (claim.data.generation_id !== generationId) {
     throw new Error('GENERATION_CLAIM_INVALID');
   }
   const claimToken = claim.data.claim_token;
