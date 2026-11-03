@@ -305,6 +305,64 @@ describe('diary creation retry', () => {
     ).toBe(true);
   });
 
+  it('does not reuse a retired request ID for a changed diary and retains the stale pending entry', async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    const { createEntry } = await import('./api');
+    const inputA = {
+      createRequestId: '11111111-1111-4111-8111-111111111111',
+      diaryDate: '2026-11-02',
+      body: '削除済みの日記',
+      consentVersion: 'v1' as const,
+    };
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              message: '記録が見つかりません。',
+              code: 'NOT_FOUND',
+              requestId: 'request-not-found',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ id: 'saved-entry-b' }));
+    vi.stubGlobal('fetch', mockFetch(request));
+
+    await expect(createEntry(inputA)).rejects.toThrow();
+    await expect(createEntry(inputA)).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(request).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(String(request.mock.calls[0]?.[1]?.body));
+    const second = JSON.parse(String(request.mock.calls[1]?.[1]?.body));
+    expect(second.createRequestId).toBe(first.createRequestId);
+    const pendingAfterNotFound = JSON.parse(
+      String(values.get('manga-nikki.pending-entry-create')),
+    ).pending;
+    expect(pendingAfterNotFound).toHaveLength(1);
+    const rotatedA = pendingAfterNotFound[0].requestId;
+    expect(rotatedA).not.toBe(first.createRequestId);
+
+    await createEntry({ ...inputA, body: '別の日記B' });
+    expect(request).toHaveBeenCalledTimes(3);
+    const third = JSON.parse(String(request.mock.calls[2]?.[1]?.body));
+    expect(third.createRequestId).not.toBe(first.createRequestId);
+    expect(third.createRequestId).not.toBe(rotatedA);
+    const pendingAfterB = JSON.parse(
+      String(values.get('manga-nikki.pending-entry-create')),
+    ).pending;
+    expect(pendingAfterB).toHaveLength(1);
+    expect(pendingAfterB[0].requestId).toBe(rotatedA);
+  });
+
   it('uses a new request ID when the diary content changes', async () => {
     const values = new Map<string, string>();
     vi.stubGlobal('sessionStorage', {
