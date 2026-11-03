@@ -12,6 +12,7 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細の読み取りは利用者JWT + RLSとAPI側のowner条件を使い、作成・編集・論理削除はサーバー専用RPCを使います。日記詳細は既存の`latestGeneration`状態も読み取ります。generation受付・quota・独立した`GET /generations/:id`・画像Storage/署名URL・期限切れ物理削除・Queueは未実装で、該当APIは503を返します。live APIがモックrepositoryへ切り替わることはありません。モックは再起動で消える一時メモリで、実Supabase環境の結合確認は未実施です。
 
 DBにはclaim・provider attempt・失敗時の安全精算RPCを追加済みです。HTTP受付やQueue Workerからはまだ呼び出しておらず、共有Supabaseへの適用も未実施です。
+liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。新規登録は保存操作と同意の後に限り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。現在、生成用CAPTCHAとlive生成フローは未接続のため、ブラウザからlive生成要求を送らず停止します。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
 
 ---
 
