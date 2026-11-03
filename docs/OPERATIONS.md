@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> liveモードのサーバーJWT検証境界は実装済みですが、フロントのSupabase Authセッション取得・DB接続・予算制御・公開機能は未実装です。日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストは追加済みですが、共有DBへの適用は行っていません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> liveモードの日記CRUDとサーバー認証境界は実装済みですが、フロントのSupabase Authセッション取得・quota・generation・画像Storage・予算制御・公開機能は未実装です。日記DBのmigration・RLS・RPCと隔離PostgreSQLテストは追加済みですが、共有DBへの適用・実Supabase結合確認は行っていません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -12,14 +12,21 @@
 
 - JWTと匿名認証の検証
   - 認証セッションの保存・更新はSupabase SDKに管理させます。現行設計はHttpOnly Cookie方式ではありません。JWTをURLのクエリやフラグメントへ入れません。
-  - Workerは`Authorization: Bearer <JWT>`を厳密に読み取り、Supabase SDKの`auth.getClaims(jwt)`で署名・期限を検証します。その後、`iss`が`${SUPABASE_URL}/auth/v1`、`aud`が`authenticated`、`sub`が有効なUUIDであることを個別に検証します。
+  - Workerは`Authorization: Bearer <JWT>`を厳密に読み取り、Supabase SDKの`auth.getClaims(jwt)`で署名・期限を検証します。その後、`iss`が`${SUPABASE_URL}/auth/v1`、`aud`が`authenticated`、`sub`が有効なUUIDであることを個別に検証し、`auth.getUser(jwt)`でAuthサーバーから得た現在のユーザーIDとの一致も確認します。
   - Auth/JWKSの依存先障害や接続設定不備は503として扱い、不正JWTは401として扱います。JWT・認証ヘッダー・生のSDKエラーはレスポンスやログに含めません。
-  - 非対称署名鍵を使うプロジェクトでは`getClaims`はJWTの署名と期限を確認しますが、Auth側のセッション失効は確認しません。失効を即時反映する必要がある場合は、DB CRUD実装前にAuthサーバーへのユーザー照会を加えます。
+  - `getClaims`はJWTの署名と期限を確認し、`getUser(jwt)`はAuthサーバーへ現在のユーザーを照会します。Supabaseは`getUser`をサーバー側でセッション終了を検出する手段として案内しています。一方、sign-outで失効したaccess tokenも`exp`までは有効とされるため、この照会だけで全API操作の即時失効を保証するとは説明しません。セッションIDをDB照会する追加制御は未実装です。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
+<a id="認証とセッション失効の確認範囲"></a>
+
+#### 認証とセッション失効の確認範囲
+
+- 各保護APIは`getClaims(jwt)`で署名・期限・issuer・audience・subjectを確認し、その後`getUser(jwt)`でAuthサーバーから現在のユーザーを取得してsubjectと一致することを確認します。明確な認証拒否は401、依存先障害は503です。
+- `getUser`はリクエストごとにAuthサーバーへ接続するため、Authサービス障害時には個人APIを利用できません。Supabaseはこれをサーバー側でセッション終了を検出する方法として案内していますが、失効済みJWTは有効期限`exp`まで残りうるとも明記しています。したがって即時失効は保証せず、`session_id`を使った`auth.sessions`照会も現行APIでは行いません。
+- 公式資料：[Authサーバー側ガイド](https://supabase.com/docs/guides/auth/server-side/advanced-guide)、[Auth sessions](https://supabase.com/docs/guides/auth/sessions)、[Signing out](https://supabase.com/docs/guides/auth/signout)。
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - DB接続・CRUDの呼び出しは未実装です。liveモードの個人APIは検証済み`sub`をmiddlewareへ設定後、503を返します。
+  - 日記CRUDは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込みはsecret専用RPC経由です。quota・generation・Storageは未実装で、該当APIは503を返します。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -182,6 +189,9 @@
 - セキュリティ・機能仕様
   - [Supabase匿名サインイン（Anonymous Sign-Ins）](https://supabase.com/docs/guides/auth/auth-anonymous)
   - [Supabase JWT検証](https://supabase.com/docs/guides/auth/jwts)
+  - [Supabase Auth getUser/getClaims](https://supabase.com/docs/guides/auth/server-side/advanced-guide)
+  - [Supabase Auth sessions](https://supabase.com/docs/guides/auth/sessions)
+  - [Supabase Auth sign out](https://supabase.com/docs/guides/auth/signout)
   - [PostgreSQL Row Level Security (RLS)](https://supabase.com/docs/guides/database/postgres/row-level-security)
   - [Supabase Database Functions (RPC)](https://supabase.com/docs/guides/database/functions)
   - [Supabase Storageアクセス制御](https://supabase.com/docs/guides/storage/security/access-control)

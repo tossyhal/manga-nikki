@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。WorkerのSupabase JWT検証境界と利用者JWT / server RPC client factoryは実装済みですが、DB CRUD接続・生成受付・画像Storage・予算予約・物理削除は後続です。このmigrationだけでは実接続モードは有効にならず、liveモードの個人APIは503を返します。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加し、`20261103000000_generation_source.sql`は`generations.is_mock` metadataを追加します。WorkerのJWT検証と日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。generation受付・quota・画像Storage・予算予約・物理削除は後続で、該当するAPIは503を返します。
 
 ## 検証
 
@@ -21,7 +21,7 @@ pnpm test:db
 
 ## 保存API担当との接続契約
 
-書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。テーブル権限も既定の全権限を明示的に剥奪し、現migrationで必要な`SELECT`・`INSERT`・`UPDATE`だけを付与します。
+書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。テーブル権限も既定の全権限を明示的に剥奪し、現migrationで必要な`SELECT`・`INSERT`・`UPDATE`だけを付与します。
 
 | RPC | 引数 | 戻り値 |
 |---|---|---|
@@ -31,7 +31,9 @@ pnpm test:db
 
 DB行はsnake_caseです。API担当は`id`・`diary_date`・`body`・`revision`・`latest_generation_id`・`created_at`・`updated_at`を共有型`Entry`のcamelCaseへ変換し、内部カラムをHTTPレスポンスに含めないでください。
 
-読み取りは利用者JWTのクライアントを使います。`select('*')`ではなく必要な列を指定してください。`entries.create_request_hash`と、生成ジョブの`input_snapshot`・`model_profile_snapshot`・`claim_token`等の内部列にはクライアントの読み取り権限を付けていません。日記とジョブは所有者一致・未削除・期限内の場合だけ取得できます。
+読み取りは利用者JWTのクライアントを使います。`select('*')`ではなく必要な列を指定してください。`entries.create_request_hash`と、生成ジョブの`input_snapshot`・`model_profile_snapshot`・`claim_token`等の内部列にはクライアントの読み取り権限を付けていません。`generations.is_mock`だけを出力由来表示のためauthenticatedへ追加grantし、job writerがtrue/falseを明示します。既存行はNULLのままにし、由来を確認できない場合はAPIが503を返します。日記とジョブは所有者一致・未削除・期限内の場合だけ取得できます。
+
+認証middlewareは`auth.getClaims(jwt)`で署名・期限とclaimを検証した後、`auth.getUser(jwt)`でAuthサーバーにユーザーを照会します。Supabaseの説明では`getUser`をサーバー側でセッション終了を検出するために使いますが、sign-out済みaccess tokenも`exp`までは有効とされており、これは即時失効の保証ではありません。`auth.sessions`の`session_id`照会は今回追加していません。
 
 RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードです。API側で既存のHTTPエラー形式へ変換し、DBの生エラーをそのまま返さないでください。
 
@@ -55,7 +57,7 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - 編集・削除は先に日記行を`FOR UPDATE`でロックします。削除は日記を非表示にしてからactiveジョブへ`cancel_requested`を付け、同じトランザクションで確定します。生成枠の解放やジョブの実行結果の確定は行いません。
 - **後続の生成予約RPCも、日記の有効性・revisionを再確認し、同じ日記行をロックしたままジョブ作成・`latest_generation_id`更新を行ってください。**これが編集・削除との競合防止の前提です。全体policy等のロック順は`docs/API.md`の順序を維持し、entry→jobの順にします。
 - 後続のquota解放RPCも、`docs/API.md`の「全体policy/total → 全体day → ユーザーday → entry → job」の順で行ロックします。予約時に記録した`reserved_day`のカウンターを使い、entry/jobを保持したままquotaロックを取りに行かないでください。
-- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactiveジョブは1つだけです。生成ジョブの外部AI実行や状態遷移のRPCは未実装です。
+- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactiveジョブは1つだけです。`is_mock`は生成元の公開metadataです。後続のjob writerは固定結果ならtrue、実生成ならfalseを必ず設定し、NULLを既定値でfalseに埋めないでください。生成ジョブの外部AI実行や状態遷移のRPCは未実装です。
 - `latest_generation_id`を保持したまま編集し、`revision`だけを増やします。画面側は`entry_revision`との差から編集前の漫画であることを表示できます。
 
 ## 適用と後続作業
