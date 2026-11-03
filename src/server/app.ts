@@ -5,6 +5,14 @@ import { createEntrySchema, updateEntrySchema, generateSchema, jstToday } from '
 import { resolveMode, type Environment } from './mode';
 import { createMockRepository, type MockRepository } from './repositories/mock';
 import {
+  createLiveEntry,
+  deleteLiveEntry,
+  getLiveEntryDetail,
+  listLiveEntries,
+  LiveEntryError,
+  updateLiveEntry,
+} from './live-entries';
+import {
   getBearerToken,
   InvalidAccessTokenError,
   SupabaseAuthUnavailableError,
@@ -13,7 +21,7 @@ import {
 
 class ApiError extends Error {
   constructor(
-    public status: 400 | 401 | 404 | 409 | 413 | 429 | 503,
+    public status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 503,
     public code: string,
   ) {
     super(code);
@@ -22,13 +30,15 @@ class ApiError extends Error {
 const messages: Record<string, string> = {
   INVALID_INPUT: '入力内容を確認してください。',
   AUTH_REQUIRED: '認証情報を確認してください。',
+  CONSENT_REQUIRED: '利用への同意を確認してください。',
   NOT_FOUND: '記録が見つかりません。',
   REVISION_CONFLICT: '記録が更新されています。再読み込みしてください。',
+  ENTRY_BUSY: '生成中の記録は編集できません。',
   IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
   INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
   USER_LIMIT_REACHED: 'モックの本日の生成上限に達しました。',
   DRAFT_LIMIT_REACHED: '下書きが上限に達しました。不要な記録を削除してください。',
-  DEPENDENCY_UNAVAILABLE: 'この接続方式は初期基盤では未対応です。',
+  DEPENDENCY_UNAVAILABLE: '一時的に利用できません。時間をおいて再操作してください。',
   GENERATION_DISABLED: 'この環境では個人データの操作は利用できません。',
 };
 async function jsonBody(request: Request): Promise<unknown> {
@@ -68,11 +78,15 @@ export function createApp(
     localDevelopment?: boolean;
     repository?: MockRepository;
     authFetch?: typeof fetch;
+    supabaseFetch?: typeof fetch;
   } = {},
 ) {
   let repository = options.repository;
   const getRepository = () => (repository ??= createMockRepository());
-  const app = new Hono<{ Bindings: Environment; Variables: { owner: string } }>();
+  const app = new Hono<{
+    Bindings: Environment;
+    Variables: { owner: string; accessToken: string | null };
+  }>();
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     await next();
@@ -81,9 +95,11 @@ export function createApp(
     const failure =
       error instanceof ApiError
         ? error
-        : error instanceof z.ZodError
-          ? new ApiError(400, 'INVALID_INPUT')
-          : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+        : error instanceof LiveEntryError
+          ? new ApiError(error.status, error.code)
+          : error instanceof z.ZodError
+            ? new ApiError(400, 'INVALID_INPUT')
+            : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     return c.json(
       {
         error: {
@@ -125,6 +141,7 @@ export function createApp(
     if (origin && origin !== url.origin) throw new ApiError(401, 'AUTH_REQUIRED');
 
     let owner: string;
+    let accessToken: string | null = null;
     if (current === 'local-mock') {
       if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
         throw new ApiError(401, 'AUTH_REQUIRED');
@@ -134,6 +151,7 @@ export function createApp(
       try {
         const token = getBearerToken(c.req.header('Authorization'));
         owner = await verifySupabaseAccessToken(c.env, token, options.authFetch);
+        accessToken = token;
       } catch (error) {
         if (error instanceof InvalidAccessTokenError) throw new ApiError(401, 'AUTH_REQUIRED');
         if (error instanceof SupabaseAuthUnavailableError)
@@ -142,18 +160,29 @@ export function createApp(
       }
     }
     c.set('owner', owner);
+    c.set('accessToken', accessToken);
     await next();
   });
-  app.use('/api/v1/*', async (c, next) => {
-    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
-    await next();
-  });
+  const liveContext = (c: {
+    env: Environment;
+    get: (key: 'owner' | 'accessToken') => string | null;
+  }) => {
+    const accessToken = c.get('accessToken');
+    if (!accessToken) throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    return {
+      environment: c.env,
+      owner: c.get('owner') as string,
+      accessToken,
+      fetcher: options.supabaseFetch,
+    };
+  };
   const getEntry = (id: string, owner: string) => {
     const found = getRepository().entries.get(id);
     if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
     return found;
   };
   app.get('/api/v1/me/quota', (c) => {
+    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     const day = jstToday();
     const resetAt = new Date(Date.parse(`${day}T00:00:00+09:00`) + 86400000).toISOString();
     return c.json({
@@ -168,6 +197,8 @@ export function createApp(
   });
   app.post('/api/v1/entries', async (c) => {
     const input = createEntrySchema.parse(await jsonBody(c.req.raw));
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await createLiveEntry(liveContext(c), input), 201);
     const owner = c.get('owner');
     const existing = [...getRepository().entries.values()].find(
       (x) => x.owner === owner && x.requestId === input.createRequestId,
@@ -196,13 +227,19 @@ export function createApp(
     getRepository().entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
     return c.json(entry, 201);
   });
-  app.get('/api/v1/entries', (c) => {
+  app.get('/api/v1/entries', async (c) => {
     const limit = z.coerce
       .number()
       .int()
       .min(1)
       .max(50)
       .parse(c.req.query('limit') ?? 20);
+    if (mode(c.env) !== 'local-mock') {
+      const cursor = c.req.query('cursor');
+      return c.json(
+        await listLiveEntries(liveContext(c), { limit, ...(cursor ? { cursor } : {}) }),
+      );
+    }
     const sorted = [...getRepository().entries.values()]
       .filter((x) => x.owner === c.get('owner'))
       .map((x) => x.entry)
@@ -216,7 +253,12 @@ export function createApp(
       nextCursor: sorted.length > index + 1 + limit ? (items.at(-1)?.id ?? null) : null,
     });
   });
-  app.get('/api/v1/entries/:id', (c) => {
+  app.get('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock') {
+      const detail = await getLiveEntryDetail(liveContext(c), c.req.param('id'));
+      if (!detail) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(detail);
+    }
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     return c.json({
       ...entry,
@@ -227,6 +269,8 @@ export function createApp(
   });
   app.patch('/api/v1/entries/:id', async (c) => {
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await updateLiveEntry(liveContext(c), c.req.param('id'), input));
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     if (input.expectedRevision !== entry.revision) throw new ApiError(409, 'REVISION_CONFLICT');
     Object.assign(entry, {
@@ -237,7 +281,9 @@ export function createApp(
     });
     return c.json(entry);
   });
-  app.delete('/api/v1/entries/:id', (c) => {
+  app.delete('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     getRepository().entries.delete(entry.id);
     for (const [key, job] of getRepository().generations)
@@ -245,6 +291,7 @@ export function createApp(
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
+    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
@@ -282,11 +329,13 @@ export function createApp(
     return c.json(receipt(id), 202);
   });
   app.get('/api/v1/generations/:id', (c) => {
+    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     const job = getRepository().generations.get(c.req.param('id'));
     if (!job || job.owner !== c.get('owner')) throw new ApiError(404, 'NOT_FOUND');
     return c.json(job.generation);
   });
   app.get('/api/v1/assets/:id/url', (c) => {
+    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     const job = [...getRepository().generations.values()].find(
       (x) =>
         x.owner === c.get('owner') &&
