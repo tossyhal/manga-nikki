@@ -15,5 +15,39 @@
     "AI_MODE": "mock",
     "GENERATION_ENABLED": "false",
   },
+  "env": {
+    "local-connected": {
+      "name": "manga-nikki-local-connected",
+      "vars": {
+        "APP_ENV": "staging",
+        "DATA_MODE": "live",
+        "AI_MODE": "mock",
+        "GENERATION_ENABLED": "false",
+      },
+      "assets": {
+        "directory": "dist/client",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"],
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "GENERATION_QUEUE",
+            "queue": "manga-nikki-generations-local-connected",
+          },
+        ],
+        "consumers": [
+          {
+            "queue": "manga-nikki-generations-local-connected",
+            "max_batch_size": 1,
+            "max_batch_timeout": 0,
+            "max_retries": 3,
+            "max_concurrency": 2,
+          },
+        ],
+      },
+      "triggers": { "crons": ["* * * * *"] },
+    },
+  },
   "observability": { "enabled": false },
 }
