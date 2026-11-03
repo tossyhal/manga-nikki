@@ -196,7 +196,7 @@ export async function createEntry(input: CreateEntryInput): Promise<Entry> {
     const previous = pending.find((item) => item.fingerprint === fingerprint);
     if (previous) requestId = previous.requestId;
     else {
-      if (pending.some((item) => item.requestId === requestId)) requestId = crypto.randomUUID();
+      if (pending.length > 0) requestId = crypto.randomUUID();
       pending.push({ requestId, fingerprint });
     }
     writePendingCreateRequests(pending);
