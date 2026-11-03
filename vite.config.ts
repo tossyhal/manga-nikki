@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { cloudflare } from '@cloudflare/vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { publicConfigGuard } from './src/build/public-config-guard';
 
 const isReleaseBuild = ['staging', 'production'].includes(
   process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
@@ -11,6 +12,7 @@ const isReleaseBuild = ['staging', 'production'].includes(
 export default defineConfig({
   envDir: isReleaseBuild ? false : undefined,
   plugins: [
+    publicConfigGuard(),
     react(),
     tailwindcss(),
     VitePWA({

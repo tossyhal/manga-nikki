@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -47,6 +47,49 @@ async function collectFiles(directory) {
   return files;
 }
 
+function jwtWithRole(role, marker) {
+  const payload = Buffer.from(JSON.stringify({ role, marker })).toString('base64url');
+  return `header.${payload}.signature`;
+}
+
+async function assertPublicConfigRejected(args, env, variable, sentinels) {
+  let failure;
+  try {
+    await execFileAsync(process.execPath, args, {
+      cwd: fixtureRoot,
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 15_000,
+    });
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.ok(failure, '不正な公開設定を受け付けてしまいました。');
+  assert.notEqual(failure.code, 'ETIMEDOUT', '不正な公開設定の拒否でタイムアウトしました。');
+  const output = [failure.stdout, failure.stderr]
+    .filter((part) => typeof part === 'string')
+    .join('\n');
+  assert.ok(output.includes(variable), '拒否メッセージに変数名がありません。');
+  assert.ok(
+    output.includes('Supabaseサーバー専用キー形式'),
+    '拒否理由が固定メッセージにありません。',
+  );
+  for (const sentinel of sentinels) {
+    assert.ok(!output.includes(sentinel), '拒否メッセージに公開設定値が含まれています。');
+  }
+}
+
+async function exists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 try {
   await cp(projectRoot, fixtureRoot, { recursive: true, filter: shouldCopy });
   await symlink(
@@ -68,14 +111,12 @@ try {
     path.join(fixtureRoot, '.env.development.local'),
     'VITE_SUPABASE_URL=development-local-sentinel.invalid\n',
   );
-  await writeFile(
-    path.join(fixtureRoot, '.env.staging.local'),
-    [
-      'VITE_SUPABASE_URL=https://staging-public-sentinel.invalid',
-      'VITE_SUPABASE_PUBLISHABLE_KEY=staging-publishable-sentinel',
-      'VITE_TURNSTILE_SITE_KEY=staging-sitekey-sentinel',
-    ].join('\n'),
-  );
+  const safeStagingEnvironment = [
+    'VITE_SUPABASE_URL=https://staging-public-sentinel.invalid',
+    'VITE_SUPABASE_PUBLISHABLE_KEY=staging-publishable-sentinel',
+    'VITE_TURNSTILE_SITE_KEY=staging-sitekey-sentinel',
+  ].join('\n');
+  await writeFile(path.join(fixtureRoot, '.env.staging.local'), safeStagingEnvironment);
   await writeFile(
     path.join(fixtureRoot, '.env.production.local'),
     'VITE_SUPABASE_URL=wrong-production-target-sentinel.invalid\n',
@@ -104,6 +145,41 @@ try {
     TURNSTILE_SECRET_KEY: 'process-env-turnstile-secret-sentinel',
     GEMINI_API_KEY: 'process-env-ai-secret-sentinel',
   };
+
+  const devSecretJwt = jwtWithRole('service_role', 'dev-jwt-payload-sentinel');
+  await assertPublicConfigRejected(
+    ['node_modules/vite/bin/vite.js'],
+    { ...childEnvironment, VITE_SUPABASE_PUBLISHABLE_KEY: devSecretJwt },
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    [devSecretJwt, 'dev-jwt-payload-sentinel'],
+  );
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    '拒否後にclient成果物が作られています。',
+  );
+
+  const releaseSecret = 'sb_secret_release-build-sentinel';
+  await writeFile(
+    path.join(fixtureRoot, '.env.staging.local'),
+    [
+      'VITE_SUPABASE_URL=https://staging-public-sentinel.invalid',
+      `VITE_SUPABASE_PUBLISHABLE_KEY=${releaseSecret}`,
+      'VITE_TURNSTILE_SITE_KEY=staging-sitekey-sentinel',
+    ].join('\n'),
+  );
+  await assertPublicConfigRejected(
+    ['scripts/build-environment.mjs', 'staging'],
+    childEnvironment,
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    [releaseSecret],
+  );
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    '拒否後にclient成果物が作られています。',
+  );
+  await writeFile(path.join(fixtureRoot, '.env.staging.local'), safeStagingEnvironment);
 
   try {
     await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'staging'], {
