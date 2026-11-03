@@ -143,6 +143,23 @@ describe('Supabase access token boundary', () => {
     expect(body).not.toContain('unavailable');
   });
 
+  it('treats a JSON JWKS rate-limit response as a dependency failure', async () => {
+    const environment = liveEnvironment();
+    const token = await signToken(baseClaims(environment));
+    const rateLimitedJwks: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url !== `${environment.SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
+        return new Response('not found', { status: 404 });
+      return Response.json({ message: 'rate limit exceeded' }, { status: 429 });
+    };
+    const response = await liveRequest(environment, token, rateLimitedJwks);
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).not.toContain(token);
+    expect(body).not.toContain('rate limit exceeded');
+  });
+
   it('keeps the incoming JWT on the user read client and out of the secret RPC client', async () => {
     const environment = liveEnvironment();
     const authorizationHeaders: string[] = [];
