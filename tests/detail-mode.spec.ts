@@ -10,10 +10,20 @@ import {
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-test('mock設定では固定漫画を生成でき、開発用の保存状態を表示する', async ({ page }) => {
+test('mock設定では固定漫画を生成でき、端末の一時保存状態を表示する', async ({ page }) => {
   let generation: Generation | null = null;
   let generationRequests = 0;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: '2026-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    }),
+  );
   await page.route(`**/api/v1/entries/${entryId}`, (route) => {
     const detail: EntryDetail = {
       ...draftEntryDetailFixture,
@@ -27,9 +37,18 @@ test('mock設定では固定漫画を生成でき、開発用の保存状態を�
     generation = generationFixtures(entryId, generationId).succeeded;
     return route.fulfill({
       status: 202,
-      json: { generationId, status: 'succeeded' },
+      json: {
+        generationId,
+        status: 'succeeded',
+        statusUrl: `/api/v1/generations/${generationId}`,
+      },
     });
   });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    generation
+      ? route.fulfill({ json: generation })
+      : route.fulfill({ status: 404, json: { error: 'not found' } }),
+  );
   await page.route('**/api/v1/assets/*/url', (route) =>
     route.fulfill({
       json: {
@@ -40,9 +59,9 @@ test('mock設定では固定漫画を生成でき、開発用の保存状態を�
   );
 
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByText('開発サーバーへ仮保存しました。', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'モック漫画を見る' })).toBeEnabled();
-  await page.getByRole('button', { name: 'モック漫画を見る' }).click();
+  await expect(page.getByText('一時保存しました。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '固定サンプルを見る' })).toBeEnabled();
+  await page.getByRole('button', { name: '固定サンプルを見る' }).click();
   await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
 });
@@ -74,6 +93,16 @@ test('live設定では匿名保存の案内を出し、未接続の生成操作�
     );
   });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: '2026-01-02T00:00:00Z',
+        generationAvailable: false,
+      },
+    }),
+  );
   await page.route(`**/api/v1/entries/${entryId}`, (route) => {
     apiAuthorization.push(route.request().headers().authorization ?? '');
     return route.fulfill({ json: draftEntryDetailFixture });
@@ -93,9 +122,9 @@ test('live設定では匿名保存の案内を出し、未接続の生成操作�
 
   await page.goto(`/entries/${entryId}`);
   await expect(
-    page.getByText('この匿名アカウントに保存しました。保存期間は最大30日です。'),
+    page.getByText('この匿名アカウントに保存しました。保存後30日を過ぎると閲覧できなくなります。'),
   ).toBeVisible();
-  await expect(page.getByRole('button', { name: '漫画生成は利用できません' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '漫画の受付を停止しています' })).toBeDisabled();
   expect(apiAuthorization.length).toBeGreaterThan(0);
   expect(apiAuthorization.every((value) => value === 'Bearer fixture-live-access-token')).toBe(
     true,

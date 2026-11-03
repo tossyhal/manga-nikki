@@ -5,6 +5,7 @@ type TurnstileApi = {
     container: HTMLElement,
     options: {
       sitekey: string;
+      action?: string;
       execution: 'execute';
       appearance: 'execute';
       callback: (token: string) => void;
@@ -63,11 +64,15 @@ function loadTurnstile(): Promise<TurnstileApi> {
 export function RegistrationCaptcha({
   siteKey,
   requestKey,
+  action,
+  label,
   onToken,
   onError,
 }: {
   siteKey: string;
   requestKey: number;
+  action?: 'generate';
+  label?: string;
   onToken: (token: string) => void;
   onError: () => void;
 }) {
@@ -89,6 +94,7 @@ export function RegistrationCaptcha({
         turnstile = api;
         widgetId = api.render(containerRef.current, {
           sitekey: siteKey,
+          ...(action ? { action } : {}),
           execution: 'execute',
           appearance: 'execute',
           callback: (token) => {
@@ -108,7 +114,7 @@ export function RegistrationCaptcha({
       active = false;
       if (turnstile && widgetId) turnstile.remove(widgetId);
     };
-  }, [requestKey, siteKey]);
+  }, [action, requestKey, siteKey]);
 
-  return <div ref={containerRef} aria-label="匿名登録用CAPTCHA" />;
+  return <div ref={containerRef} aria-label={label ?? '匿名登録用CAPTCHA'} />;
 }

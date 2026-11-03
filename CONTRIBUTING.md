@@ -79,6 +79,12 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
+`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`dev.vars.local-connected.example`を編集し、`.dev.vars.local-connected`へコピーして、開発用Supabaseにレビュー済みmigrationを適用してから次のように起動します。Turnstile検証用secretと許可hostnameがない状態では生成受付が停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
+
+```sh
+CLOUDFLARE_ENV=local-connected pnpm dev
+```
+
 ## 3. 初期基盤の範囲
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
@@ -206,6 +212,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- liveモードの日記CRUDはSupabase DBへ接続します。Auth `getClaims` / `getUser`、日記一覧・詳細・作成・編集・論理削除を実装済みです。日記詳細から最新jobの状態は読み取れますが、quota・生成受付・`/generations/:id`・画像Storage/署名URL・実AI・Queue・30日期限削除は未実装で、該当する個人APIは認証後も503を返します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
+- liveモードの日記CRUD・quota・生成受付・`/generations/:id`はSupabase接続です。local-connectedは生成専用Turnstile、mock profile限定予約、固定fixture Queue処理、未配送再送・期限照合を実装しています。実Supabase / Queue / Turnstile結合、共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage/署名URL、物理削除は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
 - ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

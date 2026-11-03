@@ -10,11 +10,11 @@ test('入力からモック漫画と履歴を再読込して削除できる', as
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '保存してモック漫画を見る' }).click();
+  await page.getByRole('button', { name: '保存して固定サンプルを見る' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await expect(
-    page.getByText('固定サンプルです。入力した日記から生成した画像ではありません。'),
+    page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。'),
   ).toBeVisible();
   await page.reload();
   await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
@@ -22,8 +22,11 @@ test('入力からモック漫画と履歴を再読込して削除できる', as
   await expect(page.getByRole('heading', { name: '保存した記録', exact: true })).toBeVisible();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toBeVisible();
   await page.getByText('図書館で本を読んだ。', { exact: true }).click();
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: '記録を削除' }).click();
+  const deleteDialogPromise = page.waitForEvent('dialog');
+  const deleteAction = page.getByRole('button', { name: '記録を削除' }).click();
+  const deleteDialog = await deleteDialogPromise;
+  await deleteDialog.accept();
+  await deleteAction;
   await expect(page.getByRole('heading', { name: '最初の一日を残しましょう。' })).toBeVisible();
   expect(externalAuthRequests).toEqual([]);
 });
@@ -116,7 +119,7 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   });
 
   await page.goto('/new');
-  await expect(page.locator('.notice')).toHaveText('匿名利用 / 保存前に利用条件をご確認ください');
+  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
   await expect(page.getByText('現在、漫画生成は利用できません。', { exact: true })).toBeVisible();
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();

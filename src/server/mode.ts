@@ -7,6 +7,9 @@ export const environmentSchema = z.object({
   SUPABASE_URL: z.string().optional(),
   SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SECRET_KEY: z.string().optional(),
+  TURNSTILE_SECRET_KEY: z.string().optional(),
+  TURNSTILE_ALLOWED_HOSTNAMES: z.string().optional(),
+  GENERATION_QUEUE: z.unknown().optional(),
 });
 export type Environment = z.infer<typeof environmentSchema>;
 export type Mode = 'local-mock' | 'local-connected' | 'preview-sample' | 'live-demo';

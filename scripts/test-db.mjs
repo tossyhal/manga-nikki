@@ -162,7 +162,13 @@ async function waitForLockWaiters(applicationPrefix, expectedCount) {
   throw new Error(`実際のDBロック待ちを確認できませんでした: ${applicationPrefix}`);
 }
 
-async function runBehindLock({ holderName, lockSql, waiterPrefix, queries }) {
+async function runBehindLock({
+  holderName,
+  lockSql,
+  waiterPrefix,
+  queries,
+  expectedWaiters = queries.length,
+}) {
   const marker = `${holderName}:lock-acquired`;
   const holder = startSqlSession(holderName);
   let requestsPromise = Promise.resolve([]);
@@ -174,7 +180,7 @@ async function runBehindLock({ holderName, lockSql, waiterPrefix, queries }) {
     requestsPromise = Promise.all(
       queries.map((query, index) => sql(query, `${waiterPrefix}${index}`)),
     );
-    await waitForLockWaiters(waiterPrefix, queries.length);
+    await waitForLockWaiters(waiterPrefix, expectedWaiters);
   } catch (error) {
     synchronizationError = error;
   } finally {
@@ -360,8 +366,10 @@ try {
   }
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
+  console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -485,7 +493,7 @@ try {
     queries: Array.from(
       { length: 6 },
       () =>
-        `set role service_role; select public.reserve_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}',true);`,
+        `set role service_role; select public.reserve_mock_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}');`,
     ),
   });
   const duplicateReceipts = duplicateReservations.map((result) => JSON.parse(succeeded(result)));
@@ -498,7 +506,7 @@ try {
     ),
     '1:1:1:7',
   );
-  console.log('成功: 同一キー6並列予約はjob・reservation・予算計上が各1件');
+  console.log('成功: 同一キー6並列mock予約はjob・reservation・予算計上が各1件');
 
   const differentEntriesSameActor = await runBehindLock({
     holderName: 'mn-db-reserve-user-active-holder',
@@ -881,6 +889,130 @@ try {
   assert.ok(expiryBeginClaim.claim_token);
   assert.ok(expirySettleClaim.claim_token);
   console.log('成功: entry/claim期限を待つRPCはロック取得後の時刻で判定');
+
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/retention.sql'), 'utf8')));
+  console.log('成功: Storage-first purge・lease・台帳保持・RLS・tombstone・active job保護');
+
+  const retentionRaceActor = '90909090-9090-4090-8090-909090909090';
+  const retentionRaceRequest = '91919191-9191-4191-8191-919191919191';
+  const retentionRaceEntry = succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${retentionRaceActor}');
+      set role service_role;
+      select (public.create_entry('${retentionRaceActor}','${retentionRaceRequest}',current_date,'purge競合の架空日記','v1')).id;
+    `),
+  );
+  succeeded(
+    await sql(
+      `update public.entries set expires_at = pg_catalog.clock_timestamp() - interval '1 second' where id = '${retentionRaceEntry}';`,
+    ),
+  );
+  const retentionRaceClaims = JSON.parse(
+    succeeded(await sql('set role service_role; select public.claim_retention_cleanup(10);')),
+  );
+  const retentionRaceTask = retentionRaceClaims.find(
+    (task) => task.entry_id === retentionRaceEntry,
+  );
+  assert.ok(retentionRaceTask?.claim_token);
+  const retentionCreateRace = await runBehindLock({
+    holderName: 'mn-db-retention-create-purge-holder',
+    lockSql: `select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('${retentionRaceActor}'::text, 0))`,
+    waiterPrefix: 'mn-db-retention-create-purge-',
+    queries: [
+      `set role service_role; select public.finalize_retention_cleanup('${retentionRaceEntry}','${retentionRaceTask.claim_token}',true);`,
+      `set role service_role; select (public.create_entry('${retentionRaceActor}','${retentionRaceRequest}',current_date,'再送された架空日記','v1')).id;`,
+    ],
+  });
+  assert.equal(retentionCreateRace.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    retentionCreateRace.filter((result) => result.code !== 0 && result.stderr.includes('NOT_FOUND'))
+      .length,
+    1,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.entries where id = '${retentionRaceEntry}') || ':' ||
+        (select count(*) from private.entry_tombstones where owner_id = '${retentionRaceActor}'
+          and create_request_id = '${retentionRaceRequest}');`),
+    ),
+    '0:1',
+  );
+  console.log('成功: owner advisory lockでpurgeとcreate replayを直列化し日記を復活させない');
+
+  const generationRaceActor = '92929292-9292-4929-8292-929292929292';
+  const generationRaceKey = '93939393-9393-4939-8393-939393939393';
+  const generationRaceEntryIds = succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${generationRaceActor}');
+      update private.generation_policy set enabled = true, user_daily_limit = 20,
+        global_daily_limit = 1000, global_total_limit = 1000, budget_micro_usd = 1000000,
+        model_profile_json = '{"profile_id":"fictional-retention-race-v1","is_mock":true,"max_cost_micro_usd":7}'::jsonb;
+      set role service_role;
+      select (public.create_entry('${generationRaceActor}',gen_random_uuid(),
+        (statement_timestamp() at time zone 'Asia/Tokyo')::date,'purgeと生成予約競合の架空日記A','v1')).id;
+      select (public.create_entry('${generationRaceActor}',gen_random_uuid(),
+        (statement_timestamp() at time zone 'Asia/Tokyo')::date,'purgeと生成予約競合の架空日記B','v1')).id;
+    `),
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(generationRaceEntryIds.length, 2);
+  const [generationRaceEntry, generationRaceReplayEntry] = generationRaceEntryIds;
+  const generationRaceReceipt = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.reserve_mock_generation('${generationRaceActor}','${generationRaceEntry}',1,'${generationRaceKey}');`,
+      ),
+    ),
+  );
+  succeeded(
+    await sql(
+      `set role service_role; select public.fail_or_hold_generation('${generationRaceReceipt.generation_id}',null,'cancelled');`,
+    ),
+  );
+  succeeded(
+    await sql(
+      `update public.entries set expires_at = pg_catalog.clock_timestamp() - interval '1 second' where id = '${generationRaceEntry}';`,
+    ),
+  );
+  const generationRaceClaims = JSON.parse(
+    succeeded(await sql('set role service_role; select public.claim_retention_cleanup(10);')),
+  );
+  const generationRaceTask = generationRaceClaims.find(
+    (task) => task.entry_id === generationRaceEntry,
+  );
+  assert.ok(generationRaceTask?.claim_token);
+  const generationRaceCountersBefore = succeeded(
+    await sql(`select count || ':' || committed_micro_usd from private.quota_counters
+      where scope = 'global_total';`),
+  );
+  const purgeReserveRace = await runBehindLock({
+    holderName: 'mn-db-retention-generation-race-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-retention-generation-race-',
+    expectedWaiters: 1,
+    queries: [
+      `set role service_role; select public.finalize_retention_cleanup('${generationRaceEntry}','${generationRaceTask.claim_token}',true);`,
+      `set role service_role; select public.reserve_generation('${generationRaceActor}','${generationRaceReplayEntry}',1,'${generationRaceKey}',true);`,
+    ],
+  });
+  assert.equal(purgeReserveRace[0].code, 0, purgeReserveRace[0].stderr);
+  assert.equal(succeeded(purgeReserveRace[0]), 't');
+  assert.notEqual(purgeReserveRace[1].code, 0, purgeReserveRace[1].stdout);
+  assert.match(purgeReserveRace[1].stderr, /IDEMPOTENCY_CONFLICT/);
+  const archivedReserve = await sql(
+    `set role service_role; select public.reserve_generation('${generationRaceActor}','${generationRaceReplayEntry}',1,'${generationRaceKey}',true);`,
+  );
+  assert.notEqual(archivedReserve.code, 0, archivedReserve.stdout);
+  assert.match(archivedReserve.stderr, /IDEMPOTENCY_CONFLICT/);
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.generations where owner_id = '${generationRaceActor}') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total');`),
+    ),
+    `0:${generationRaceCountersBefore}`,
+  );
+  console.log('成功: policy lock下のpurge/生成予約競合と退避済みkey再利用を拒否');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
