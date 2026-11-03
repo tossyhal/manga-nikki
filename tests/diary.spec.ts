@@ -92,3 +92,41 @@ test('通信失敗時に入力と再送IDを維持する', async ({ page }) => {
   expect(ids).toHaveLength(2);
   expect(ids[0]).toBe(ids[1]);
 });
+
+test('別の日記の通信失敗後に元の日記を再送しても重複作成しない', async ({ page }) => {
+  const firstBody = 'Aの日記';
+  const secondBody = 'Bの日記';
+  const requestIds: string[] = [];
+  let savedId = '';
+  await page.route('**/api/v1/entries', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const payload = route.request().postDataJSON();
+    requestIds.push(payload.createRequestId);
+    if (payload.body === secondBody) return route.abort('failed');
+    if (!savedId) {
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      savedId = (await response.json()).id;
+      return route.abort('failed');
+    }
+    return route.continue();
+  });
+  await page.goto('/new');
+  const diary = page.getByLabel('日記', { exact: true });
+  await diary.fill(firstBody);
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page.getByRole('alert')).toContainText('入力内容を保持');
+  await diary.fill(secondBody);
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page.getByRole('alert')).toContainText('入力内容を保持');
+  await diary.fill(firstBody);
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page).toHaveURL(`/entries/${savedId}`);
+  expect(requestIds).toHaveLength(3);
+  expect(requestIds[0]).toBe(requestIds[2]);
+  expect(requestIds[0]).not.toBe(requestIds[1]);
+  await page.getByRole('link', { name: '← 記録の一覧' }).click();
+  await expect(page.locator('.entries > li')).toHaveCount(1);
+  await expect(page.locator('.entries')).toContainText(firstBody);
+});

@@ -72,6 +72,47 @@ export type CreateEntryInput = {
 };
 
 const pendingCreateKey = 'manga-nikki.pending-entry-create';
+type PendingCreateRequest = { requestId: string; fingerprint: string };
+
+function readPendingCreateRequests(): PendingCreateRequest[] {
+  try {
+    const stored = sessionStorage.getItem(pendingCreateKey);
+    if (!stored) return [];
+    const value: unknown = JSON.parse(stored);
+    if (typeof value !== 'object' || value === null) return [];
+    if ('pending' in value && Array.isArray(value.pending)) {
+      return value.pending.filter(
+        (item): item is PendingCreateRequest =>
+          typeof item === 'object' &&
+          item !== null &&
+          'requestId' in item &&
+          typeof item.requestId === 'string' &&
+          'fingerprint' in item &&
+          typeof item.fingerprint === 'string',
+      );
+    }
+    if (
+      'requestId' in value &&
+      typeof value.requestId === 'string' &&
+      'fingerprint' in value &&
+      typeof value.fingerprint === 'string'
+    ) {
+      return [{ requestId: value.requestId, fingerprint: value.fingerprint }];
+    }
+  } catch {
+    // Ignore malformed or inaccessible session storage.
+  }
+  return [];
+}
+
+function writePendingCreateRequests(pending: PendingCreateRequest[]) {
+  try {
+    if (pending.length === 0) sessionStorage.removeItem(pendingCreateKey);
+    else sessionStorage.setItem(pendingCreateKey, JSON.stringify({ version: 1, pending }));
+  } catch {
+    // The request can still proceed without reload-safe retry if storage is unavailable.
+  }
+}
 
 async function fingerprintPayload(payload: {
   diaryDate: string;
@@ -102,70 +143,27 @@ export async function createEntry(input: CreateEntryInput): Promise<Entry> {
   }
 
   if (fingerprint !== null) {
-    try {
-      const stored = sessionStorage.getItem(pendingCreateKey);
-      if (stored) {
-        const pending: unknown = JSON.parse(stored);
-        if (
-          typeof pending === 'object' &&
-          pending !== null &&
-          'requestId' in pending &&
-          'fingerprint' in pending &&
-          typeof pending.requestId === 'string' &&
-          pending.fingerprint === fingerprint
-        ) {
-          requestId = pending.requestId;
-        } else if (
-          typeof pending === 'object' &&
-          pending !== null &&
-          'requestId' in pending &&
-          'fingerprint' in pending &&
-          typeof pending.requestId === 'string' &&
-          typeof pending.fingerprint === 'string'
-        ) {
-          // The pending request belongs to different diary content.
-          requestId = crypto.randomUUID();
-        }
-      }
-      sessionStorage.setItem(pendingCreateKey, JSON.stringify({ requestId, fingerprint }));
-    } catch {
-      // Storage may be unavailable (for example, in a restricted browser context).
-      // The request can still proceed, but reload-safe retry is then unavailable.
+    const pending = readPendingCreateRequests();
+    const previous = pending.find((item) => item.fingerprint === fingerprint);
+    if (previous) requestId = previous.requestId;
+    else {
+      if (pending.some((item) => item.requestId === requestId)) requestId = crypto.randomUUID();
+      pending.push({ requestId, fingerprint });
     }
+    writePendingCreateRequests(pending);
   }
 
-  try {
-    const entry = await api<Entry>('/entries', {
-      method: 'POST',
-      body: JSON.stringify({ ...payload, createRequestId: requestId }),
-    });
-    try {
-      const stored = sessionStorage.getItem(pendingCreateKey);
-      if (stored && (JSON.parse(stored) as { requestId?: string }).requestId === requestId) {
-        sessionStorage.removeItem(pendingCreateKey);
-      }
-    } catch {
-      // A stale retry key is harmless; the server enforces request idempotency.
-    }
-    return entry;
-  } catch (error) {
-    if (
-      error instanceof ApiClientError &&
-      error.status !== null &&
-      error.status >= 400 &&
-      error.status < 500
-    ) {
-      try {
-        const stored = sessionStorage.getItem(pendingCreateKey);
-        if (stored && (JSON.parse(stored) as { requestId?: string }).requestId === requestId) {
-          sessionStorage.removeItem(pendingCreateKey);
-        }
-      } catch {
-        // Ignore storage cleanup failures.
-      }
-    }
-    throw error;
+  const entry = await api<Entry>('/entries', {
+    method: 'POST',
+    body: JSON.stringify({ ...payload, createRequestId: requestId }),
+  });
+  if (fingerprint !== null) {
+    const pending = readPendingCreateRequests().filter(
+      (item) => item.fingerprint !== fingerprint || item.requestId !== requestId,
+    );
+    writePendingCreateRequests(pending);
   }
+  return entry;
 }
 
 export const getAssetUrl = (id: string) =>
