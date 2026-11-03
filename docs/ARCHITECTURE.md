@@ -81,7 +81,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、およびliveモードのサーバーJWT検証は実装済みです。local-connectedとlive-demoはJWT検証後のDB・個人API接続が未実装のため、個人APIは503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。日記詳細から最新jobの状態も読み取れます。quota・生成受付・`/generations/:id`・画像Storage/署名URL・Queueは未実装のため503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
@@ -91,7 +91,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 | `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、承認後`true` | 本物Auth・private保存・Queue。停止中も本人の履歴は閲覧可能 |
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
-- `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証した後、issuer・audience・UUID形式の`sub`を確認します。現時点では検証後にDB処理へ進まず、個人APIは503です。`local-connected`のstaging配信では本物Authを使い、モックと明示した架空データだけで検証します。
+- `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
 - 実AIは`live-demo`で環境変数とDBの`enabled`が両方有効、かつ予算・認証・Queue等の公開条件を満たす場合だけ呼びます。他モードでの`GENERATION_ENABLED=true`は拒否します。
 - モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`の見本です。
 

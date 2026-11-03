@@ -53,6 +53,8 @@ function DetailContent({ id }: { id: string }) {
   }, [id]);
   const generation = entry?.latestGeneration;
   const pending = generation?.status === 'queued' || generation?.status === 'running';
+  const comicFromPreviousRevision =
+    generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
   useEffect(() => {
     if (!pending) return;
     let active = true;
@@ -116,6 +118,7 @@ function DetailContent({ id }: { id: string }) {
           </p>
           <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
           <output className="saved">開発サーバーへ仮保存しました。</output>
+          {comicFromPreviousRevision && <output>編集前の日記から生成された漫画です。</output>}
           {generation?.status === 'succeeded' && (
             <SavedComic key={generation.id} comic={generation.comic} mock={generation.mock} />
           )}

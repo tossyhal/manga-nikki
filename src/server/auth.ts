@@ -79,5 +79,20 @@ export async function verifySupabaseAccessToken(
   )
     throw new InvalidAccessTokenError();
 
+  let currentUser: Awaited<ReturnType<typeof client.auth.getUser>>;
+  try {
+    currentUser = await client.auth.getUser(token);
+  } catch (error) {
+    if (isRecord(error) && error.name === 'AuthInvalidJwtError')
+      throw new InvalidAccessTokenError();
+    throw new SupabaseAuthUnavailableError();
+  }
+  if (currentUser.error) {
+    if (isRetryableAuthError(currentUser.error)) throw new SupabaseAuthUnavailableError();
+    throw new InvalidAccessTokenError();
+  }
+  if (!currentUser.data.user || currentUser.data.user.id !== claims.sub)
+    throw new InvalidAccessTokenError();
+
   return claims.sub as string;
 }

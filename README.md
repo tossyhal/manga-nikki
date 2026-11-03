@@ -6,9 +6,9 @@
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
 > 現在の状態（2026-11-03時点）
-> localhost限定の開発用モック基盤とPWAの基本機能があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードのサーバーJWT検証境界、日記DBのmigration・RLS・日記操作用RPCは実装済みです。隔離PostgreSQLテストと偽JWKSを使ったJWT検証テストを追加していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。実AI・Queueは未実装です。Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
+> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードはJWT検証とSupabase DBの日記一覧・詳細・作成・編集・削除に対応しています。生成受付・quota・`/generations/:id`・画像Storage/署名URL・実AI・Queueは未接続です。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
 
-liveモードの個人APIはJWT認証後も503を返します。Supabaseへの接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 

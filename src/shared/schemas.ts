@@ -61,7 +61,7 @@ export type Entry = {
   updatedAt: string;
 };
 export type GenerationError = { code: string; message: string; retryable: boolean };
-type GenerationBase = { id: string; entryId: string; mock: boolean };
+type GenerationBase = { id: string; entryId: string; entryRevision: number; mock: boolean };
 export type Generation = GenerationBase &
   (
     | { status: 'queued'; stage: null; comic?: never }
