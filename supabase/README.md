@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-日記migrationに加えて、生成元`is_mock`を記録する列と、private予算台帳・`reserve_generation` RPCを追加しています。枠予約はDB内だけで完結し、外部AI・Queue・画像Storageは呼び出しません。DB CRUD/API接続や生成状態遷移、物理削除は別作業です。初期policyは停止中のため、このSQLだけでlive生成が有効になることはありません。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳・`reserve_generation` RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。予約はDB内で完結し外部AI・Queue・Storageを呼びません。generation受付API・quota API接続・生成状態遷移は未実装で、初期policyは停止中です。
 
 ## 検証
 
@@ -22,7 +22,7 @@ pnpm test:db
 
 ## 保存API担当との接続契約
 
-書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERTできます。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
+書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERTできます。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
 
 | RPC | 引数 | 戻り値 |
 |---|---|---|
@@ -33,7 +33,9 @@ pnpm test:db
 
 DB行はsnake_caseです。API担当は`id`・`diary_date`・`body`・`revision`・`latest_generation_id`・`created_at`・`updated_at`を共有型`Entry`のcamelCaseへ変換し、内部カラムをHTTPレスポンスに含めないでください。
 
-読み取りは利用者JWTのクライアントを使います。`select('*')`ではなく必要な列を指定してください。`entries.create_request_hash`と、生成ジョブの`input_snapshot`・`model_profile_snapshot`・`claim_token`等の内部列にはクライアントの読み取り権限を付けていません。日記とジョブは所有者一致・未削除・期限内の場合だけ取得できます。
+読み取りは利用者JWTのクライアントを使います。`select('*')`ではなく必要な列を指定してください。`entries.create_request_hash`と、生成ジョブの`input_snapshot`・`model_profile_snapshot`・`claim_token`等の内部列にはクライアントの読み取り権限を付けていません。`generations.is_mock`だけを出力由来表示のためauthenticatedへ追加grantし、job writerがtrue/falseを明示します。既存行はNULLのままにし、由来を確認できない場合はAPIが503を返します。日記とジョブは所有者一致・未削除・期限内の場合だけ取得できます。
+
+認証middlewareは`auth.getClaims(jwt)`で署名・期限とclaimを検証した後、`auth.getUser(jwt)`でAuthサーバーにユーザーを照会します。Supabaseの説明では`getUser`をサーバー側でセッション終了を検出するために使いますが、sign-out済みaccess tokenも`exp`までは有効とされており、これは即時失効の保証ではありません。`auth.sessions`の`session_id`照会は今回追加していません。
 
 RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードです。API側で既存のHTTPエラー形式へ変換し、DBの生エラーをそのまま返さないでください。
 
@@ -64,7 +66,7 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - profileはpolicy内の選択済み1件を使い、APIリクエストからIDや単価を受けません。`{}`は未設定として停止します。設定時は`profile_id`（非空文字列）、`is_mock`（boolean）、`max_cost_micro_usd`（非負整数、bigint範囲）を必須にし、`is_mock=false`で0は拒否します。provider/modelなどの任意設定はsnapshotにそのまま保持します。
 - ロックは`generation_policy`共有ロック→global total→global day→user day→entry/jobの順です。global total行を各予約が排他ロックし、全期間枠・予算の最終枠を直列化します。counter行の作成も`INSERT ... ON CONFLICT`で一意キーに集約し、READ COMMITTEDの単一RPCトランザクション内で行います。
 - `reserve_generation`のDB結果はJSON camelCaseのGenerationReceiptです。API境界ではsnake_caseのDB列とHTTP共有型を明示的にmapし、内部snapshot、profile、費用、reservationをレスポンスへ含めません。
-- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactiveジョブは1つだけです。生成ジョブの外部AI実行や状態遷移のRPCは未実装です。
+- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactiveジョブは1つだけです。`is_mock`は生成元の公開metadataです。後続のjob writerは固定結果ならtrue、実生成ならfalseを必ず設定し、NULLを既定値でfalseに埋めないでください。生成ジョブの外部AI実行や状態遷移のRPCは未実装です。
 - `latest_generation_id`を保持したまま編集し、`revision`だけを増やします。画面側は`entry_revision`との差から編集前の漫画であることを表示できます。
 
 ## 適用と後続作業
