@@ -27,7 +27,16 @@ function mockSession() {
 }
 
 async function authorizationFor(mode: 'mock' | 'live' | 'sample'): Promise<string> {
-  if (mode === 'mock') return `Bearer ${mockSession()}`;
+  if (mode === 'mock') {
+    if (!import.meta.env.DEV) {
+      throw new ApiClientError(
+        '開発用モック認証は公開ビルドで利用できません。',
+        503,
+        'MOCK_AUTH_DISABLED',
+      );
+    }
+    return `Bearer ${mockSession()}`;
+  }
   if (mode === 'sample') {
     throw new ApiClientError('サンプル環境では個人データを操作できません。', 503, 'SAMPLE_ONLY');
   }
