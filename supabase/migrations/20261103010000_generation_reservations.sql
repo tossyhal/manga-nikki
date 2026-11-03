@@ -27,6 +27,29 @@ $$;
 revoke all on function private.is_valid_generation_profile(jsonb) from public, anon, authenticated;
 grant execute on function private.is_valid_generation_profile(jsonb) to service_role;
 
+create function private.generation_request_hash(p_entry_id uuid, p_expected_revision integer)
+returns text language sql immutable strict security invoker set search_path = ''
+as $$
+  select pg_catalog.encode(
+    pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.jsonb_build_object(
+      'apiVersion', 'v1',
+      'entryId', p_entry_id,
+      'expectedRevision', p_expected_revision
+    )::text, 'UTF8')),
+    'hex'
+  );
+$$;
+revoke all on function private.generation_request_hash(uuid, integer) from public, anon, authenticated;
+grant execute on function private.generation_request_hash(uuid, integer) to service_role;
+
+create function private.is_live_generation_entry(value public.entries)
+returns boolean language sql stable strict security invoker set search_path = ''
+as $$
+  select (value).deleted_at is null and (value).expires_at > pg_catalog.statement_timestamp();
+$$;
+revoke all on function private.is_live_generation_entry(public.entries) from public, anon, authenticated;
+grant execute on function private.is_live_generation_entry(public.entries) to service_role;
+
 alter table public.generations add constraint generations_id_owner_unique unique (id, owner_id);
 
 create table private.generation_policy (
@@ -110,7 +133,6 @@ declare
   v_cost bigint;
   v_is_mock boolean;
   v_day date := (statement_timestamp() at time zone 'Asia/Tokyo')::date;
-  v_canonical text;
   v_request_hash text;
 begin
   if p_actor_id is null then raise exception using message = 'AUTH_REQUIRED'; end if;
@@ -119,20 +141,17 @@ begin
     raise exception using message = 'INVALID_INPUT';
   end if;
 
-  v_canonical := pg_catalog.jsonb_build_object(
-    'apiVersion', 'v1',
-    'entryId', p_entry_id,
-    'expectedRevision', p_expected_revision
-  )::text;
-  v_request_hash := pg_catalog.encode(
-    pg_catalog.sha256(pg_catalog.convert_to(v_canonical, 'UTF8')),
-    'hex'
-  );
+  v_request_hash := private.generation_request_hash(p_entry_id, p_expected_revision);
 
   -- Retry lookup precedes both kill switches so a stopped service can return its original receipt.
   select * into v_generation from public.generations g
     where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
   if found then
+    select * into v_entry from public.entries e
+      where e.id = p_entry_id and e.owner_id = p_actor_id for update;
+    if not found or not private.is_live_generation_entry(v_entry) then
+      raise exception using message = 'NOT_FOUND';
+    end if;
     if v_generation.request_hash is distinct from v_request_hash then
       raise exception using message = 'IDEMPOTENCY_CONFLICT';
     end if;
@@ -180,6 +199,11 @@ begin
   select * into v_generation from public.generations g
     where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
   if found then
+    select * into v_entry from public.entries e
+      where e.id = p_entry_id and e.owner_id = p_actor_id for update;
+    if not found or not private.is_live_generation_entry(v_entry) then
+      raise exception using message = 'NOT_FOUND';
+    end if;
     if v_generation.request_hash is distinct from v_request_hash then
       raise exception using message = 'IDEMPOTENCY_CONFLICT';
     end if;
@@ -192,7 +216,7 @@ begin
 
   select * into v_entry from public.entries e
     where e.id = p_entry_id and e.owner_id = p_actor_id for update;
-  if not found or v_entry.deleted_at is not null or v_entry.expires_at <= statement_timestamp() then
+  if not found or not private.is_live_generation_entry(v_entry) then
     raise exception using message = 'NOT_FOUND';
   end if;
   if v_entry.consent_version is distinct from 'v1' then
@@ -259,9 +283,54 @@ begin
 end;
 $$;
 
+create function public.find_generation_receipt(
+  p_actor_id uuid,
+  p_entry_id uuid,
+  p_expected_revision integer,
+  p_idempotency_key uuid
+)
+returns jsonb language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_entry public.entries;
+  v_generation public.generations;
+  v_request_hash text;
+begin
+  if p_actor_id is null then raise exception using message = 'AUTH_REQUIRED'; end if;
+  if p_entry_id is null or p_expected_revision is null or p_expected_revision <= 0
+    or p_idempotency_key is null then
+    raise exception using message = 'INVALID_INPUT';
+  end if;
+
+  select * into v_entry from public.entries e
+    where e.id = p_entry_id and e.owner_id = p_actor_id;
+  if not found or not private.is_live_generation_entry(v_entry) then
+    raise exception using message = 'NOT_FOUND';
+  end if;
+
+  v_request_hash := private.generation_request_hash(p_entry_id, p_expected_revision);
+  select * into v_generation from public.generations g
+    where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
+  if not found then return null; end if;
+  if v_generation.request_hash is distinct from v_request_hash then
+    raise exception using message = 'IDEMPOTENCY_CONFLICT';
+  end if;
+
+  return pg_catalog.jsonb_build_object(
+    'generation_id', v_generation.id,
+    'status', v_generation.status,
+    'status_url', '/api/v1/generations/' || v_generation.id::text
+  );
+end;
+$$;
+
 revoke all on function public.reserve_generation(uuid, uuid, integer, uuid, boolean)
   from public, anon, authenticated;
+revoke all on function public.find_generation_receipt(uuid, uuid, integer, uuid)
+  from public, anon, authenticated;
 grant execute on function public.reserve_generation(uuid, uuid, integer, uuid, boolean)
+  to service_role;
+grant execute on function public.find_generation_receipt(uuid, uuid, integer, uuid)
   to service_role;
 
 commit;

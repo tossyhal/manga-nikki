@@ -58,12 +58,14 @@ select test.expect_error('select * from private.generation_policy', '42501');
 select test.expect_error('select * from private.quota_counters', '42501');
 select test.expect_error('select * from private.reservations', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select test.expect_error('select public.find_generation_receipt(null,null,null,null)', '42501');
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 select test.expect_error('select * from private.generation_policy', '42501');
 select test.expect_error('select * from private.quota_counters', '42501');
 select test.expect_error('select * from private.reservations', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select test.expect_error('select public.find_generation_receipt(null,null,null,null)', '42501');
 set local role service_role;
 select test.expect_error('update private.generation_policy set enabled = true', '42501');
 select test.expect_error('delete from private.quota_counters', '42501');
@@ -98,6 +100,13 @@ select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_u
 select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_uuid(), current_date, '削除用の架空日記', 'v1')).id as entry_b2 \gset
 select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_uuid(), current_date, '期限用の架空日記', 'v1')).id as entry_b3 \gset
 select (public.create_entry('33333333-3333-4333-8333-333333333333', gen_random_uuid(), current_date, 'revision用の架空日記', 'v1')).id as entry_c1 \gset
+select test.assert(public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
+  'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1') is null, '未登録キーの照会はNULLを返す');
+select test.assert((select count(*) = 0 from private.quota_counters)
+  and (select count(*) = 0 from private.reservations)
+  and (select count(*) = 0 from public.generations)
+  and (select latest_generation_id is null from public.entries where id = :'entry_a1'::uuid),
+  '未登録キーの照会は生成台帳・日記ポインタを変更しない');
 select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
   '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid,
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'GENERATION_DISABLED');
@@ -119,6 +128,17 @@ select test.assert((select input_snapshot = '架空日記A1' and entry_revision 
   '日記revisionとpolicy profileをsnapshotし生成元を固定');
 select test.assert((select latest_generation_id = :'generation_a1'::uuid
   from public.entries where id = :'entry_a1'::uuid), '予約と同時に日記ポインタを更新');
+select test.assert((public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') ->> 'generation_id') = :'generation_a1'
+  and (public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') ->> 'status') = 'queued',
+  '既存キーの照会はreceiptを返す');
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a2'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'IDEMPOTENCY_CONFLICT');
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '22222222-2222-4222-8222-222222222222', :'entry_a1'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'NOT_FOUND');
 select test.assert((select owner_id = '11111111-1111-4111-8111-111111111111'
   and reserved_day = (statement_timestamp() at time zone 'Asia/Tokyo')::date
   and max_cost_micro_usd = 7 and state = 'reserved'
@@ -142,6 +162,9 @@ select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,tru
 update public.generations set status = 'failed', completed_at = statement_timestamp()
   where id = :'generation_a1'::uuid;
 select public.update_entry('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1, current_date, '改訂後も当初snapshotを維持');
+select test.assert((public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') ->> 'generation_id') = :'generation_a1',
+  '編集後も元のrevisionによるreceipt照会を維持');
 reset role;
 
 update private.generation_policy set enabled = false, global_daily_limit = 0,
@@ -149,6 +172,9 @@ update private.generation_policy set enabled = false, global_daily_limit = 0,
   model_profile_json = '{"profile_id":"fictional-v2","is_mock":true,"max_cost_micro_usd":9}'::jsonb
 where id = 1;
 set local role service_role;
+select test.assert((public.find_generation_receipt('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') ->> 'generation_id') = :'generation_a1',
+  '停止後も有効日記の既存receiptを照会できる');
 select public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', false) as replay_after_stop \gset
 select test.assert(:'replay_after_stop'::jsonb ->> 'generation_id' = :'generation_a1',
@@ -212,15 +238,33 @@ select test.assert((select is_mock is false
   from public.generations where id = (:'receipt_b1'::jsonb ->> 'generation_id')::uuid),
   '架空profileでもCmax正数を検証しis_mockを固定');
 
+update public.entries set deleted_at = statement_timestamp() where id = :'entry_a1'::uuid;
+update public.entries set expires_at = statement_timestamp() - interval '1 second' where id = :'entry_a2'::uuid;
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'NOT_FOUND');
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a2'::uuid,
+  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'), 'P0001', 'NOT_FOUND');
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'NOT_FOUND');
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a2'::uuid,
+  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'), 'P0001', 'NOT_FOUND');
+
 set local role anon;
 select test.expect_error('select id from private.generation_policy', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select test.expect_error('select public.find_generation_receipt(null,null,null,null)', '42501');
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 select test.expect_error('select id from private.quota_counters', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select test.expect_error('select public.find_generation_receipt(null,null,null,null)', '42501');
 select set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
 select test.expect_error('select id from private.generation_policy', '42501');
 select test.expect_error('select id from private.reservations', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select test.expect_error('select public.find_generation_receipt(null,null,null,null)', '42501');
 rollback;
