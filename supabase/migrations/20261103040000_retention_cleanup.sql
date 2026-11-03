@@ -76,6 +76,110 @@ create table private.retained_generation_ledger (
 alter table private.retained_generation_ledger enable row level security;
 revoke all on private.retained_generation_ledger from public, anon, authenticated, service_role;
 
+create table private.retained_generation_requests (
+  owner_id uuid not null,
+  idempotency_key uuid not null,
+  request_hash text not null,
+  primary key (owner_id, idempotency_key)
+);
+alter table private.retained_generation_requests enable row level security;
+revoke all on private.retained_generation_requests from public, anon, authenticated, service_role;
+grant select on private.retained_generation_requests to service_role;
+
+alter function public.reserve_generation(uuid, uuid, integer, uuid, boolean)
+  set schema private;
+alter function private.reserve_generation(uuid, uuid, integer, uuid, boolean)
+  rename to reserve_generation_existing_key;
+
+create or replace function public.find_generation_receipt(
+  p_actor_id uuid,
+  p_entry_id uuid,
+  p_expected_revision integer,
+  p_idempotency_key uuid
+)
+returns jsonb language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_entry public.entries;
+  v_generation public.generations;
+  v_request_hash text;
+  v_archived_request_hash text;
+begin
+  if p_actor_id is null then raise exception using message = 'AUTH_REQUIRED'; end if;
+  if p_entry_id is null or p_expected_revision is null or p_expected_revision <= 0
+    or p_idempotency_key is null then
+    raise exception using message = 'INVALID_INPUT';
+  end if;
+
+  select * into v_entry from public.entries e
+    where e.id = p_entry_id and e.owner_id = p_actor_id;
+  if not found or not private.is_live_generation_entry(v_entry) then
+    raise exception using message = 'NOT_FOUND';
+  end if;
+
+  v_request_hash := private.generation_request_hash(p_entry_id, p_expected_revision);
+  select a.request_hash into v_archived_request_hash
+    from private.retained_generation_requests a
+    where a.owner_id = p_actor_id and a.idempotency_key = p_idempotency_key;
+  if found then
+    if v_archived_request_hash is distinct from v_request_hash then
+      raise exception using message = 'IDEMPOTENCY_CONFLICT';
+    end if;
+    raise exception using message = 'NOT_FOUND';
+  end if;
+
+  select * into v_generation from public.generations g
+    where g.owner_id = p_actor_id and g.idempotency_key = p_idempotency_key;
+  if not found then return null; end if;
+  if v_generation.request_hash is distinct from v_request_hash then
+    raise exception using message = 'IDEMPOTENCY_CONFLICT';
+  end if;
+
+  return pg_catalog.jsonb_build_object(
+    'generation_id', v_generation.id,
+    'status', v_generation.status,
+    'status_url', '/api/v1/generations/' || v_generation.id::text
+  );
+end;
+$$;
+
+create function public.reserve_generation(
+  p_actor_id uuid,
+  p_entry_id uuid,
+  p_expected_revision integer,
+  p_idempotency_key uuid,
+  p_generation_enabled boolean
+)
+returns jsonb language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_receipt jsonb;
+begin
+  v_receipt := public.find_generation_receipt(
+    p_actor_id, p_entry_id, p_expected_revision, p_idempotency_key
+  );
+  if v_receipt is not null then return v_receipt; end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(20261103, 10001);
+  v_receipt := public.find_generation_receipt(
+    p_actor_id, p_entry_id, p_expected_revision, p_idempotency_key
+  );
+  if v_receipt is not null then return v_receipt; end if;
+
+  return private.reserve_generation_existing_key(
+    p_actor_id, p_entry_id, p_expected_revision, p_idempotency_key, p_generation_enabled
+  );
+end;
+$$;
+revoke all on function public.find_generation_receipt(uuid, uuid, integer, uuid)
+  from public, anon, authenticated;
+revoke all on function public.reserve_generation(uuid, uuid, integer, uuid, boolean)
+  from public, anon, authenticated;
+grant execute on function public.find_generation_receipt(uuid, uuid, integer, uuid)
+  to service_role;
+grant execute on function public.reserve_generation(uuid, uuid, integer, uuid, boolean)
+  to service_role;
+
 create table private.retained_provider_attempts (
   attempt_id uuid primary key,
   generation_id uuid not null,
@@ -277,6 +381,11 @@ begin
   insert into private.entry_tombstones (owner_id, create_request_id, entry_id, purged_at)
     values (v_entry.owner_id, v_entry.create_request_id, v_entry.id, v_now)
     on conflict (owner_id, create_request_id) do nothing;
+
+  insert into private.retained_generation_requests (owner_id, idempotency_key, request_hash)
+  select g.owner_id, g.idempotency_key, g.request_hash
+  from public.generations g
+  where g.entry_id = p_entry_id and g.owner_id = v_owner_id;
 
   insert into private.retained_generation_ledger (
     generation_id, owner_id, generation_status, reservation_present,

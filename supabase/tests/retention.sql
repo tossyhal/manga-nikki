@@ -49,6 +49,12 @@ select test.assert(has_table_privilege('service_role', 'public.assets', 'SELECT'
   and not has_table_privilege('service_role', 'private.reservations', 'DELETE')
   and not has_table_privilege('service_role', 'private.provider_attempts', 'DELETE')
   and not has_table_privilege('service_role', 'private.retained_generation_ledger', 'SELECT')
+  and has_table_privilege('service_role', 'private.retained_generation_requests', 'SELECT')
+  and not has_table_privilege('service_role', 'private.retained_generation_requests', 'INSERT')
+  and not has_table_privilege('service_role', 'private.retained_generation_requests', 'UPDATE')
+  and not has_table_privilege('service_role', 'private.retained_generation_requests', 'DELETE')
+  and has_function_privilege('service_role', 'private.reserve_generation_existing_key(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'private.reserve_generation_existing_key(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.claim_retention_cleanup(integer)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.claim_retention_cleanup(integer)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.claim_retention_cleanup(integer)', 'EXECUTE')
@@ -71,6 +77,9 @@ select (public.create_entry('40404040-4040-4040-8040-404040404040',
 select (public.create_entry('50505050-5050-4050-8050-505050505050',
   'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', current_date, '他人閲覧fixtureの架空日記', 'v1')).id
   as other_entry_id \gset
+select (public.create_entry('10101010-1010-4010-8010-101010101010',
+  'abababab-abab-4bab-8bab-abababababab', current_date, '生成キー再利用確認の架空日記', 'v1')).id
+  as replay_entry_id \gset
 
 select (statement_timestamp() at time zone 'Asia/Tokyo')::date as today \gset
 insert into public.generations (
@@ -79,7 +88,8 @@ insert into public.generations (
 ) values
   ('11111111-aaaa-4aaa-8aaa-aaaaaaaa0001', :'archived_entry_id',
    '10101010-1010-4010-8010-101010101010', 1, '11111111-bbbb-4bbb-8bbb-111111111111',
-   'fictional-hash-a', '架空fixtureのみ', '{}'::jsonb, false, 'unknown', null, 'RESULT_UNKNOWN', statement_timestamp()),
+   private.generation_request_hash(:'archived_entry_id'::uuid, 1), '架空fixtureのみ', '{}'::jsonb,
+   false, 'unknown', null, 'RESULT_UNKNOWN', statement_timestamp()),
   ('22222222-aaaa-4aaa-8aaa-aaaaaaaa0002', :'queued_entry_id',
    '20202020-2020-4020-8020-202020202020', 1, '22222222-bbbb-4bbb-8bbb-222222222222',
    'fictional-hash-b', '架空fixtureのみ', '{}'::jsonb, true, 'queued', null, null, null),
@@ -232,6 +242,16 @@ select test.assert(not exists (select 1 from public.entries where id = :'archive
     where owner_id = '10101010-1010-4010-8010-101010101010'
       and create_request_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
       and entry_id = :'archived_entry_id'), 'asset・job・entryを物理削除しtombstoneを保持');
+select test.assert((select owner_id = '10101010-1010-4010-8010-101010101010'
+  and idempotency_key = '11111111-bbbb-4bbb-8bbb-111111111111'
+  and request_hash = private.generation_request_hash(:'archived_entry_id'::uuid, 1)
+  from private.retained_generation_requests
+  where owner_id = '10101010-1010-4010-8010-101010101010'
+    and idempotency_key = '11111111-bbbb-4bbb-8bbb-111111111111')
+  and not exists (select 1 from information_schema.columns
+    where table_schema = 'private' and table_name = 'retained_generation_requests'
+      and column_name in ('body', 'input_snapshot', 'model_profile_snapshot', 'comic_json')),
+  'generation keyとrequest hashだけを本文なしで退避');
 select test.assert((select reservation_present and reserved_day = :'today'::date - 1
   and max_cost_micro_usd = 17 and reservation_state = 'held'
   from private.retained_generation_ledger
@@ -249,6 +269,36 @@ select test.assert(public.finalize_retention_cleanup(:'archived_entry_id', :'sec
 select test.expect_error(format('select public.create_entry(%L,%L,%L,%L,%L)',
   '10101010-1010-4010-8010-101010101010', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   :'today'::date, '古い作成要求の架空日記', 'v1'), 'P0001', 'NOT_FOUND');
+select (select count(*) from public.generations
+  where owner_id = '10101010-1010-4010-8010-101010101010') as retained_owner_jobs_before \gset
+select (select count || ':' || committed_micro_usd from private.quota_counters
+  where scope = 'global_total') as retained_quota_before \gset
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '10101010-1010-4010-8010-101010101010', :'replay_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'IDEMPOTENCY_CONFLICT');
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
+  '10101010-1010-4010-8010-101010101010', :'replay_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'IDEMPOTENCY_CONFLICT');
+select test.expect_error(format('select public.reserve_mock_generation(%L,%L,1,%L)',
+  '10101010-1010-4010-8010-101010101010', :'replay_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'IDEMPOTENCY_CONFLICT');
+select test.expect_error(format('select public.find_generation_receipt(%L,%L,1,%L)',
+  '10101010-1010-4010-8010-101010101010', :'archived_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'NOT_FOUND');
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
+  '10101010-1010-4010-8010-101010101010', :'archived_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'NOT_FOUND');
+select test.expect_error(format('select public.reserve_mock_generation(%L,%L,1,%L)',
+  '10101010-1010-4010-8010-101010101010', :'archived_entry_id',
+  '11111111-bbbb-4bbb-8bbb-111111111111'), 'P0001', 'NOT_FOUND');
+select test.assert(public.find_generation_receipt('50505050-5050-4050-8050-505050505050',
+  :'other_entry_id', 1, '11111111-bbbb-4bbb-8bbb-111111111111') is null,
+  '同一generation keyでも別ownerでは独立');
+select test.assert(:'retained_owner_jobs_before'::bigint = (select count(*) from public.generations
+    where owner_id = '10101010-1010-4010-8010-101010101010')
+  and :'retained_quota_before' = (select count || ':' || committed_micro_usd
+    from private.quota_counters where scope = 'global_total'),
+  '退避済みkeyの競合/再送でjobやquotaを追加しない');
 
 select test.assert(jsonb_array_length(public.claim_retention_cleanup(10)) = 0,
   'queued/runningをsettlementする前は削除対象にしない');
