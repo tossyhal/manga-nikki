@@ -202,17 +202,37 @@ export async function createEntry(input: CreateEntryInput): Promise<Entry> {
     writePendingCreateRequests(pending);
   }
 
-  const entry = await api<Entry>('/entries', {
-    method: 'POST',
-    body: JSON.stringify({ ...payload, createRequestId: requestId }),
-  });
-  if (fingerprint !== null) {
-    const pending = readPendingCreateRequests().filter(
-      (item) => item.fingerprint !== fingerprint || item.requestId !== requestId,
-    );
-    writePendingCreateRequests(pending);
+  try {
+    const entry = await api<Entry>('/entries', {
+      method: 'POST',
+      body: JSON.stringify({ ...payload, createRequestId: requestId }),
+    });
+    if (fingerprint !== null) {
+      const pending = readPendingCreateRequests().filter(
+        (item) => item.fingerprint !== fingerprint || item.requestId !== requestId,
+      );
+      writePendingCreateRequests(pending);
+    }
+    return entry;
+  } catch (error) {
+    if (
+      fingerprint !== null &&
+      error instanceof ApiClientError &&
+      error.status === 404 &&
+      error.code === 'NOT_FOUND'
+    ) {
+      const pending = readPendingCreateRequests();
+      const index = pending.findIndex(
+        (item) => item.fingerprint === fingerprint && item.requestId === requestId,
+      );
+      const staleRequest = pending[index];
+      if (staleRequest) {
+        pending[index] = { ...staleRequest, requestId: crypto.randomUUID() };
+        writePendingCreateRequests(pending);
+      }
+    }
+    throw error;
   }
-  return entry;
 }
 
 export const getAssetUrl = (id: string) =>
