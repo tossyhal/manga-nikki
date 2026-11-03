@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import type { Entry } from '../../../shared/schemas';
+import { EntryHistory } from './EntryHistory';
 import { getEntries } from '../../lib/api';
 
 export function Library() {
@@ -62,22 +63,12 @@ export function Library() {
           </Link>
         </div>
       ) : (
-        <ul className="entries">
-          {entries.map((entry) => (
-            <li key={entry.id}>
-              <Link to={`/entries/${entry.id}`}>
-                <time>{entry.diaryDate}</time>
-                <span>{entry.latestGenerationId ? '漫画の記録' : '下書き'}</span>
-                <p>{entry.body}</p>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-      {nextCursor && (
-        <button disabled={busy} onClick={() => void loadMore()}>
-          {busy ? '読み込んでいます…' : 'もっと見る'}
-        </button>
+        <EntryHistory
+          entries={entries}
+          nextCursor={nextCursor}
+          onLoadMore={() => void loadMore()}
+          busy={busy}
+        />
       )}
     </>
   );

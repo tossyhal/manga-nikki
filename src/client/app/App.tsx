@@ -9,11 +9,14 @@ import {
   type RouteObject,
 } from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
+import type { Entry } from '../../shared/schemas';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
-import { getClientConfig, type ClientConfig } from '../lib/config';
+import { EntryHistory } from '../features/library/EntryHistory';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
+import { getEntries } from '../lib/api';
+import { getClientConfig, type ClientConfig } from '../lib/config';
 import { PwaNotice } from './PwaNotice';
 
 const configUnavailableMessage = '現在、読み込めません。通信を確認して再読み込みしてください。';
@@ -25,7 +28,50 @@ type AppContext = {
   onActivityChange: (activity: DiaryActivity) => void;
 };
 
-function Home() {
+function RecentRecords() {
+  const [recent, setRecent] = useState<Entry[] | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  useEffect(() => {
+    let active = true;
+    getEntries({ limit: 5 })
+      .then((result) => {
+        if (active) setRecent(result.items);
+      })
+      .catch((failure: Error) => {
+        if (active) {
+          setRecent([]);
+          setHistoryError(failure.message);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return (
+    <section>
+      <h2>過去の記録</h2>
+      {historyError && (
+        <p role="alert" className="error">
+          {historyError}
+        </p>
+      )}
+      {recent === null ? (
+        <output>読み込んでいます…</output>
+      ) : recent.length === 0 ? (
+        <p>まだ保存した日記はありません。書いた記録は、要約を見出しにしてここに並びます。</p>
+      ) : (
+        <>
+          <EntryHistory entries={recent} />
+          <p>
+            <Link to="/library">すべての記録を見る →</Link>
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function Home({ config }: { config: ClientConfig | null }) {
   return (
     <>
       <p className="eyebrow">一日を、4つの場面に。</p>
@@ -43,6 +89,7 @@ function Home() {
         </Link>
         <Link to="/library">保存した記録を見る →</Link>
       </div>
+      {config?.dataMode === 'mock' && <RecentRecords />}
       <section className="sample">
         <h2>サンプルの一日</h2>
         <p>{sampleDiary}</p>
@@ -52,10 +99,16 @@ function Home() {
             [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
           }}
           mock
+          titleAs="h3"
         />
       </section>
     </>
   );
+}
+
+function HomeRoute() {
+  const { config } = useOutletContext<AppContext>();
+  return <Home config={config} />;
 }
 function NewEntryRoute() {
   const { config, configError, personalDataAvailable, onActivityChange } =
@@ -193,7 +246,7 @@ export const appRoute: RouteObject = {
   path: '/',
   element: <App />,
   children: [
-    { index: true, element: <Home /> },
+    { index: true, element: <HomeRoute /> },
     { path: 'new', element: <NewEntryRoute /> },
     { path: 'library', element: <LibraryRoute /> },
     { path: 'entries/:id', element: <DetailRoute /> },

@@ -4,10 +4,13 @@ export function Comic({
   comic,
   images,
   mock = false,
+  titleAs: Title = 'h2',
 }: {
   comic: ComicDocument;
   images: Record<string, string>;
   mock?: boolean;
+  /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
+  titleAs?: 'h2' | 'h3';
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
   return (
@@ -29,7 +32,7 @@ export function Comic({
         )}
       </div>
       <figcaption>
-        <strong>{comic.title}</strong>
+        <Title className="comic-title">{comic.title}</Title>
         <ol>
           {comic.panels.map((panel) => (
             <li key={panel.index}>
