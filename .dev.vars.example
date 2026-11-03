@@ -7,8 +7,10 @@ APP_ENV="development"
 DATA_MODE="mock"
 AI_MODE="mock"
 GENERATION_ENABLED="false"
+# Worker用Supabase接続設定。Publishable keyは公開可能なキーで、secret keyをVITE_*へ入れない。
 SUPABASE_URL=""
 SUPABASE_PUBLISHABLE_KEY=""
+# Worker専用秘密情報。サーバーRPC clientのみで使い、.env.localへコピーせず値をコミットしない。
 SUPABASE_SECRET_KEY=""
 TURNSTILE_SECRET_KEY=""
 # 候補用・未承認。実モデルを選んだ場合のみ使う。Workers AIはbindingを別途設定する。

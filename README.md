@@ -5,10 +5,10 @@
 日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
-> 現在の状態（2026-10-27時点）
-> localhost限定の開発用モック基盤があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。実AI・Supabase・Queue・PWAは未実装です。
+> 現在の状態（2026-11-03時点）
+> localhost限定の開発用モック基盤があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードのサーバーJWT検証境界は実装済みですが、Supabase DB接続・日記CRUD・実AI・Queue・PWAは未実装です。liveモードの個人APIは認証後も503を返します。
 
-日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストを追加しました。アプリのSupabase接続と共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストを追加しました。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 

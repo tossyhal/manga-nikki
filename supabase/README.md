@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。アプリのSupabase接続・JWT検証・生成受付・画像Storage・予算予約・物理削除は後続です。このmigrationだけでは実接続モードは有効になりません。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。WorkerのSupabase JWT検証境界と利用者JWT / server RPC client factoryは実装済みですが、DB CRUD接続・生成受付・画像Storage・予算予約・物理削除は後続です。このmigrationだけでは実接続モードは有効にならず、liveモードの個人APIは503を返します。
 
 ## 検証
 

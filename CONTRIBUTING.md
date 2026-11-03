@@ -187,6 +187,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- Supabase接続・JWT検証・CAPTCHA・Queue・実AI・30日期限削除・PWAは未実装です。接続モードをliveに変えても実APIには接続せず503で拒否します。
+- liveモードのSupabase JWT検証境界は実装済みです。DB接続・日記CRUD・CAPTCHA・Queue・実AI・30日期限削除・PWAは未実装で、個人APIはJWT検証後も503を返します。サンプルモードは個人APIを認証せず拒否します。
 - ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
