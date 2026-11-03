@@ -6,9 +6,9 @@
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
 > 現在の状態（2026-11-04時点）
-> localhost限定の開発用モック基盤と、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。liveモードはJWT検証、Supabase DBの日記一覧・詳細・作成・編集・削除を実装済みです。生成のDB実行claim・provider attempt・失敗時の安全精算RPC、期限切れ日記のStorage→DB物理削除RPC・server専用cleanup serviceも追加済みですが、生成受付・quota・`/generations/:id`・画像保存/署名URL・Queue・実AI・PWAとcleanup serviceの定期呼出接続は未実装です。Storage bucket設定はStorage APIを含むSupabase環境で別SQLを適用します。
+> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedには生成受付・quota・生成状態取得・Queue・期限照合の固定mock経路を実装し、成功時の画像URLは公開の架空サンプルを返します。期限切れ日記の物理削除RPCとserver専用cleanup serviceもありますが、Scheduled handler接続は未実装です。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage・署名URL、画像保存は未接続で、新しい実AI生成は停止しています。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
 
-日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 
@@ -68,6 +68,24 @@
 | migration | DB構造の変更を順番に再現するファイル |
 | revision | 日記の改訂番号。古い画面からの更新の衝突を検出する |
 | 秘密情報 | APIキー・認証トークンなど。Supabaseの固有名称だけsecret keyと記す |
+
+## PWAのビルド確認
+
+環境別の公開準備buildは`pnpm build:staging`または`pnpm build:production`で行います。どちらも`dist/`の成果物検査までで、Cloudflareへの公開はしません。実デプロイは別途承認後にだけ`pnpm exec wrangler deploy`を手動実行します。対象環境のビルド設定と公開手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)および[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)を参照してください。
+
+PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
+
+```sh
+pnpm test:e2e:pwa
+```
+
+`pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
+
+手元で画面を確認する場合は、`pnpm build`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
+
+新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
+
+ローカルpreviewでの確認はAndroid Chrome・iPhone SafariのHTTPS実機確認の代わりにはなりません。実機インストール、standalone表示、更新の確認は公開前に別途行います。
 
 ## ライセンス・利用条件
 

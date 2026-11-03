@@ -360,8 +360,10 @@ try {
   }
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
+  console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -485,7 +487,7 @@ try {
     queries: Array.from(
       { length: 6 },
       () =>
-        `set role service_role; select public.reserve_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}',true);`,
+        `set role service_role; select public.reserve_mock_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}');`,
     ),
   });
   const duplicateReceipts = duplicateReservations.map((result) => JSON.parse(succeeded(result)));
@@ -498,7 +500,7 @@ try {
     ),
     '1:1:1:7',
   );
-  console.log('成功: 同一キー6並列予約はjob・reservation・予算計上が各1件');
+  console.log('成功: 同一キー6並列mock予約はjob・reservation・予算計上が各1件');
 
   const differentEntriesSameActor = await runBehindLock({
     holderName: 'mn-db-reserve-user-active-holder',

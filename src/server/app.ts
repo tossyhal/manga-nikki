@@ -13,6 +13,14 @@ import {
   updateLiveEntry,
 } from './live-entries';
 import {
+  generationIngressConfigured,
+  getLiveGeneration,
+  getLiveGenerationQuota,
+  getLiveMockAssetUrl,
+  LiveGenerationError,
+  reserveLiveMockGeneration,
+} from './live-generations';
+import {
   getBearerToken,
   InvalidAccessTokenError,
   SupabaseAuthUnavailableError,
@@ -37,6 +45,9 @@ const messages: Record<string, string> = {
   IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
   INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
   USER_LIMIT_REACHED: 'モックの本日の生成上限に達しました。',
+  GLOBAL_LIMIT_REACHED: '現在、生成の上限に達しています。',
+  TOO_MANY_ACTIVE: '生成中の記録があります。完了後にもう一度お試しください。',
+  CAPTCHA_FAILED: '確認に失敗しました。新しい確認を行ってください。',
   DRAFT_LIMIT_REACHED: '下書きが上限に達しました。不要な記録を削除してください。',
   DEPENDENCY_UNAVAILABLE: '一時的に利用できません。時間をおいて再操作してください。',
   GENERATION_DISABLED: 'この環境では個人データの操作は利用できません。',
@@ -79,6 +90,7 @@ export function createApp(
     repository?: MockRepository;
     authFetch?: typeof fetch;
     supabaseFetch?: typeof fetch;
+    turnstileFetch?: typeof fetch;
   } = {},
 ) {
   let repository = options.repository;
@@ -97,9 +109,11 @@ export function createApp(
         ? error
         : error instanceof LiveEntryError
           ? new ApiError(error.status, error.code)
-          : error instanceof z.ZodError
-            ? new ApiError(400, 'INVALID_INPUT')
-            : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+          : error instanceof LiveGenerationError
+            ? new ApiError(error.status, error.code)
+            : error instanceof z.ZodError
+              ? new ApiError(400, 'INVALID_INPUT')
+              : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     return c.json(
       {
         error: {
@@ -126,7 +140,9 @@ export function createApp(
   app.get('/api/v1/config', (c) => {
     const current = mode(c.env);
     return c.json({
-      generationAvailable: current === 'local-mock',
+      generationAvailable:
+        current === 'local-mock' ||
+        (current === 'local-connected' && generationIngressConfigured(c.env)),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
       consentVersion: 'v1',
@@ -174,6 +190,7 @@ export function createApp(
       owner: c.get('owner') as string,
       accessToken,
       fetcher: options.supabaseFetch,
+      turnstileFetch: options.turnstileFetch,
     };
   };
   const getEntry = (id: string, owner: string) => {
@@ -181,8 +198,15 @@ export function createApp(
     if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
     return found;
   };
-  app.get('/api/v1/me/quota', (c) => {
-    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+  app.get('/api/v1/me/quota', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock')
+      return c.json(
+        await getLiveGenerationQuota(
+          liveContext(c),
+          current === 'local-connected' && generationIngressConfigured(c.env),
+        ),
+      );
     const day = jstToday();
     const resetAt = new Date(Date.parse(`${day}T00:00:00+09:00`) + 86400000).toISOString();
     return c.json({
@@ -291,8 +315,21 @@ export function createApp(
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
-    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    const current = mode(c.env);
+    if (current === 'live-demo') throw new ApiError(503, 'GENERATION_DISABLED');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
+    if (current !== 'local-mock') {
+      const receipt = await reserveLiveMockGeneration(
+        { ...liveContext(c), turnstileFetch: options.turnstileFetch },
+        {
+          entryId: z.uuid().parse(c.req.param('id')),
+          expectedRevision: input.expectedRevision,
+          idempotencyKey: z.uuid().parse(c.req.header('Idempotency-Key')),
+          captchaToken: input.captchaToken,
+        },
+      );
+      return c.json(receipt, 202);
+    }
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
     const owner = c.get('owner');
@@ -340,14 +377,25 @@ export function createApp(
     entry.latestGenerationId = id;
     return c.json(receipt(id), 202);
   });
-  app.get('/api/v1/generations/:id', (c) => {
-    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+  app.get('/api/v1/generations/:id', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock') {
+      const generation = await getLiveGeneration(liveContext(c), c.req.param('id'));
+      if (!generation) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(generation);
+    }
     const job = getRepository().generations.get(c.req.param('id'));
     if (!job || job.owner !== c.get('owner')) throw new ApiError(404, 'NOT_FOUND');
     return c.json(job.generation);
   });
-  app.get('/api/v1/assets/:id/url', (c) => {
-    if (mode(c.env) !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+  app.get('/api/v1/assets/:id/url', async (c) => {
+    const current = mode(c.env);
+    if (current === 'local-connected') {
+      const asset = await getLiveMockAssetUrl(liveContext(c), c.req.param('id'));
+      if (!asset) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(asset);
+    }
+    if (current !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     const job = [...getRepository().generations.values()].find(
       (x) =>
         x.owner === c.get('owner') &&
