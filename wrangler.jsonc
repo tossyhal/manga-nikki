@@ -15,5 +15,23 @@
     "AI_MODE": "mock",
     "GENERATION_ENABLED": "false",
   },
+  "env": {
+    "staging": {
+      "vars": {
+        "APP_ENV": "staging",
+        "DATA_MODE": "sample",
+        "AI_MODE": "mock",
+        "GENERATION_ENABLED": "false",
+      },
+    },
+    "production": {
+      "vars": {
+        "APP_ENV": "production",
+        "DATA_MODE": "sample",
+        "AI_MODE": "mock",
+        "GENERATION_ENABLED": "false",
+      },
+    },
+  },
   "observability": { "enabled": false },
 }
