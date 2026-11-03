@@ -13,6 +13,7 @@ export default defineConfig({
       ...process.env,
       VITE_SUPABASE_URL: 'https://manga-nikki-e2e.supabase.co',
       VITE_SUPABASE_PUBLISHABLE_KEY: 'e2e-placeholder',
+      VITE_TURNSTILE_SITE_KEY: 'e2e-public-site-key',
     },
     reuseExistingServer: !process.env.CI,
   },
