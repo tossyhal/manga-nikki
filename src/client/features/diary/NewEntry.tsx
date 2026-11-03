@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
+import { summarizeDiary } from '../../../shared/summary';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
 import { GenerationQuotaStatus } from './GenerationQuotaStatus';
 import {
   ApiClientError,
-  api,
+  createEntry,
   generate,
   getGeneration,
   getQuotaForExistingSession,
@@ -118,7 +119,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     }
     let entry = saved;
     if (!entry) {
-      entry = await api<Entry>('/entries', { method: 'POST', body: JSON.stringify(parsed.data) });
+      entry = await createEntry(parsed.data);
       if (!activeRef.current) return;
       setSaved(entry);
       onActivityChange({ dirty: false, busy: makeComic && config.dataMode === 'mock' });
@@ -307,10 +308,13 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             onChange={(event) => setBody(event.target.value)}
             placeholder="今日は何がありましたか？"
             required
-            aria-describedby="count"
+            aria-describedby="count summary-preview"
           />
           <p id="count" className="hint">
             {[...body.trim()].length} / 1,000文字
+          </p>
+          <p id="summary-preview" className="summary-preview">
+            見出し：{body.trim() ? summarizeDiary(body) : '本文の先頭から自動で作ります'}
           </p>
           <label className="consent">
             <input

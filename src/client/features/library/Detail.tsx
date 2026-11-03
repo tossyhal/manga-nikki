@@ -8,6 +8,7 @@ import {
   type EntryDetail,
   type Generation,
 } from '../../../shared/schemas';
+import { summarizeDiary } from '../../../shared/summary';
 import type { ClientConfig } from '../../lib/config';
 import {
   ApiClientError,
@@ -603,7 +604,7 @@ function DetailContent({
             {entry.diaryDate} /{' '}
             {generation ? (generation.mock ? '固定サンプル' : '漫画') : '下書き'}
           </p>
-          <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
+          <h1>{summarizeDiary(entry.body)}</h1>
           <output className="saved">
             {config.dataMode === 'mock'
               ? '一時保存しました。'
