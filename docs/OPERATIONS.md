@@ -17,7 +17,8 @@
   - 非対称署名鍵を使うプロジェクトでは`getClaims`はJWTの署名と期限を確認しますが、Auth側のセッション失効は確認しません。失効を即時反映する必要がある場合は、DB CRUD実装前にAuthサーバーへのユーザー照会を加えます。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
 - 読み取りと書き込みの分離
-  - 利用者JWTを付ける`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにしています。前者は読み取り用、後者はサーバー専用RPC呼び出し用です。incoming Authorization headerをRPC clientへ渡しません。
+  - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
+  - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
   - DB接続・CRUDの呼び出しは未実装です。liveモードの個人APIは検証済み`sub`をmiddlewareへ設定後、503を返します。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
