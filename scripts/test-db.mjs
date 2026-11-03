@@ -881,6 +881,55 @@ try {
   assert.ok(expiryBeginClaim.claim_token);
   assert.ok(expirySettleClaim.claim_token);
   console.log('成功: entry/claim期限を待つRPCはロック取得後の時刻で判定');
+
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/retention.sql'), 'utf8')));
+  console.log('成功: Storage-first purge・lease・台帳保持・RLS・tombstone・active job保護');
+
+  const retentionRaceActor = '90909090-9090-4090-8090-909090909090';
+  const retentionRaceRequest = '91919191-9191-4191-8191-919191919191';
+  const retentionRaceEntry = succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${retentionRaceActor}');
+      set role service_role;
+      select (public.create_entry('${retentionRaceActor}','${retentionRaceRequest}',current_date,'purge競合の架空日記','v1')).id;
+    `),
+  );
+  succeeded(
+    await sql(
+      `update public.entries set expires_at = pg_catalog.clock_timestamp() - interval '1 second' where id = '${retentionRaceEntry}';`,
+    ),
+  );
+  const retentionRaceClaims = JSON.parse(
+    succeeded(await sql('set role service_role; select public.claim_retention_cleanup(10);')),
+  );
+  const retentionRaceTask = retentionRaceClaims.find(
+    (task) => task.entry_id === retentionRaceEntry,
+  );
+  assert.ok(retentionRaceTask?.claim_token);
+  const retentionCreateRace = await runBehindLock({
+    holderName: 'mn-db-retention-create-purge-holder',
+    lockSql: `select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('${retentionRaceActor}'::text, 0))`,
+    waiterPrefix: 'mn-db-retention-create-purge-',
+    queries: [
+      `set role service_role; select public.finalize_retention_cleanup('${retentionRaceEntry}','${retentionRaceTask.claim_token}',true);`,
+      `set role service_role; select (public.create_entry('${retentionRaceActor}','${retentionRaceRequest}',current_date,'再送された架空日記','v1')).id;`,
+    ],
+  });
+  assert.equal(retentionCreateRace.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    retentionCreateRace.filter((result) => result.code !== 0 && result.stderr.includes('NOT_FOUND'))
+      .length,
+    1,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.entries where id = '${retentionRaceEntry}') || ':' ||
+        (select count(*) from private.entry_tombstones where owner_id = '${retentionRaceActor}'
+          and create_request_id = '${retentionRaceRequest}');`),
+    ),
+    '0:1',
+  );
+  console.log('成功: owner advisory lockでpurgeとcreate replayを直列化し日記を復活させない');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
