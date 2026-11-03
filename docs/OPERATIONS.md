@@ -56,6 +56,7 @@
 - `pnpm build:staging` / `pnpm build:production`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
 - Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。
 - release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
+- 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式またはJWTの`role=service_role`が見つかった場合に停止します。これは既知のSupabaseサーバー専用キー形式の誤設定対策であり、他の秘密情報形式まで検出する保証ではありません。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
 

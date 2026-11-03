@@ -73,6 +73,8 @@
 
 環境別の公開準備buildは`pnpm build:staging`または`pnpm build:production`で行います。どちらも`dist/`の成果物検査までで、Cloudflareへの公開はしません。実デプロイは別途承認後にだけ`pnpm exec wrangler deploy`を手動実行します。対象環境のビルド設定と公開手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)および[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)を参照してください。
 
+開発サーバーの起動とビルドでは、公開用設定に既知のSupabaseサーバー専用キー形式が入っている場合に処理を停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
+
 PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
 
 ```sh
