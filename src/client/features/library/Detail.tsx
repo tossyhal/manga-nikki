@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { ComicDocument, EntryDetail } from '../../../shared/schemas';
+import type { ClientConfig } from '../../lib/config';
 import { api, generate, getEntry, getAssetUrl } from '../../lib/api';
 import { Comic } from '../comic/Comic';
 
@@ -33,7 +34,7 @@ function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
   );
 }
 
-function DetailContent({ id }: { id: string }) {
+function DetailContent({ id, config }: { id: string; config: ClientConfig }) {
   const navigate = useNavigate();
   const [entry, setEntry] = useState<EntryDetail | null>(null);
   const [error, setError] = useState('');
@@ -117,7 +118,11 @@ function DetailContent({ id }: { id: string }) {
             {entry.diaryDate} / {generation ? (generation.mock ? 'モック漫画' : '漫画') : '下書き'}
           </p>
           <h1>{generation?.status === 'succeeded' ? generation.comic.title : '今日の記録'}</h1>
-          <output className="saved">開発サーバーへ仮保存しました。</output>
+          <output className="saved">
+            {config.dataMode === 'mock'
+              ? '開発サーバーへ仮保存しました。'
+              : `この匿名アカウントに保存しました。保存期間は最大${config.retentionDays}日です。`}
+          </output>
           {comicFromPreviousRevision && <output>編集前の日記から生成された漫画です。</output>}
           {generation?.status === 'succeeded' && (
             <SavedComic key={generation.id} comic={generation.comic} mock={generation.mock} />
@@ -140,8 +145,13 @@ function DetailContent({ id }: { id: string }) {
           </section>
           <div className="actions">
             {!entry.latestGeneration && (
-              <button disabled={busy} onClick={() => void act(false)}>
-                モック漫画を見る
+              <button
+                disabled={busy || config.dataMode !== 'mock' || !config.generationAvailable}
+                onClick={() => void act(false)}
+              >
+                {config.dataMode === 'mock' && config.generationAvailable
+                  ? 'モック漫画を見る'
+                  : '漫画生成は利用できません'}
               </button>
             )}
             <button
@@ -161,7 +171,7 @@ function DetailContent({ id }: { id: string }) {
     </>
   );
 }
-export function Detail() {
+export function Detail({ config }: { config: ClientConfig }) {
   const { id = '' } = useParams();
-  return <DetailContent key={id} id={id} />;
+  return <DetailContent key={id} id={id} config={config} />;
 }

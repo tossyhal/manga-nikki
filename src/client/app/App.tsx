@@ -122,8 +122,8 @@ export function App() {
                 <output>読み込んでいます…</output>
               ) : configError ? (
                 <p role="alert">{configUnavailableMessage}</p>
-              ) : personalDataAvailable ? (
-                <Detail />
+              ) : personalDataAvailable && config ? (
+                <Detail config={config} />
               ) : (
                 <p>記録の閲覧はこのサンプル環境では利用できません。</p>
               )

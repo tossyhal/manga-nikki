@@ -9,6 +9,11 @@ export default defineConfig({
   webServer: {
     command: `pnpm dev --port ${port}`,
     url: baseURL,
+    env: {
+      ...process.env,
+      VITE_SUPABASE_URL: 'https://manga-nikki-e2e.supabase.co',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'e2e-placeholder',
+    },
     reuseExistingServer: !process.env.CI,
   },
 });

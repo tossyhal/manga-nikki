@@ -192,6 +192,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- liveモードの日記CRUDはSupabase DBへ接続します。Auth `getClaims` / `getUser`、日記一覧・詳細・作成・編集・論理削除を実装済みです。日記詳細から最新jobの状態は読み取れますが、quota・生成受付・`/generations/:id`・画像Storage/署名URL・実AI・Queue・30日期限削除・PWAは未実装で、該当する個人APIは認証後も503を返します。サンプルモードは個人APIを認証せず拒否します。
+- liveモードの日記CRUDはSupabase DBへ接続します。Auth `getClaims` / `getUser`、日記一覧・詳細・作成・編集・論理削除を実装済みです。日記詳細から最新jobの状態は読み取れますが、quota・生成受付・`/generations/:id`・画像Storage/署名URL・実AI・Queue・30日期限削除は未実装で、該当する個人APIは認証後も503を返します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
 - ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
