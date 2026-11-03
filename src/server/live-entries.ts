@@ -137,7 +137,12 @@ function mapGeneration(value: unknown, entry: Entry): Generation {
   if (row.entry_id !== entry.id || row.id !== entry.latestGenerationId || row.is_mock === null)
     throw unavailable();
 
-  const base = { id: row.id, entryId: row.entry_id, mock: row.is_mock };
+  const base = {
+    id: row.id,
+    entryId: row.entry_id,
+    entryRevision: row.entry_revision,
+    mock: row.is_mock,
+  };
   if (row.status === 'queued') {
     if (row.stage !== null) throw unavailable();
     return { ...base, status: 'queued', stage: null };

@@ -299,7 +299,11 @@ export function createApp(
     const old = [...getRepository().generations.values()].find(
       (x) => x.owner === owner && x.key === key,
     );
-    if (old && (old.generation.entryId !== entry.id || old.revision !== input.expectedRevision))
+    if (
+      old &&
+      (old.generation.entryId !== entry.id ||
+        old.generation.entryRevision !== input.expectedRevision)
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     if (!old && input.expectedRevision !== entry.revision)
       throw new ApiError(409, 'REVISION_CONFLICT');
@@ -314,6 +318,7 @@ export function createApp(
     if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');
     const id = crypto.randomUUID();
     const assetId = crypto.randomUUID();
+    const entryRevision = entry.revision;
     const comic = {
       ...pageComic,
       visual: { kind: 'page' as const, assetId, textMode: 'external' as const },
@@ -321,8 +326,15 @@ export function createApp(
     getRepository().generations.set(id, {
       owner,
       key,
-      revision: entry.revision,
-      generation: { id, entryId: entry.id, status: 'succeeded', stage: null, comic, mock: true },
+      generation: {
+        id,
+        entryId: entry.id,
+        entryRevision,
+        status: 'succeeded',
+        stage: null,
+        comic,
+        mock: true,
+      },
     });
     getRepository().counts.set(counter, count + 1);
     entry.latestGenerationId = id;

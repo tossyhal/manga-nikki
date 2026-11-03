@@ -73,7 +73,11 @@ type DbRow = Record<string, unknown> & {
   expires_at: string;
 };
 
-function entryRow(owner: string, id = crypto.randomUUID(), changes: Partial<DbRow> = {}): DbRow {
+function entryRow(
+  owner: string,
+  id: string = crypto.randomUUID(),
+  changes: Partial<DbRow> = {},
+): DbRow {
   return {
     id,
     owner_id: owner,
@@ -403,7 +407,7 @@ describe('live diary HTTP API', () => {
     expect(malformed.status).toBe(400);
   });
 
-  it('maps an existing latest generation into the shared type and refuses unknown provenance', async () => {
+  it('returns the generation revision after the diary is edited and refuses unknown provenance', async () => {
     const environment = liveEnvironment();
     const owner = crypto.randomUUID();
     const token = await accessToken(environment, owner);
@@ -429,13 +433,35 @@ describe('live diary HTTP API', () => {
       is_mock: true,
     });
     const app = appWith(boundary);
+    boundary.rpcOverrides.set('update_entry', {
+      status: 200,
+      body: [
+        entryRow(owner, entry.id, {
+          latest_generation_id: generationId,
+          revision: 2,
+          body: '編集後の日記',
+        }),
+      ],
+    });
+    const updated = await apiRequest(app, environment, token, `/entries/${entry.id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: entry.diary_date,
+      body: '編集後の日記',
+    });
+    const updatedEntry = await updated.json();
+    expect(updated.status).toBe(200);
+    expect(updatedEntry.revision).toBe(2);
+    Object.assign(entry, { revision: updatedEntry.revision, body: updatedEntry.body });
+
     const response = await apiRequest(app, environment, token, `/entries/${entry.id}`);
     const detail = await response.json();
 
     expect(response.status).toBe(200);
+    expect(detail.revision).toBe(2);
     expect(detail.latestGeneration).toEqual({
       id: generationId,
       entryId: entry.id,
+      entryRevision: 1,
       mock: true,
       status: 'succeeded',
       stage: null,

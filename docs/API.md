@@ -174,7 +174,7 @@ type ComicDocument = {
 - `status`（6種類）：`queued` | `running` | `succeeded` | `failed` | `unknown` | `cancelled`
 - `stage`（進行段階）：`script`（脚本作成中） | `images`（画像描画中） | `saving`（保存中） | `null`
 
-共有型は`src/shared/schemas.ts`の`Generation`です。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
+共有型は`src/shared/schemas.ts`の`Generation`です。すべてのGenerationレスポンスには生成時の日記改訂番号`entryRevision`を含めます。これは漫画生成時点のEntryの`revision`で、後から日記を編集しても変わりません。HTTP v1のリクエスト契約は変更せず、このレスポンス項目を追加します。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、succeededの`entryRevision`が現在のEntryの`revision`より小さい場合は「編集前の日記から生成された漫画です。」と表示します。画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId, entryRevision = 1)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
 
 ### ポーリングと`unknown`状態の扱い
 
