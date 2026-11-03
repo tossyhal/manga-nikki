@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
 type PwaNoticeProps = {
@@ -7,11 +7,27 @@ type PwaNoticeProps = {
 };
 
 export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
+  const updateBlocked = diaryDirty || diaryBusy;
+  const updateBlockedRef = useRef(updateBlocked);
+  useLayoutEffect(() => {
+    updateBlockedRef.current = updateBlocked;
+  }, [updateBlocked]);
+  const reloadApprovedRef = useRef(false);
+  const [reloadPending, setReloadPending] = useState(false);
+  const onNeedReload = useCallback(() => {
+    if (reloadApprovedRef.current && !updateBlockedRef.current) {
+      reloadApprovedRef.current = false;
+      window.location.reload();
+      return;
+    }
+    reloadApprovedRef.current = false;
+    setReloadPending(true);
+  }, []);
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     offlineReady: [offlineReady, setOfflineReady],
     updateServiceWorker,
-  } = useRegisterSW();
+  } = useRegisterSW({ onNeedReload });
   const [online, setOnline] = useState(() => navigator.onLine);
 
   useEffect(() => {
@@ -24,7 +40,21 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
     };
   }, []);
 
-  const updateBlocked = diaryDirty || diaryBusy;
+  function requestUpdate() {
+    if (updateBlockedRef.current) return;
+    if (reloadPending) {
+      window.location.reload();
+      return;
+    }
+    reloadApprovedRef.current = true;
+    void updateServiceWorker();
+  }
+
+  function dismissUpdate() {
+    reloadApprovedRef.current = false;
+    setReloadPending(false);
+    setNeedRefresh(false);
+  }
 
   return (
     <>
@@ -43,9 +73,13 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
           </button>
         </output>
       )}
-      {needRefresh && (
+      {(needRefresh || reloadPending) && (
         <output className="pwa-notice" aria-live="polite">
-          <p>新しいバージョンを利用できます。更新は日記の入力・保存が終わってから行えます。</p>
+          <p>
+            {reloadPending
+              ? '別のタブで新しいバージョンが適用されました。この画面は入力内容を保つため再読み込みしていません。'
+              : '新しいバージョンを利用できます。更新は日記の入力・保存が終わってから行えます。'}
+          </p>
           {updateBlocked && (
             <p className="hint">
               {diaryBusy
@@ -54,14 +88,10 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
             </p>
           )}
           <div className="pwa-notice-actions">
-            <button
-              type="button"
-              disabled={updateBlocked}
-              onClick={() => void updateServiceWorker(true)}
-            >
-              更新する
+            <button type="button" disabled={updateBlocked} onClick={requestUpdate}>
+              {reloadPending ? 'この画面を再読み込み' : '更新する'}
             </button>
-            <button className="secondary" type="button" onClick={() => setNeedRefresh(false)}>
+            <button className="secondary" type="button" onClick={dismissUpdate}>
               あとで
             </button>
           </div>

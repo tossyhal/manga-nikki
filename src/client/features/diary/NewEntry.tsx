@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
 import { api, generate } from '../../lib/api';
@@ -21,7 +21,7 @@ export function NewEntry({ onActivityChange }: NewEntryProps) {
   const [busy, setBusy] = useState(false);
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onActivityChange({ dirty, busy });
   }, [busy, dirty, onActivityChange]);
 
