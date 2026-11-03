@@ -296,7 +296,7 @@ test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り�
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '漫画を作成する' }).click();
   await expect(page.getByRole('alert')).toContainText('保存済みの日記はそのままです');
-  await expect(page.getByText(draftEntryDetailFixture.body, { exact: true })).toBeVisible();
+  await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   await page.getByRole('button', { name: '新しい確認を取得' }).click();
   await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
@@ -402,7 +402,7 @@ test('生成APIの認証切れでは別の匿名登録を行わず、記録を�
   await page.getByRole('button', { name: '漫画を作成する' }).click();
   await expect(page.getByRole('alert')).toContainText('匿名セッションを確認できません');
   await expect(page.getByText('SECRET_ENV_NAME')).toHaveCount(0);
-  await expect(page.getByText(draftEntryDetailFixture.body, { exact: true })).toBeVisible();
+  await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   expect(generationRequests).toBe(1);
   expect(externalAuthRequests).toBe(0);
 });
