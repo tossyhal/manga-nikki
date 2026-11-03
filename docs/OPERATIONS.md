@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> この文書の実認証・DB・予算制御・公開機能は未実装です。初期基盤はlocalhostのモックだけを実装しています。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> liveモードのサーバーJWT検証境界は実装済みですが、フロントのSupabase Authセッション取得・DB接続・予算制御・公開機能は未実装です。日記DBのmigration・RLS・日記操作用RPCと隔離PostgreSQLテストは追加済みですが、共有DBへの適用は行っていません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -12,11 +12,14 @@
 
 - JWTと匿名認証の検証
   - 認証セッションの保存・更新はSupabase SDKに管理させます。現行設計はHttpOnly Cookie方式ではありません。JWTをURLのクエリやフラグメントへ入れません。
-  - 既存の匿名セッションを再利用し、サーバー側でJWTの「署名・issuer・audience・有効期限・`sub`（ユーザーID）」を必ず検証します。
+  - Workerは`Authorization: Bearer <JWT>`を厳密に読み取り、Supabase SDKの`auth.getClaims(jwt)`で署名・期限を検証します。その後、`iss`が`${SUPABASE_URL}/auth/v1`、`aud`が`authenticated`、`sub`が有効なUUIDであることを個別に検証します。
+  - Auth/JWKSの依存先障害や接続設定不備は503として扱い、不正JWTは401として扱います。JWT・認証ヘッダー・生のSDKエラーはレスポンスやログに含めません。
+  - 非対称署名鍵を使うプロジェクトでは`getClaims`はJWTの署名と期限を確認しますが、Auth側のセッション失効は確認しません。失効を即時反映する必要がある場合は、DB CRUD実装前にAuthサーバーへのユーザー照会を加えます。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
 - 読み取りと書き込みの分離
-  - 読み取り（SELECT）：利用者のJWTを付与したリクエスト単位のクライアントを使い、RLSで自分のデータのみ取得します。
-  - 書き込み（INSERT / UPDATE / DELETE）：Cloudflare Worker内のサーバー専用RPCからのみ行います（API側とRPC内の両方で所有者を二重確認します。Supabase secret keyを使うクライアントはサーバー内部だけに閉じます）。
+  - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
+  - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
+  - DB接続・CRUDの呼び出しは未実装です。liveモードの個人APIは検証済み`sub`をmiddlewareへ設定後、503を返します。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -40,6 +43,7 @@
 ### 公開設定と秘密情報の分離
 
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
+- Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
 - 公開用scriptsを実装する際は環境別のフロント設定を分け、ローカルの`.env.local`等がstaging/productionのビルドへ混入しないことを生成物で確認します。公開用コマンドは現時点で未実装です。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。

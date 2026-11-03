@@ -1,7 +1,7 @@
 # HTTP APIと共通契約v1（API）
 
 > エンドポイント共通プレフィックス：`/api/v1`
-> 以下はフロントエンド・バックエンド・DB・AIアダプター間の実装契約です（文書作成時点では未実装）。
+> 以下はフロントエンド・バックエンド・DB・AIアダプター間の共通契約です。各機能の実装状況は「初期基盤の実装範囲」に記載します。
 
 ### 初期基盤の実装範囲
 
@@ -9,7 +9,7 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-以降の実認証・DB・Queue・期限削除等の記述は後続の実装契約です。モックは再起動で消える一時メモリで、実環境への安全性を検証したものではありません。
+liveモードではSupabase access tokenの検証境界を実装していますが、検証後のDB・Queue・期限削除等は未実装です。liveモードの個人APIはJWT検証後も503を返し、モックrepositoryへ切り替えません。モックは再起動で消える一時メモリで、実環境への安全性を検証したものではありません。
 
 ---
 
@@ -22,7 +22,8 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
   - 定義されていない未知のプロパティが特権項目へ紛れ込むのを防ぐため、リクエストはすべてZodのstrict schemaで検証し、未知のキーがあれば拒否します。
 - 認証と所有者判定
   - 保護されたAPIには`Authorization: Bearer <Supabase access token>`ヘッダーを付与します。
-  - サーバー側でJWTの「署名・issuer・audience・有効期限・`sub`（ユーザーID）」を検証します。
+  - `auth.getClaims(jwt)`でJWT署名と期限を検証し、サーバーがさらにissuerが`${SUPABASE_URL}/auth/v1`、audienceが`authenticated`、`sub`がUUID形式であることを確認します。検証済み`sub`だけをサーバー内の所有者として扱います。
+  - JWKS取得などAuth依存先が利用できない場合は503、JWT不正やclaim不一致は401を返します。公開の`/health`・`/config`はJWTを要求しません。
   - リクエスト本文やクエリに`userId`は含めません（必ず検証済みJWTの`sub`から所有者を特定します）。
 - レスポンスとエラー形式
   - エラー時もHTMLではなく必ずJSONを返します。
@@ -218,6 +219,8 @@ type ComicDocument = {
 
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
+
+日記・生成ジョブ管理テーブルと`create_entry`・`update_entry`・`request_entry_deletion`のmigrationを追加済みです。RPCの具体的な引数、列の読み取り権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。画像保存・予算関連テーブル・生成RPC・アプリからの実接続は後続です。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
 ### テーブル設計
 

@@ -9,6 +9,7 @@
     "format": "oxfmt .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:db": "node scripts/test-db.mjs",
     "test:e2e": "playwright test",
     "test:e2e:pwa": "pnpm build && playwright test --config playwright.pwa.config.ts",
     "build": "vite build && node scripts/check-pwa-build.mjs",
@@ -16,6 +17,7 @@
     "format:check": "oxfmt --check ."
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "hono": "^4.13.14",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
