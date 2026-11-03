@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiClientError, generate } from './api';
+import {
+  api,
+  ApiClientError,
+  generate,
+  getQuotaForExistingSession,
+  recheckGeneration,
+} from './api';
 import { invalidateClientConfig } from './config';
+
+vi.mock('./auth', () => ({
+  ClientAuthError: class ClientAuthError extends Error {},
+  getLiveAccessToken: vi.fn().mockResolvedValue(null),
+}));
 
 const mockConfig = {
   generationAvailable: true,
@@ -65,7 +76,7 @@ describe('API error guidance', () => {
     });
   });
 
-  it('preserves actionable API messages', async () => {
+  it('maps API codes to safe guidance without exposing server messages', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(() =>
@@ -87,7 +98,7 @@ describe('API error guidance', () => {
     const failure = await api('/entries').catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ApiClientError);
     expect(failure).toMatchObject({
-      message: '記録が更新されています。',
+      message: '記録が更新されています。最新の内容を読み込んでから操作してください。',
       status: 409,
       code: 'REVISION_CONFLICT',
       requestId: 'test-request',
@@ -116,27 +127,67 @@ describe('API error guidance', () => {
     expect(generationUrl).toBe(`/api/v1/entries/${entry.id}/generations`);
     expect((generationInit.headers as Headers).get('Authorization')).toMatch(/^Bearer mock:/);
     expect(generationInit.body).toContain('"captchaToken":""');
+    expect((generationInit.headers as Headers).get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('blocks generation in live mode before sending an empty generation CAPTCHA', async () => {
+  it('blocks live generation without a fresh CAPTCHA before sending a personal request', async () => {
     invalidateClientConfig();
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          Response.json({ ...mockConfig, dataMode: 'live', generationAvailable: true }),
-        ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ ...mockConfig, dataMode: 'live', generationAvailable: true }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
     const entry = {
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       revision: 1,
     } as Parameters<typeof generate>[0];
 
     await expect(generate(entry)).rejects.toMatchObject({
-      code: 'GENERATION_CAPTCHA_UNAVAILABLE',
-      status: 503,
+      code: 'CAPTCHA_REQUIRED',
+      status: 403,
     });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('reuses the same key for receipt checks without a CAPTCHA token', async () => {
+    const request = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(Response.json({ generationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })),
+      );
+    vi.stubGlobal('fetch', mockFetch(request));
+    const entry = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      revision: 4,
+    } as Parameters<typeof generate>[0];
+
+    await generate(entry);
+    await recheckGeneration(entry);
+
+    const first = request.mock.calls[0]?.[1] as RequestInit;
+    const second = request.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(first.headers).get('Idempotency-Key')).toBe(
+      new Headers(second.headers).get('Idempotency-Key'),
+    );
+    expect(JSON.parse(String(second.body))).toEqual({ expectedRevision: 4, captchaToken: '' });
+  });
+
+  it('reads quota only from an existing live session', async () => {
+    const request = vi.fn().mockResolvedValue(Response.json({ remainingToday: 3 }));
+    vi.stubGlobal('fetch', mockFetch(request));
+    invalidateClientConfig();
+    const configResponse = vi
+      .fn()
+      .mockResolvedValue(Response.json({ ...mockConfig, dataMode: 'live' }));
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/config') return configResponse(input, init);
+      return request(input, init);
+    });
+
+    await expect(getQuotaForExistingSession()).resolves.toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(configResponse).toHaveBeenCalledOnce();
   });
 
   it('does not use mock auth or make personal requests in sample mode', async () => {
@@ -148,6 +199,7 @@ describe('API error guidance', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(api('/entries')).rejects.toMatchObject({ code: 'SAMPLE_ONLY', status: 503 });
+    await expect(getQuotaForExistingSession()).resolves.toBeNull();
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/config', { cache: 'no-store' });
