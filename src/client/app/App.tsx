@@ -171,20 +171,20 @@ function App() {
       </header>
       <aside className="notice">
         {config?.dataMode === 'mock'
-          ? '開発用モック / AI・クラウドへの送信なし / サーバー再起動で記録は消えます'
+          ? '記録は一時的に保存され、予告なく消える場合があります。AIには送信されません。'
           : config?.dataMode === 'live'
-            ? '匿名利用 / 保存前に利用条件をご確認ください'
+            ? '記録を保存する前に利用条件をご確認ください。'
             : config?.dataMode === 'sample'
-              ? 'サンプル閲覧用 / 保存・生成はこの環境では利用できません'
+              ? 'サンプルを表示しています。保存・生成は利用できません。'
               : configError
                 ? configUnavailableMessage
-                : '環境を確認しています…'}
+                : '利用できる機能を確認しています…'}
       </aside>
       <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
       <main id="main">
         <Outlet context={context} />
       </main>
-      <footer>漫画日記 / 開発プレビュー</footer>
+      <footer>漫画日記</footer>
     </>
   );
 }

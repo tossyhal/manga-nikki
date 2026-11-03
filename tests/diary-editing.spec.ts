@@ -10,9 +10,27 @@ import {
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: '2026-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    }),
+  );
+});
+
 async function configureDetail(page: Page, detail = draftEntryDetailFixture) {
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  if (detail.latestGenerationId && detail.latestGeneration) {
+    await page.route(`**/api/v1/generations/${detail.latestGenerationId}`, (route) =>
+      route.fulfill({ json: detail.latestGeneration }),
+    );
+  }
 }
 
 async function setLiveSession(page: Page) {
@@ -76,6 +94,9 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   let currentDetail = detail;
   let patch: { expectedRevision: number; diaryDate: string; body: string } | undefined;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
   await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
     if (route.request().method() !== 'PATCH') return route.fulfill({ json: currentDetail });
     const payload = route.request().postDataJSON() as {
@@ -111,7 +132,7 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await expect(page.getByText('1000 / 1,000文字')).toBeVisible();
   await page.getByRole('button', { name: '変更を保存' }).click();
 
-  await expect(page.getByText('2026-01-02 / モック漫画')).toBeVisible();
+  await expect(page.getByText('2026-01-02 / 固定サンプル')).toBeVisible();
   await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
   await expect(page.getByText(updatedBody, { exact: true })).toBeVisible();
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
@@ -129,7 +150,9 @@ test('生成待ち・生成中の日記では編集操作を表示しない', as
     await page.goto(`/entries/${entryId}`);
     await expect(page.getByRole('button', { name: '日記を編集' })).toHaveCount(0);
     await expect(
-      page.getByText(status === 'queued' ? '生成待ちです。' : '漫画を作成しています。'),
+      page.getByText(
+        status === 'queued' ? '受付済みです。生成を待っています。' : '画像を描いています。',
+      ),
     ).toBeVisible();
     await page.unrouteAll({ behavior: 'wait' });
   }
@@ -174,7 +197,11 @@ for (const failure of [
     await page.getByRole('button', { name: '変更を保存' }).click();
 
     await expect(page.getByRole('alert')).toContainText(
-      failure.status === 401 ? '匿名セッションを確認できません。' : '保存できませんでした。',
+      failure.status === 401
+        ? '匿名セッションを確認できません。'
+        : failure.code === 'REVISION_CONFLICT'
+          ? '記録が更新されています。最新の内容を読み込んでから操作してください。'
+          : '必要な機能を確認できないため、漫画の受付を停止しています。',
     );
     await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
   });
@@ -242,6 +269,9 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
   };
   let patchAttempted = false;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: latest.latestGeneration }),
+  );
   await page.route(`**/api/v1/entries/${entryId}`, (route) => {
     if (route.request().method() === 'PATCH') {
       patchAttempted = true;
@@ -271,7 +301,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
     () => page.getByRole('button', { name: '最新の記録を読み込む' }).click(),
     true,
   );
-  await expect(page.getByText('生成待ちです。')).toBeVisible();
+  await expect(page.getByText('受付済みです。生成を待っています。')).toBeVisible();
   await expect(page.getByRole('button', { name: '日記を編集' })).toHaveCount(0);
   await expect(page.getByLabel('日記', { exact: true })).toHaveCount(0);
 });
