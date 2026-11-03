@@ -14,6 +14,7 @@
   - 認証セッションの保存・更新はSupabase SDKに管理させます。現行設計はHttpOnly Cookie方式ではありません。JWTをURLのクエリやフラグメントへ入れません。
   - Workerは`Authorization: Bearer <JWT>`を厳密に読み取り、Supabase SDKの`auth.getClaims(jwt)`で署名・期限を検証します。その後、`iss`が`${SUPABASE_URL}/auth/v1`、`aud`が`authenticated`、`sub`が有効なUUIDであることを個別に検証します。
   - Auth/JWKSの依存先障害や接続設定不備は503として扱い、不正JWTは401として扱います。JWT・認証ヘッダー・生のSDKエラーはレスポンスやログに含めません。
+  - 非対称署名鍵を使うプロジェクトでは`getClaims`はJWTの署名と期限を確認しますが、Auth側のセッション失効は確認しません。失効を即時反映する必要がある場合は、DB CRUD実装前にAuthサーバーへのユーザー照会を加えます。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
 - 読み取りと書き込みの分離
   - 利用者JWTを付ける`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにしています。前者は読み取り用、後者はサーバー専用RPC呼び出し用です。incoming Authorization headerをRPC clientへ渡しません。
