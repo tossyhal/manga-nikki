@@ -26,7 +26,7 @@
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込みはsecret専用RPC経由です。`reserve_generation` RPCは実装済みですがgeneration / quota APIからは未接続で、該当API・Queue・Storageは未実装です。
+  - 日記CRUDは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込みはsecret専用RPC経由です。`reserve_generation`と実行claim・attempt記録・失敗時の安全精算RPCは実装済みですがgeneration / quota APIからは未接続で、Queue・Storage・実AIは未実装です。現行`reserve_generation`は`p_generation_enabled=false`でmock profileも新規受付しないため、local-connectedの受付からmock実行までの接続は受付/Queue担当PRで行います。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -95,6 +95,7 @@
 - 承認予算 $B$ に対する生成可能回数の上限：
   $$\text{生成数候補} = \lfloor B / C_{\max} \rfloor$$
 - 金額はすべて整数（`micro USD` = $10^{-6}$ USD単位）で予約計算し、モデルの単価や出力トークン上限が不明な状態では外部公開しません（税金・為替変動・別用途のクラウド請求は別途余裕を見ます）。
+- 現行DB RPCはscriptを1回、imagesをprofileの`max_image_calls`回まで（整数1〜4、未指定時1）に制限します。`max_cost_micro_usd`にはこの最大呼出し数を含めます。失敗後の自動再送はせず、同じstageの次imageは直前の成功後だけ開始できます。
 
 | 予約状態（`state`） | 生成枠・予算金額の扱い |
 |---|---|
@@ -106,7 +107,7 @@
 - 予算運用の厳守ルール：
   - 生成成功時に「事前見積もり（$C_{\max}$）と実際の消費額の差額」が出ても、MVPでは自動的に余り枠として再利用しません。
   - ユーザーが後から日記を削除したり日付を変更しても、過去に消費した回数や支出カウンターは減らしません。
-  - AI SDKの自動リトライ機能は無効化するか、最大リトライ回数分を最初から $C_{\max}$ の予算に含めます。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。
+  - AI SDKの自動リトライ機能は無効にします。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。再試行機能を別途承認する場合は、呼出し上限と$C_{\max}$を同時に見直します。
   - Queueのメッセージ再試行（retry）によって同じAI呼び出しを再実行せず、`unknown` / `held`状態にして人間が調査します。
 
 ### 実AI有効化前の承認記録ルール

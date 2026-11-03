@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。予約はDB内で完結し外部AI・Queue・Storageを呼びません。generation受付API・quota API接続・生成状態遷移は未実装で、初期policyは停止中です。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。生成受付API、Queue Consumer、実AI、画像Storageは未実装です。初期policyは停止中です。
 
 ## 検証
 
@@ -22,7 +22,7 @@ pnpm test:db
 
 ## 保存API担当との接続契約
 
-書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERTできます。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
+書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。RPCの実行権限は`service_role`だけに付与し、関数は`SECURITY INVOKER`・空の`search_path`で動作します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERT・`state`列UPDATEできます。provider attempt ledgerはSELECT・INSERTでき、UPDATEは`state`・`request_id`・`finished_at`列に限定します。どちらのprivate ledgerもDELETE権限はありません。SECURITY INVOKER関数を使うため、これらの最小DMLはDBロールにも必要です。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
 
 | RPC | 引数 | 戻り値 |
 |---|---|---|
@@ -31,6 +31,10 @@ pnpm test:db
 | `request_entry_deletion` | `p_actor_id uuid`, `p_entry_id uuid` | `{"deletionAccepted":true}` |
 | `find_generation_receipt` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid` | 既存時はreceipt JSONB、未登録時は`null`。別request hashなら`IDEMPOTENCY_CONFLICT` |
 | `reserve_generation` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid`, `p_generation_enabled boolean` | SQL JSONB `{"generation_id":"…","status":"queued","status_url":"/api/v1/generations/…"}`; API maps to `GenerationReceipt` camelCase |
+| `claim_generation` | `p_generation_id uuid` | claimできた場合はsnapshot・`claim_token`・`deadline_at`を含むJSONB、重複配信・削除・期限切れ・cancel要求済みjobは`null`。claim期限は15分 |
+| `begin_provider_attempt` | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean` | JSONB `{"attempt_id":"…","generation_id":"…","stage":"script|images","call_index":1,"mode":"mock|provider","is_mock":true}`。script成功後の初回image開始と同じtransactionでstageをimagesへ進めます。scriptは1回、imageはprofileの`max_image_calls`まで連番で開始可能。次のimageは直前の成功後だけ許可し、失敗後は再送しない。mockは`mode=mock`で返り外部AIへ送信しない |
+| `finish_provider_attempt` | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null` | JSONB `{"attempt_id":"…","state":"succeeded|failed|unknown","request_id":null,"finished_at":"…","is_mock":true}`。同じ結果の再送は冪等 |
+| `fail_or_hold_generation` | `p_generation_id uuid`, `p_claim_token uuid`（queued jobや期限切れclaimは`null`）, `p_terminal_status text` (`failed` / `cancelled`) | JSONB `{"generation_id":"…","status":"failed|cancelled|unknown","reservation_state":"released|consumed|held","released":true}`。外部未送信の証拠がある場合だけ予約を返却 |
 
 DB行はsnake_caseです。API担当は`id`・`diary_date`・`body`・`revision`・`latest_generation_id`・`created_at`・`updated_at`を共有型`Entry`のcamelCaseへ変換し、内部カラムをHTTPレスポンスに含めないでください。
 
@@ -61,7 +65,7 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - 作成は所有者UUIDの64bitハッシュによるトランザクションadvisory lockで直列化します。下書きは「未削除・期限内・`latest_generation_id is null`」を数え、最大20件です。削除済み・期限切れの記録は枠を使いません。
 - 編集・削除は先に日記行を`FOR UPDATE`でロックします。削除は日記を非表示にしてからactiveジョブへ`cancel_requested`を付け、同じトランザクションで確定します。生成枠の解放やジョブの実行結果の確定は行いません。
 - **後続の生成予約RPCも、日記の有効性・revisionを再確認し、同じ日記行をロックしたままジョブ作成・`latest_generation_id`更新を行ってください。**これが編集・削除との競合防止の前提です。全体policy等のロック順は`docs/API.md`の順序を維持し、entry→jobの順にします。
-- 後続のquota解放RPCも、`docs/API.md`の「全体policy/total → 全体day → ユーザーday → entry → job」の順で行ロックします。予約時に記録した`reserved_day`のカウンターを使い、entry/jobを保持したままquotaロックを取りに行かないでください。
+- quota lockを取るreserve/claim/attempt/settlement RPCは、policy用advisory lock `(20261103, 10001)`→global total→global day→user day→entry→job→attemptの順で行ロックします。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。予約時に記録した`reserved_day`のカウンターを使い、entry/jobを保持したままquotaロックを取りに行かないでください。
 - `reserve_generation`は`p_generation_enabled`をWorkerの`GENERATION_ENABLED`環境設定から受け取るサーバー専用の信頼値として扱います。ブラウザから自由指定させず、環境設定がfalseまたはDB policyが無効なら新規予約を止めます。同じキー・同じcanonical requestの既存job照会は、停止後もquota/CAPTCHAなしで同じ`generationId`を返します。SQL JSONBの`generation_id` / `status` / `status_url`はAPIで`generationId` / `status` / `statusUrl`へmapします。
 - APIはCAPTCHA検証前に`find_generation_receipt`を呼び、receiptがなければTurnstile検証後に`reserve_generation`を呼びます。lookupが未登録時に予約を作らないため、CAPTCHAを通らず新規予約されることはありません。reserve側も並行要求に備えて既存keyを再確認します。
 - `find_generation_receipt`と`reserve_generation`は同じcanonical request hash helperを使います。receiptを返す前に有効な本人entryを確認し、現在revisionの一致は要求しません。削除・期限切れentryは`NOT_FOUND`です。findは停止中も照会でき、quota counter・reservation・generation・日記pointerを書き換えません。
@@ -70,13 +74,18 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - ロックはpolicy用2整数advisory transaction lock `(20261103, 10001)`→global total→global day→user day→entry/jobの順です。既存`create_entry`の1 bigint advisory lockとは別key spaceです。`generation_policy`のBEFORE UPDATE STATEMENT triggerも同じlockを取るため、policy読取はservice_role SELECTだけで行え、管理者更新と予約は直列化されます。global total行を各予約が排他ロックし、全期間枠・予算の最終枠を直列化します。counter行の作成も`INSERT ... ON CONFLICT`で一意キーに集約し、READ COMMITTEDの単一RPCトランザクション内で行います。
 - 管理者がpolicyを変更する場合は、変更だけを行う短い単独transactionで更新・commitしてください。更新transactionのcommitまで同じpolicy lockを保持します。
 - `reserve_generation`のDB結果はSQL snake_caseのJSONBです。API境界で`generation_id` / `status` / `status_url`をHTTP `GenerationReceipt`の`generationId` / `status` / `statusUrl`へmapし、内部snapshot、profile、費用、reservationをレスポンスへ含めません。
-- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactiveジョブは1つだけです。`is_mock`は生成元の公開metadataです。後続のjob writerは固定結果ならtrue、実生成ならfalseを必ず設定し、NULLを既定値でfalseに埋めないでください。生成ジョブの外部AI実行や状態遷移のRPCは未実装です。
+- 日記とジョブの所有者・対象日記の一致は複合外部キーでも保証します。1日記につきactive jobは1つだけです。`is_mock`は生成元の公開metadataです。後続のjob writerは固定結果ならtrue、実生成ならfalseを必ず設定し、NULLを既定値でfalseに埋めないでください。実行claim・provider attempt・失敗時の安全精算RPCは追加済みですが、Queue Consumer・実AI・完了/Storage連携RPCは未実装です。
 - `latest_generation_id`を保持したまま編集し、`revision`だけを増やします。画面側は`entry_revision`との差から編集前の漫画であることを表示できます。
+- `claim_generation`はQueueの重複配信を含め、`queued` jobの1回目だけを`running`にし、15分のclaim期限を設定します。戻り値にはQueue Consumerだけが使う日記・profile snapshotとclaim tokenを含みます。重複claimや削除・期限切れ・キャンセル要求済みjobは`null`です。claim後の期限切れjobは自動で再claimしません。
+- `begin_provider_attempt`はentry/jobのキャンセル状態、claim tokenと期限、reservation、DB policyを再確認します。実AIはWorkerの`p_generation_enabled=true`とDB policyの`enabled=true`を両方要求します。`is_mock=true`はDB snapshotからのみ判定し、`p_generation_enabled=false`でも`mode=mock`のattemptだけを開始できます。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定時1、上限4）連番で開始でき、前のimageが成功した場合に限り次へ進みます。最初のimage開始時には、scriptの成功を確認して`generations.stage`を`script`から`images`へ同transactionで進めます。失敗後の再送はせず、`dispatched` / `unknown`が残る間も次の呼出しを拒否します。attempt行は外部送信前にcommitします。mock attemptも`is_mock=true`として台帳へ記録し、provider送信経路には渡しません。
+- profileの`max_image_calls`はDB policy内だけで設定できるoptional整数で、許容値は1〜4、未指定時は1です。`max_cost_micro_usd`はscript 1回と設定したimage呼出し数の最大費用を含めます。HTTPリクエストからこの値を受け取りません。
+- `finish_provider_attempt`は`dispatched` attemptだけを確定します。`request_id`は後から入力するproviderの不透明な照会IDで、最大200文字、mockではnullです。`unknown`は自動再実行せず、job精算で予約を保持します。
+- `fail_or_hold_generation`はqueued / runningのみをterminalへ遷移し、terminal再送や古いclaimで状態を上書きしません。non-mock attemptに`dispatched` / `unknown`があればjobを`unknown`、reservationを`held`にします。non-mock attemptの既知結果や確定したmock結果は予約最大額を`consumed`にし、attemptが無いか未確定のmockのみで外部未送信が証明できる場合は`released`にして、global total・元のJST日付のglobal day/user day counterを1回だけ戻します。日記削除・期限切れは消費済み枠を戻しません。
 
 ## 適用と後続作業
 
 この作業では共有Supabaseへの適用は行いません。人間のレビュー後、DB担当が接続先と既存migration履歴を確認し、採用したSupabase CLIのmigration手順で適用します。適用対象は`migrations/`だけです。`tests/bootstrap.sql`やテスト用クラスタを本番へ持ち込まないでください。
 
-画像保存・Storage権限、Queue実行権と完了確定、予約の確定/安全な解放、期限切れの物理削除・匿名ユーザー削除は後続migrationで追加します。物理削除時には画像削除後、日記の`latest_generation_id`を外してジョブ→日記の順に消す必要があります。加えて`entries`を物理削除すると`(owner_id, create_request_id)`の重複記録も消えるため、後続実装では冪等性tombstone等を保持し、削除後の古い`createRequestId`再送で日記を再作成できないようにしてください。現在の外部キーは意図しない連鎖削除を行いません。
+画像保存・Storage権限、Queue実行権と完了確定、期限切れの物理削除・匿名ユーザー削除は後続migrationで追加します。予約のconsumed / held / 安全なreleaseは実行migrationで追加済みです。物理削除時には画像削除後、日記の`latest_generation_id`を外してjob→日記の順に消す必要があります。加えて`entries`を物理削除すると`(owner_id, create_request_id)`の重複記録も消えるため、後続実装では冪等性tombstone等を保持し、削除後の古い`createRequestId`再送で日記を再作成できないようにしてください。現在の外部キーは意図しない連鎖削除を行いません。
 
 公式資料: [Database Functions](https://supabase.com/docs/guides/database/functions)、[Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)、[Database Migrations](https://supabase.com/docs/guides/deployment/database-migrations)。
