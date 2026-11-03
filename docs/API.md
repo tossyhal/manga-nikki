@@ -11,6 +11,8 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 
 liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細の読み取りは利用者JWT + RLSとAPI側のowner条件を使い、作成・編集・論理削除はサーバー専用RPCを使います。日記詳細は既存の`latestGeneration`状態も読み取ります。generation受付・quota・独立した`GET /generations/:id`・画像Storage/署名URL・期限切れ物理削除・Queueは未実装で、該当APIは503を返します。live APIがモックrepositoryへ切り替わることはありません。モックは再起動で消える一時メモリで、実Supabase環境の結合確認は未実施です。
 
+DBにはclaim・provider attempt・失敗時の安全精算RPCを追加済みです。HTTP受付やQueue Workerからはまだ呼び出しておらず、共有Supabaseへの適用も未実施です。
+
 ---
 
 ## 1. 共通規則
@@ -223,7 +225,7 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成ジョブ管理テーブル、生成元`is_mock`、private予算台帳、`find_generation_receipt` / `reserve_generation` RPCのmigrationを追加済みです。日記CRUDのHTTP接続は実装済みですが、共有DBへmigrationはまだ適用していません。生成受付HTTP API・Queue・実AI・画像保存は後続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付RPC、実行claim / provider attempt / 安全精算RPCのmigrationを追加済みです。日記CRUDのHTTP接続は実装済みですが、共有DBへmigrationはまだ適用していません。生成受付HTTP API・Queue Consumer・実AI・画像保存は後続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
 `generations.is_mock`は生成元metadataです。後続のjob writerは固定結果なら`true`、実生成なら`false`を必ず設定します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
@@ -237,9 +239,9 @@ type ComicDocument = {
 | `private.generation_policy` | `id=1`, `enabled`, `user_daily_limit`, `global_daily_limit`, `global_total_limit`, `budget_micro_usd`, `model_profile_json` | 初期値は`enabled=false`、全体枠/予算`0`。管理者のみ操作可能 |
 | `private.quota_counters` | `scope`, `subject`, `day_key`, `count`, `committed_micro_usd` | `(scope, subject, day_key)`の一意制約。並行予約時に行ロックして集計 |
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
-| `private.provider_attempts` | `generation_id`, `stage`, `call_index`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。AIモデルの重複呼び出しを防止 |
+| `private.provider_attempts` | `id`, `generation_id`, `owner_id`, `stage`, `call_index`, `is_mock`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。生成jobと所有者の一致、mock由来の固定、AIモデルの重複呼び出し防止 |
 
-`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。provider/modelなどの他設定はprofile snapshotに保持します。
+`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。optionalな`max_image_calls`は整数`1`〜`4`で、未指定時は`1`です。`max_cost_micro_usd`はscript 1回と`max_image_calls`までのimage呼出し最大費用を含めます。provider/modelなどの他設定はprofile snapshotに保持します。
 
 - 所有者とスキーマ保護：`owner_id`は検証済みJWTの`sub`から設定し、`entry`・`job`・`asset`の間でも所有者が一致することを照合します。`auth.users`はSupabase管理とし、`private`スキーマは外部Data APIへ公開しません。
 - 主なインデックス：`entries(owner_id, diary_date, id)`、`generations(owner_id, created_at)`、`generations(status, created_at)`、`assets(generation_id)`。
@@ -254,15 +256,21 @@ type ComicDocument = {
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
 | `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
-| `claim_generation` | Queue Consumer | `queued`状態のジョブだけを`running`へ遷移させ、`claimToken`を発行 |
-| `begin_provider_attempt` | Queue Consumer | `claimToken`の一致と同一`(stage, call_index)`が未実行であることを検査し、`dispatched`を記録 |
-| `complete_generation` | Queue Consumer | `claimToken`、未削除状態、アセット数と所有権を検証し、生成結果を確定 |
-| `fail_or_hold_generation` | Consumer / 定期照合 | 外部AI呼び出し済みなら保守的に`held` / `consumed`を維持。外部未送信が確認できた場合のみ枠を`release`（返却） |
+| `claim_generation` | Queue Consumer | `p_generation_id uuid`。queued jobを1Consumerだけがrunningへ移し、15分の`claim_token`を設定。日記/profile snapshotとtoken/deadlineを返す。再claim不可のjobや削除・期限切れ・cancel要求済みjobは`null` |
+| `begin_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean`。claim/期限/entry/cancel/policyを再検査し、送信前にattemptを記録。script成功後の最初のimages開始と同じtransactionで`stage`も進める。返値`{attempt_id,generation_id,stage,call_index,mode,is_mock}`。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）成功ごとに次を許可。`mode=mock`は実AIを呼ばない専用経路で、`GENERATION_ENABLED=false`でもprofile由来`is_mock=true`だけを許可 |
+| `finish_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null`。dispatch済みattemptだけを`succeeded` / `failed` / `unknown`に確定。同じ確定値の再送だけ冪等 |
+| `complete_generation` | Queue Consumer（未実装） | 保存契約PRで追加。`claimToken`、未削除状態、アセット数と所有権を検証し、生成結果を確定 |
+| `fail_or_hold_generation` | Consumer / 定期照合 | `p_generation_id uuid`, `p_claim_token uuid`（queued jobは`null`）, `p_terminal_status text`（`failed` / `cancelled`）。未送信が証明できる場合だけreservationをreleaseし、結果不明はjob `unknown` / reservation `held`、結果既知は最大予約額を`consumed` |
 
-- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・ジョブ作成・ポインタ更新を1トランザクションで処理します。policy用2整数advisory transaction lock→global total→global day→user day→entry/jobの固定順序でロックし、キャンセル・解放処理でも同じ順を守ります。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
 - APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して`reserve_generation`を呼びます。予約RPCは並行受付との競合に備えて内部でも既存キーを再確認します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
 - `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
+- `claim_generation`のJSONBはQueue Consumerだけが読み、`generation_id`・`entry_id`・`owner_id`・`entry_revision`・`is_mock`・`input_snapshot`・`model_profile_snapshot`・`claim_token`・`deadline_at`を含みます。claimを15分で期限切れにしても自動再claimはしません。
+- `begin_provider_attempt`のJSONBは`attempt_id`・`generation_id`・`stage`・`call_index`・`mode`・`is_mock`です。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）連番で開始できます。最初のimages attemptはscript成功後に限り、`generations.stage`を`script`から`images`へ同じtransactionで進めます。逆戻りはできません。次のimages callは直前の`succeeded`後だけ許可し、同じ`(generation_id, stage, call_index)`は再送できません。失敗後・結果不明・dispatch未確定の同じstageで再送せず、`dispatched` / `unknown`が残る間はjob内の次attemptも拒否します。mockでもattemptを記録し、job snapshotの`is_mock`を台帳へ固定します。`mode=mock`の呼び出し側は固定fixture等のmock経路に限定し、AI providerへ渡しません。
+- `finish_provider_attempt`はclaim token、deadline、entryの生存状態と指定attemptを再確認し、dispatch済みattemptだけを確定します。provider request IDはnullableかつ最大200文字で、mock attemptでは`null`です。`unknown`は新しい呼び出しで解決しません。
+- `fail_or_hold_generation`はqueued / runningの未終端jobのみを扱います。non-mockの`dispatched` / `unknown` attemptが残れば`unknown`と`held`にします。既知のnon-mock結果、または確定したmock結果があれば最大予約額を`consumed`にし、それ以外で外部未送信を証明できる場合のみ`released`へ変更します。releaseは予約時の`reserved_day`を使い、global total / global day / user dayの`count`と`committed_micro_usd`を各1回だけ戻します。削除済みjobの既知費用は返しません。terminal job、古いclaim token、二重精算では状態やcounterを書き換えません。
+- `begin_provider_attempt`がmock profileを許可することと、新規受付が可能なことは別です。現行`reserve_generation`は`p_generation_enabled=false`で新規jobを拒否するため、local-connectedの生成受付からmock実行までの接続は受付/Queue担当の後続PRで行います。
 - canonical requestはAPI v1・`entryId`・`expectedRevision`のJSONB表現をUTF-8 SHA-256化した値で、`find_generation_receipt`と`reserve_generation`が同じprivate helperを使用します。JSON body、単価、profile ID、残り枠をRPC引数で受けず、本文・profileはDB正本から取得します。
 
 ### Storage（画像保存）と削除・再試行のルール

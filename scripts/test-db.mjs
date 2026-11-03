@@ -587,6 +587,149 @@ try {
     'false:4:28:4:28:1:1:1:7',
   );
   console.log('成功: 予約・policy停止・同一キー再送の待機順でもreceiptとquotaを一件だけ維持');
+
+  const executionActors = [
+    'bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc',
+    'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+  ];
+  const executionEntries = succeeded(
+    await sql(`
+      insert into auth.users(id) values ${executionActors.map((id) => `('${id}')`).join(',')};
+      update private.generation_policy set enabled = true, user_daily_limit = 10,
+        global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
+        model_profile_json = '{"profile_id":"fictional-execution-v1","is_mock":false,"max_cost_micro_usd":1}'::jsonb;
+      set role service_role;
+      select (public.create_entry('${executionActors[0]}',gen_random_uuid(),current_date,'claim競合の架空日記','v1')).id;
+      select (public.create_entry('${executionActors[1]}',gen_random_uuid(),current_date,'cancel競合の架空日記','v1')).id;
+    `),
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(executionEntries.length, 2);
+  const [claimEntry, cancelEntry] = executionEntries;
+  const executionGenerationIds = [];
+  for (const [index, entryId] of [claimEntry, cancelEntry].entries()) {
+    const actor = executionActors[index];
+    const key =
+      index === 0 ? 'dededede-dede-4ded-8ded-dededededede' : 'efefefef-efef-4fef-8fef-efefefefefef';
+    const receipt = JSON.parse(
+      succeeded(
+        await sql(
+          `set role service_role; select public.reserve_generation('${actor}','${entryId}',1,'${key}',true);`,
+        ),
+      ),
+    );
+    executionGenerationIds.push(receipt.generation_id);
+  }
+  const [claimGeneration, cancelGeneration] = executionGenerationIds;
+
+  const duplicateClaims = await runBehindLock({
+    holderName: 'mn-db-claim-duplicate-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-claim-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () => `set role service_role; select public.claim_generation('${claimGeneration}');`,
+    ),
+  });
+  const acquiredClaims = duplicateClaims.map((result) => succeeded(result)).filter(Boolean);
+  assert.equal(acquiredClaims.length, 1);
+  const acquiredClaim = JSON.parse(acquiredClaims[0]);
+  assert.equal(acquiredClaim.generation_id, claimGeneration);
+  assert.ok(acquiredClaim.claim_token);
+  const duplicateBegins = await runBehindLock({
+    holderName: 'mn-db-attempt-duplicate-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-attempt-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () =>
+        `set role service_role; select public.begin_provider_attempt('${claimGeneration}','${acquiredClaim.claim_token}','script',1,true);`,
+    ),
+  });
+  assert.equal(duplicateBegins.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    duplicateBegins.filter(
+      (result) => result.code !== 0 && result.stderr.includes('ATTEMPT_UNRESOLVED'),
+    ).length,
+    5,
+  );
+  const heldClaimResult = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_or_hold_generation('${claimGeneration}','${acquiredClaim.claim_token}','failed');`,
+      ),
+    ),
+  );
+  assert.equal(heldClaimResult.status, 'unknown');
+  assert.equal(heldClaimResult.reservation_state, 'held');
+  assert.equal(
+    succeeded(
+      await sql(
+        `select count(*) from private.provider_attempts where generation_id = '${claimGeneration}';`,
+      ),
+    ),
+    '1',
+  );
+  console.log('成功: 6並列claimは1 Consumerだけが取得し、同一provider attemptは1回だけ開始');
+
+  const cancelClaim = JSON.parse(
+    succeeded(
+      await sql(`set role service_role; select public.claim_generation('${cancelGeneration}');`),
+    ),
+  );
+  const counterBeforeCancelRace = succeeded(
+    await sql(
+      "select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total';",
+    ),
+  );
+  const cancelDispatchRace = await runBehindLock({
+    holderName: 'mn-db-cancel-dispatch-holder',
+    lockSql: `select id from public.entries where id = '${cancelEntry}' for update`,
+    waiterPrefix: 'mn-db-cancel-dispatch-',
+    queries: [
+      `set role service_role; select public.begin_provider_attempt('${cancelGeneration}','${cancelClaim.claim_token}','script',1,true);`,
+      `set role service_role; select public.request_entry_deletion('${executionActors[1]}','${cancelEntry}');`,
+    ],
+  });
+  const [dispatchResult, deleteResult] = cancelDispatchRace;
+  assert.equal(deleteResult.code, 0, deleteResult.stderr);
+  const cancelResult = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_or_hold_generation('${cancelGeneration}','${cancelClaim.claim_token}','cancelled');`,
+      ),
+    ),
+  );
+  const cancelRaceAttemptCount = Number(
+    succeeded(
+      await sql(
+        `select count(*) from private.provider_attempts where generation_id = '${cancelGeneration}';`,
+      ),
+    ),
+  );
+  const counterAfterCancelRace = succeeded(
+    await sql(
+      "select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total';",
+    ),
+  );
+  if (dispatchResult.code === 0) {
+    assert.equal(JSON.parse(succeeded(dispatchResult)).mode, 'provider');
+    assert.equal(cancelRaceAttemptCount, 1);
+    assert.equal(cancelResult.status, 'unknown');
+    assert.equal(cancelResult.reservation_state, 'held');
+    assert.equal(counterAfterCancelRace, counterBeforeCancelRace);
+  } else {
+    assert.match(dispatchResult.stderr, /GENERATION_CANCELLED/);
+    assert.equal(cancelRaceAttemptCount, 0);
+    assert.equal(cancelResult.status, 'cancelled');
+    assert.equal(cancelResult.reservation_state, 'released');
+    const [beforeCount, beforeCost] = counterBeforeCancelRace.split(':').map(Number);
+    const [afterCount, afterCost] = counterAfterCancelRace.split(':').map(Number);
+    assert.equal(afterCount, beforeCount - 1);
+    assert.equal(afterCost, beforeCost - 1);
+  }
+  console.log('成功: cancelとprovider dispatchの競合で、外部送信済み枠を誤返却しない');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
