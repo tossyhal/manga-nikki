@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { liveClientConfigFixture } from './fixtures/client-config';
 test('入力からモック漫画と履歴を再読込して削除できる', async ({ page }) => {
   const externalAuthRequests: string[] = [];
   page.on('request', (request) => {
@@ -85,6 +86,7 @@ test('設定を読み込めない画面では通信確認と再読み込みを�
 
 test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出さない', async ({ page }) => {
   const externalAuthRequests: string[] = [];
+  let personalEntryReads = 0;
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({
       json: {
@@ -96,14 +98,46 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
     }),
   );
   page.on('request', (request) => {
+    if (request.method() === 'GET' && request.url().includes('/api/v1/entries?')) {
+      personalEntryReads += 1;
+    }
     if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
       externalAuthRequests.push(request.url());
   });
 
   await page.goto('/');
+  await expect(page.locator('.notice')).toHaveText(
+    'サンプル閲覧用 / 保存・生成はこの環境では利用できません',
+  );
   await expect(page.getByText('サンプルの一日')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle');
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await expect(page.getByText('保存機能は利用できません。')).toBeVisible();
+  expect(personalEntryReads).toBe(0);
+  expect(externalAuthRequests).toEqual([]);
+});
+
+test('liveホームは履歴取得と匿名登録を始めない', async ({ page }) => {
+  let personalEntryReads = 0;
+  const externalAuthRequests: string[] = [];
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && request.url().includes('/api/v1/entries?')) {
+      personalEntryReads += 1;
+    }
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url())) {
+      externalAuthRequests.push(request.url());
+    }
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.notice')).toHaveText('匿名利用 / 保存前に利用条件をご確認ください');
+  await expect(page.getByText('サンプルの一日')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle');
+
+  expect(personalEntryReads).toBe(0);
   expect(externalAuthRequests).toEqual([]);
 });
 
