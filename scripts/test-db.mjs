@@ -319,7 +319,9 @@ try {
     succeeded(await sql(await readFile(join(root, 'supabase/migrations', file), 'utf8')));
   }
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
+  console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -401,6 +403,123 @@ try {
     '20',
   );
   console.log('成功: DBロック待ちを同期した最後の下書き1枠への6並列要求');
+
+  const reservationActors = [
+    '77777777-7777-4777-8777-777777777777',
+    '88888888-8888-4888-8888-888888888888',
+    '99999999-9999-4999-8999-999999999999',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  ];
+  const reservationEntries = succeeded(
+    await sql(`
+      insert into auth.users(id) values ${reservationActors.map((id) => `('${id}')`).join(',')};
+      update private.generation_policy set enabled = true, user_daily_limit = 10,
+        global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
+        model_profile_json = '{"profile_id":"fictional-concurrency-v1","is_mock":true,"max_cost_micro_usd":7}'::jsonb;
+      set role service_role;
+      insert into private.quota_counters(scope, subject, day_key)
+        values ('global_total', null, null),
+          ('global_day', null, (statement_timestamp() at time zone 'Asia/Tokyo')::date),
+          ('user_day', '${reservationActors[0]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
+          ('user_day', '${reservationActors[1]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
+          ('user_day', '${reservationActors[2]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
+          ('user_day', '${reservationActors[3]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date)
+        on conflict do nothing;
+      select (public.create_entry('${reservationActors[0]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同一キー競合用の架空日記','v1')).id;
+      select (public.create_entry('${reservationActors[1]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同時実行A用の架空日記','v1')).id;
+      select (public.create_entry('${reservationActors[1]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同時実行B用の架空日記','v1')).id;
+      select (public.create_entry('${reservationActors[2]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'全体枠競合A用の架空日記','v1')).id;
+      select (public.create_entry('${reservationActors[3]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'全体枠競合B用の架空日記','v1')).id;
+    `),
+  )
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(reservationEntries.length, 5);
+  const [duplicateEntry, sameActorEntryA, sameActorEntryB, globalEntryA, globalEntryB] =
+    reservationEntries;
+  const reservationKey = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const duplicateReservations = await runBehindLock({
+    holderName: 'mn-db-reserve-duplicate-holder',
+    lockSql: "select 1 from private.quota_counters where scope = 'global_total' for update",
+    waiterPrefix: 'mn-db-reserve-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () =>
+        `set role service_role; select public.reserve_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}',true);`,
+    ),
+  });
+  const duplicateReceipts = duplicateReservations.map((result) =>
+    JSON.parse(succeeded(result)),
+  );
+  assert.equal(new Set(duplicateReceipts.map((receipt) => receipt.generationId)).size, 1);
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.generations where owner_id = '${reservationActors[0]}') || ':' ||
+        (select count(*) from private.reservations where owner_id = '${reservationActors[0]}') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total');`),
+    ),
+    '1:1:1:7',
+  );
+  console.log('成功: 同一キー6並列予約はjob・reservation・予算計上が各1件');
+
+  const differentEntriesSameActor = await runBehindLock({
+    holderName: 'mn-db-reserve-user-active-holder',
+    lockSql: "select 1 from private.quota_counters where scope = 'global_total' for update",
+    waiterPrefix: 'mn-db-reserve-user-active-',
+    queries: [sameActorEntryA, sameActorEntryB].map(
+      (entryId, index) =>
+        `set role service_role; select public.reserve_generation('${reservationActors[1]}','${entryId}',1,'cccccccc-cccc-4ccc-8ccc-cccccccc000${index + 1}',true);`,
+    ),
+  });
+  assert.equal(differentEntriesSameActor.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    differentEntriesSameActor.filter(
+      (result) => result.code !== 0 && result.stderr.includes('TOO_MANY_ACTIVE'),
+    ).length,
+    1,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.generations where owner_id = '${reservationActors[1]}') || ':' ||
+        (select count(*) from private.reservations where owner_id = '${reservationActors[1]}') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'user_day' and subject = '${reservationActors[1]}');`),
+    ),
+    '1:1:1:7',
+  );
+  console.log('成功: 別日記の同時要求でも同一ユーザーのactive jobを1件に制限');
+
+  succeeded(
+    await sql('update private.generation_policy set global_daily_limit = 3, global_total_limit = 3;'),
+  );
+  const globalFinalSlot = await runBehindLock({
+    holderName: 'mn-db-reserve-global-final-holder',
+    lockSql: "select 1 from private.quota_counters where scope = 'global_total' for update",
+    waiterPrefix: 'mn-db-reserve-global-final-',
+    queries: [
+      [reservationActors[2], globalEntryA, 'dddddddd-dddd-4ddd-8ddd-dddddddd0001'],
+      [reservationActors[3], globalEntryB, 'eeeeeeee-eeee-4eee-8eee-eeeeeeee0002'],
+    ].map(
+      ([actor, entryId, key]) =>
+        `set role service_role; select public.reserve_generation('${actor}','${entryId}',1,'${key}',true);`,
+    ),
+  });
+  assert.equal(globalFinalSlot.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    globalFinalSlot.filter(
+      (result) => result.code !== 0 && result.stderr.includes('GLOBAL_LIMIT_REACHED'),
+    ).length,
+    1,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.generations) || ':' ||
+        (select count(*) from private.reservations) || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total') || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_day');`),
+    ),
+    '3:3:3:21:3:21',
+  );
+  console.log('成功: 全体の最後の1枠への別ユーザー同時要求は1件だけ予約');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
