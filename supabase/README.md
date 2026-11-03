@@ -1,6 +1,6 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳・`reserve_generation` RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。予約はDB内で完結し外部AI・Queue・Storageを呼びません。generation受付API・quota API接続・生成状態遷移は未実装で、初期policyは停止中です。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。日記CRUD HTTP接続は実装済みですが、共有DBへのmigration適用・実Supabase結合確認は未実施です。予約はDB内で完結し外部AI・Queue・Storageを呼びません。generation受付API・quota API接続・生成状態遷移は未実装で、初期policyは停止中です。
 
 ## 検証
 
@@ -16,7 +16,7 @@ pnpm test:db
 
 - `tests/bootstrap.sql`は隔離DB専用です。Supabase管理のロール、最小限の`auth.users`、JWTの`sub`を読む`auth.uid()`を再現します。共有DBや本番には適用しません。
 - `tests/diary.sql`はトランザクションをロールバックし、実際に`anon`・ユーザーA/Bの`authenticated`・`service_role`へ切り替えて検証します。
-- `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
+- `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・receipt照会の副作用がないこと・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
 - 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠を検証します。
 - 実SupabaseのAuth・PostgREST・Storageを経由するテストは別途必要です。この検証はPostgreSQLの制約・RLS・RPCを対象にします。
 
@@ -29,6 +29,7 @@ pnpm test:db
 | `create_entry` | `p_actor_id uuid`, `p_create_request_id uuid`, `p_diary_date date`, `p_body text`, `p_consent_version text` | `entries`の1行 |
 | `update_entry` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_diary_date date`, `p_body text` | 更新後の`entries`の1行 |
 | `request_entry_deletion` | `p_actor_id uuid`, `p_entry_id uuid` | `{"deletionAccepted":true}` |
+| `find_generation_receipt` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid` | 既存時はreceipt JSONB、未登録時は`null`。別request hashなら`IDEMPOTENCY_CONFLICT` |
 | `reserve_generation` | `p_actor_id uuid`, `p_entry_id uuid`, `p_expected_revision integer`, `p_idempotency_key uuid`, `p_generation_enabled boolean` | SQL JSONB `{"generation_id":"…","status":"queued","status_url":"/api/v1/generations/…"}`; API maps to `GenerationReceipt` camelCase |
 
 DB行はsnake_caseです。API担当は`id`・`diary_date`・`body`・`revision`・`latest_generation_id`・`created_at`・`updated_at`を共有型`Entry`のcamelCaseへ変換し、内部カラムをHTTPレスポンスに含めないでください。
@@ -62,6 +63,8 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - **後続の生成予約RPCも、日記の有効性・revisionを再確認し、同じ日記行をロックしたままジョブ作成・`latest_generation_id`更新を行ってください。**これが編集・削除との競合防止の前提です。全体policy等のロック順は`docs/API.md`の順序を維持し、entry→jobの順にします。
 - 後続のquota解放RPCも、`docs/API.md`の「全体policy/total → 全体day → ユーザーday → entry → job」の順で行ロックします。予約時に記録した`reserved_day`のカウンターを使い、entry/jobを保持したままquotaロックを取りに行かないでください。
 - `reserve_generation`は`p_generation_enabled`をWorkerの`GENERATION_ENABLED`環境設定から受け取るサーバー専用の信頼値として扱います。ブラウザから自由指定させず、環境設定がfalseまたはDB policyが無効なら新規予約を止めます。同じキー・同じcanonical requestの既存job照会は、停止後もquota/CAPTCHAなしで同じ`generationId`を返します。SQL JSONBの`generation_id` / `status` / `status_url`はAPIで`generationId` / `status` / `statusUrl`へmapします。
+- APIはCAPTCHA検証前に`find_generation_receipt`を呼び、receiptがなければTurnstile検証後に`reserve_generation`を呼びます。lookupが未登録時に予約を作らないため、CAPTCHAを通らず新規予約されることはありません。reserve側も並行要求に備えて既存keyを再確認します。
+- `find_generation_receipt`と`reserve_generation`は同じcanonical request hash helperを使います。receiptを返す前に有効な本人entryを確認し、現在revisionの一致は要求しません。削除・期限切れentryは`NOT_FOUND`です。findは停止中も照会でき、quota counter・reservation・generation・日記pointerを書き換えません。
 - canonical requestは`{"apiVersion":"v1","entryId":<UUID>,"expectedRevision":<integer>}`のJSONB表現をUTF-8 SHA-256化します。本文はRPCがロックした日記行からsnapshotへ保存し、profileはpolicyの`model_profile_json`全体を固定します。同じキーで対象/revisionが変われば`IDEMPOTENCY_CONFLICT`です。
 - profileはpolicy内の選択済み1件を使い、APIリクエストからIDや単価を受けません。`{}`は未設定として停止します。設定時は`profile_id`（非空文字列）、`is_mock`（boolean）、`max_cost_micro_usd`（非負整数、bigint範囲）を必須にし、`is_mock=false`で0は拒否します。provider/modelなどの任意設定はsnapshotにそのまま保持します。
 - ロックはpolicy用2整数advisory transaction lock `(20261103, 10001)`→global total→global day→user day→entry/jobの順です。既存`create_entry`の1 bigint advisory lockとは別key spaceです。`generation_policy`のBEFORE UPDATE STATEMENT triggerも同じlockを取るため、policy読取はservice_role SELECTだけで行え、管理者更新と予約は直列化されます。global total行を各予約が排他ロックし、全期間枠・予算の最終枠を直列化します。counter行の作成も`INSERT ... ON CONFLICT`で一意キーに集約し、READ COMMITTEDの単一RPCトランザクション内で行います。
