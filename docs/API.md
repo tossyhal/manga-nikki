@@ -11,6 +11,8 @@ localhost限定のモックで下記HTTP APIを実装しています。`/config.
 
 liveモードではSupabase access tokenの検証境界を実装していますが、検証後のDB・Queue・期限削除等は未実装です。liveモードの個人APIはJWT検証後も503を返し、モックrepositoryへ切り替えません。モックは再起動で消える一時メモリで、実環境への安全性を検証したものではありません。
 
+liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。新規登録は保存操作と同意の後に限り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。現在、生成用CAPTCHAとlive生成フローは未接続のため、ブラウザからlive生成要求を送らず停止します。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
+
 ---
 
 ## 1. 共通規則

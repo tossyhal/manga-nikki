@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes } from 'react-router';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry } from '../features/diary/NewEntry';
+import { getClientConfig, type ClientConfig } from '../lib/config';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
 
@@ -39,16 +40,14 @@ function Home() {
   );
 }
 export function App() {
-  const [available, setAvailable] = useState<boolean | null>(null);
+  const [config, setConfig] = useState<ClientConfig | null>(null);
+  const [configError, setConfigError] = useState(false);
   useEffect(() => {
-    fetch('/api/v1/config')
-      .then(async (response) => {
-        if (!response.ok) throw new Error();
-        const config = await response.json();
-        setAvailable(config.dataMode === 'mock' && config.generationAvailable === true);
-      })
-      .catch(() => setAvailable(false));
+    void getClientConfig()
+      .then(setConfig)
+      .catch(() => setConfigError(true));
   }, []);
+  const personalDataAvailable = config !== null && config.dataMode !== 'sample';
   return (
     <>
       <a className="skip" href="#main">
@@ -64,11 +63,15 @@ export function App() {
         </nav>
       </header>
       <aside className="notice">
-        {available
+        {config?.dataMode === 'mock'
           ? '開発用モック / AI・クラウドへの送信なし / サーバー再起動で記録は消えます'
-          : available === null
-            ? '環境を確認しています…'
-            : 'サンプル閲覧用 / 保存・生成はこの環境では利用できません'}
+          : config?.dataMode === 'live'
+            ? 'ライブ接続 / 匿名セッションと同意が必要 / DB機能は準備中です'
+            : config?.dataMode === 'sample'
+              ? 'サンプル閲覧用 / 保存・生成はこの環境では利用できません'
+              : configError
+                ? '環境設定を確認できません。保存・認証は停止しています'
+                : '環境を確認しています…'}
       </aside>
       <main id="main">
         <Routes>
@@ -76,10 +79,14 @@ export function App() {
           <Route
             path="/new"
             element={
-              available === null ? (
+              !config && !configError ? (
                 <output>読み込んでいます…</output>
-              ) : available ? (
-                <NewEntry />
+              ) : configError ? (
+                <p role="alert">
+                  環境設定を確認できません。接続先を確認して再読み込みしてください。
+                </p>
+              ) : personalDataAvailable && config ? (
+                <NewEntry config={config} />
               ) : (
                 <p>
                   保存機能は利用できません。<Link to="/">サンプルを見る</Link>
@@ -90,24 +97,32 @@ export function App() {
           <Route
             path="/library"
             element={
-              available === null ? (
+              !config && !configError ? (
                 <output>読み込んでいます…</output>
-              ) : available ? (
+              ) : configError ? (
+                <p role="alert">
+                  環境設定を確認できません。接続先を確認して再読み込みしてください。
+                </p>
+              ) : personalDataAvailable ? (
                 <Library />
               ) : (
-                <p>記録の閲覧はローカルの開発環境で利用できます。</p>
+                <p>記録の閲覧はこのサンプル環境では利用できません。</p>
               )
             }
           />
           <Route
             path="/entries/:id"
             element={
-              available === null ? (
+              !config && !configError ? (
                 <output>読み込んでいます…</output>
-              ) : available ? (
+              ) : configError ? (
+                <p role="alert">
+                  環境設定を確認できません。接続先を確認して再読み込みしてください。
+                </p>
+              ) : personalDataAvailable ? (
                 <Detail />
               ) : (
-                <p>記録の閲覧はローカルの開発環境で利用できます。</p>
+                <p>記録の閲覧はこのサンプル環境では利用できません。</p>
               )
             }
           />
