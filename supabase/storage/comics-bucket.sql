@@ -20,6 +20,12 @@ on conflict (id) do update set
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
 
+drop policy if exists comics_deny_direct_bucket_access on storage.buckets;
+create policy comics_deny_direct_bucket_access on storage.buckets
+  as restrictive for all to anon, authenticated
+  using (id <> 'comics')
+  with check (id <> 'comics');
+
 drop policy if exists comics_deny_direct_user_access on storage.objects;
 create policy comics_deny_direct_user_access on storage.objects
   as restrictive for all to anon, authenticated
