@@ -33,6 +33,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('API error guidance', () => {
+  it('gives retry guidance when public configuration cannot be loaded', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+    await expect(api('/entries')).rejects.toThrow(
+      '現在、読み込めません。通信を確認して再読み込みしてください。',
+    );
+  });
+
   it('turns network failures into retry guidance', async () => {
     vi.stubGlobal(
       'fetch',

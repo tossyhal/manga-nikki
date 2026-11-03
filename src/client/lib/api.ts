@@ -57,7 +57,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const fallback = '通信に失敗しました。入力内容を保持したまま再操作してください。';
   const config = await getClientConfig().catch(() => {
     throw new ApiClientError(
-      '接続設定を確認できません。しばらくしてから再試行してください。',
+      '現在、読み込めません。通信を確認して再読み込みしてください。',
       null,
       'CONFIG_UNAVAILABLE',
     );
@@ -117,7 +117,7 @@ export const getAssetUrl = (id: string) =>
 export async function generate(entry: Entry) {
   const config = await getClientConfig().catch(() => {
     throw new ApiClientError(
-      '接続設定を確認できません。しばらくしてから再試行してください。',
+      '現在、読み込めません。通信を確認して再読み込みしてください。',
       null,
       'CONFIG_UNAVAILABLE',
     );

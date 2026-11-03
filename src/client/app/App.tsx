@@ -7,6 +7,8 @@ import { getClientConfig, type ClientConfig } from '../lib/config';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
 
+const configUnavailableMessage = '現在、読み込めません。通信を確認して再読み込みしてください。';
+
 function Home() {
   return (
     <>
@@ -66,11 +68,11 @@ export function App() {
         {config?.dataMode === 'mock'
           ? '開発用モック / AI・クラウドへの送信なし / サーバー再起動で記録は消えます'
           : config?.dataMode === 'live'
-            ? 'ライブ接続 / 匿名セッションと同意が必要 / DB機能は準備中です'
+            ? '匿名利用 / 保存前に利用条件をご確認ください'
             : config?.dataMode === 'sample'
               ? 'サンプル閲覧用 / 保存・生成はこの環境では利用できません'
               : configError
-                ? '環境設定を確認できません。保存・認証は停止しています'
+                ? configUnavailableMessage
                 : '環境を確認しています…'}
       </aside>
       <main id="main">
@@ -82,9 +84,7 @@ export function App() {
               !config && !configError ? (
                 <output>読み込んでいます…</output>
               ) : configError ? (
-                <p role="alert">
-                  環境設定を確認できません。接続先を確認して再読み込みしてください。
-                </p>
+                <p role="alert">{configUnavailableMessage}</p>
               ) : personalDataAvailable && config ? (
                 <NewEntry config={config} />
               ) : (
@@ -100,9 +100,7 @@ export function App() {
               !config && !configError ? (
                 <output>読み込んでいます…</output>
               ) : configError ? (
-                <p role="alert">
-                  環境設定を確認できません。接続先を確認して再読み込みしてください。
-                </p>
+                <p role="alert">{configUnavailableMessage}</p>
               ) : personalDataAvailable ? (
                 <Library />
               ) : (
@@ -116,9 +114,7 @@ export function App() {
               !config && !configError ? (
                 <output>読み込んでいます…</output>
               ) : configError ? (
-                <p role="alert">
-                  環境設定を確認できません。接続先を確認して再読み込みしてください。
-                </p>
+                <p role="alert">{configUnavailableMessage}</p>
               ) : personalDataAvailable ? (
                 <Detail />
               ) : (

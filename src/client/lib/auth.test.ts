@@ -57,7 +57,9 @@ describe('live anonymous session', () => {
     vi.stubEnv('VITE_SUPABASE_PUBLISHABLE_KEY', '');
     const { protectedRequest } = setupFetch();
 
-    await expect(api('/entries')).rejects.toThrow('Supabaseの公開接続設定がありません');
+    await expect(api('/entries')).rejects.toThrow(
+      '現在、保存を利用できません。入力した本文はこの画面に残っています。時間をおいて、もう一度お試しください。',
+    );
 
     expect(protectedRequest).not.toHaveBeenCalled();
     expect(mockedAuth.signInAnonymously).not.toHaveBeenCalled();
@@ -97,7 +99,9 @@ describe('live anonymous session', () => {
     });
     const { protectedRequest } = setupFetch();
 
-    await expect(api('/entries')).rejects.toThrow('匿名セッションを確認できません');
+    await expect(api('/entries')).rejects.toThrow(
+      '匿名セッションを確認できません。通信を確認してください。本文はこの画面に残っています。もう一度「下書き保存」を押してください。',
+    );
 
     expect(protectedRequest).not.toHaveBeenCalled();
     expect(mockedAuth.signInAnonymously).not.toHaveBeenCalled();

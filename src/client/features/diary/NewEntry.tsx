@@ -64,7 +64,7 @@ export function NewEntry({ config }: { config: ClientConfig }) {
           const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim();
           if (!siteKey) {
             throw new Error(
-              '匿名登録用CAPTCHAが設定されていません。VITE_TURNSTILE_SITE_KEYを確認してください。',
+              '現在、保存を利用できません。入力した本文はこの画面に残っています。時間をおいて、もう一度お試しください。',
             );
           }
           setPendingSave(makeComic);
@@ -179,9 +179,7 @@ export function NewEntry({ config }: { config: ClientConfig }) {
             {error}
           </p>
         )}
-        {config.dataMode === 'live' && (
-          <p className="hint">実AI生成は生成用CAPTCHAとの統合が未対応のため停止しています。</p>
-        )}
+        {config.dataMode === 'live' && <p className="hint">現在、漫画生成は利用できません。</p>}
         <div className="actions">
           {canGenerate ? (
             <button disabled={busy} type="submit">

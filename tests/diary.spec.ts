@@ -58,6 +58,17 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
   await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
 });
 
+test('設定を読み込めない画面では通信確認と再読み込みを案内する', async ({ page }) => {
+  const message = '現在、読み込めません。通信を確認して再読み込みしてください。';
+  await page.route('**/api/v1/config', (route) => route.abort('failed'));
+
+  for (const path of ['/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
+    await page.goto(path);
+    await expect(page.locator('.notice')).toHaveText(message);
+    await expect(page.getByRole('alert')).toHaveText(message);
+  }
+});
+
 test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出さない', async ({ page }) => {
   const externalAuthRequests: string[] = [];
   await page.route('**/api/v1/config', (route) =>
@@ -105,6 +116,8 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   });
 
   await page.goto('/new');
+  await expect(page.locator('.notice')).toHaveText('匿名利用 / 保存前に利用条件をご確認ください');
+  await expect(page.getByText('現在、漫画生成は利用できません。', { exact: true })).toBeVisible();
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
 

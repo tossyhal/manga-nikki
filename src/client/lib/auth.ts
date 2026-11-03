@@ -9,9 +9,9 @@ export class ClientAuthError extends Error {
 }
 
 const sessionUnavailableMessage =
-  '匿名セッションを確認できません。自動で別アカウントは作成しません。通信を確認して再試行するか、同意のうえで新しい匿名セッションを登録してください。';
+  '匿名セッションを確認できません。通信を確認してください。本文はこの画面に残っています。もう一度「下書き保存」を押してください。';
 const configUnavailableMessage =
-  'Supabaseの公開接続設定がありません。VITE_SUPABASE_URLとVITE_SUPABASE_PUBLISHABLE_KEYを確認してください。';
+  '現在、保存を利用できません。入力した本文はこの画面に残っています。時間をおいて、もう一度お試しください。';
 
 let supabaseClient: SupabaseClient | null = null;
 let registrationInFlight: Promise<string> | null = null;
