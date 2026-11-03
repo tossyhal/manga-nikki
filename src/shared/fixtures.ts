@@ -6,8 +6,8 @@ export const panelsComic = comicSchema.parse(panels);
 export const sampleDiary = '朝はトーストを食べた。図書館で本を読んだ。帰り道で猫を見かけた。';
 
 // 同じIDで差し替え、画面接続時の待機・成功・失敗を再現するための架空データ。
-export function generationFixtures(entryId: string, id: string) {
-  const base = { id, entryId, mock: true };
+export function generationFixtures(entryId: string, id: string, entryRevision = 1) {
+  const base = { id, entryId, entryRevision, mock: true };
   return {
     queued: { ...base, status: 'queued', stage: null },
     running: { ...base, status: 'running', stage: 'images' },

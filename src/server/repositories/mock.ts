@@ -3,7 +3,6 @@ export type StoredEntry = { owner: string; requestId: string; entry: Entry };
 export type StoredGeneration = {
   owner: string;
   key: string;
-  revision: number;
   generation: Generation;
 };
 export function createMockRepository() {
