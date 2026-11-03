@@ -27,6 +27,8 @@ $$;
 revoke all on function private.is_valid_generation_profile(jsonb) from public, anon, authenticated;
 grant execute on function private.is_valid_generation_profile(jsonb) to service_role;
 
+alter table public.generations add constraint generations_id_owner_unique unique (id, owner_id);
+
 create table private.generation_policy (
   id smallint primary key default 1 check (id = 1),
   enabled boolean not null default false,
@@ -39,6 +41,19 @@ create table private.generation_policy (
 );
 alter table private.generation_policy enable row level security;
 insert into private.generation_policy (id) values (1);
+
+create function private.lock_generation_policy_update()
+returns trigger language plpgsql security invoker set search_path = ''
+as $$
+begin
+  perform pg_catalog.pg_advisory_xact_lock(20261103, 10001);
+  return null;
+end;
+$$;
+revoke all on function private.lock_generation_policy_update() from public, anon, authenticated, service_role;
+create trigger generation_policy_serialize_update
+  before update on private.generation_policy
+  for each statement execute function private.lock_generation_policy_update();
 
 create table private.quota_counters (
   scope text not null check (scope in ('global_total', 'global_day', 'user_day')),
@@ -122,9 +137,9 @@ begin
       raise exception using message = 'IDEMPOTENCY_CONFLICT';
     end if;
     return pg_catalog.jsonb_build_object(
-      'generationId', v_generation.id,
+      'generation_id', v_generation.id,
       'status', v_generation.status,
-      'statusUrl', '/api/v1/generations/' || v_generation.id::text
+      'status_url', '/api/v1/generations/' || v_generation.id::text
     );
   end if;
 
@@ -132,9 +147,10 @@ begin
     raise exception using message = 'GENERATION_DISABLED';
   end if;
 
-  -- Shared policy lock freezes the administrator's snapshot while allowing requests to queue;
-  -- the global-total counter then serializes all admissions and makes the final slot atomic.
-  select * into v_policy from private.generation_policy p where p.id = 1 for share;
+  -- Match the policy-update trigger without granting UPDATE merely to acquire a row lock.
+  perform pg_catalog.pg_advisory_xact_lock(20261103, 10001);
+  -- The global-total counter serializes admissions and makes the final slot atomic.
+  select * into v_policy from private.generation_policy p where p.id = 1;
   if not found or not v_policy.enabled then
     raise exception using message = 'GENERATION_DISABLED';
   end if;
@@ -168,9 +184,9 @@ begin
       raise exception using message = 'IDEMPOTENCY_CONFLICT';
     end if;
     return pg_catalog.jsonb_build_object(
-      'generationId', v_generation.id,
+      'generation_id', v_generation.id,
       'status', v_generation.status,
-      'statusUrl', '/api/v1/generations/' || v_generation.id::text
+      'status_url', '/api/v1/generations/' || v_generation.id::text
     );
   end if;
 
@@ -236,9 +252,9 @@ begin
     where id = v_entry.id and owner_id = p_actor_id;
 
   return pg_catalog.jsonb_build_object(
-    'generationId', v_generation.id,
+    'generation_id', v_generation.id,
     'status', v_generation.status,
-    'statusUrl', '/api/v1/generations/' || v_generation.id::text
+    'status_url', '/api/v1/generations/' || v_generation.id::text
   );
 end;
 $$;

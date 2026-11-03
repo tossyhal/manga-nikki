@@ -222,7 +222,7 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成ジョブ管理テーブルと`create_entry`・`update_entry`・`request_entry_deletion`のmigrationを追加済みです。RPCの具体的な引数、列の読み取り権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。日記CRUDのHTTP接続は実装済みですが、共有DBへmigrationはまだ適用していません。画像保存・予算関連テーブル・生成RPCは後続です。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成ジョブ管理テーブル、生成元`is_mock`、private予算台帳と`reserve_generation` RPCのmigrationを追加済みです。日記CRUDのHTTP接続は実装済みですが、共有DBへmigrationはまだ適用していません。生成受付HTTP API・Queue・実AI・画像保存は後続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
 `generations.is_mock`は生成元metadataです。後続のjob writerは固定結果なら`true`、実生成なら`false`を必ず設定します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
@@ -238,6 +238,8 @@ type ComicDocument = {
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
 | `private.provider_attempts` | `generation_id`, `stage`, `call_index`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。AIモデルの重複呼び出しを防止 |
 
+`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。provider/modelなどの他設定はprofile snapshotに保持します。
+
 - 所有者とスキーマ保護：`owner_id`は検証済みJWTの`sub`から設定し、`entry`・`job`・`asset`の間でも所有者が一致することを照合します。`auth.users`はSupabase管理とし、`private`スキーマは外部Data APIへ公開しません。
 - 主なインデックス：`entries(owner_id, diary_date, id)`、`generations(owner_id, created_at)`、`generations(status, created_at)`、`assets(generation_id)`。
 - スナップショットとポインタ更新：生成予約時点の日記本文とモデル設定をsnapshotカラムへ固定し、`entries.latest_generation_id`を更新します（後から古いジョブが完了しても、新しいポインタを上書きしません）。
@@ -249,13 +251,16 @@ type ComicDocument = {
 | `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き件数上限と本文を検証 |
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
-| `reserve_generation` | 同上 | 所有者・同意・`revision`、冪等性、ユーザー枠/全体枠、予算金額を1トランザクションで原子的に検査・予約 |
+| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
 | `claim_generation` | Queue Consumer | `queued`状態のジョブだけを`running`へ遷移させ、`claimToken`を発行 |
 | `begin_provider_attempt` | Queue Consumer | `claimToken`の一致と同一`(stage, call_index)`が未実行であることを検査し、`dispatched`を記録 |
 | `complete_generation` | Queue Consumer | `claimToken`、未削除状態、アセット数と所有権を検証し、生成結果を確定 |
 | `fail_or_hold_generation` | Consumer / 定期照合 | 外部AI呼び出し済みなら保守的に`held` / `consumed`を維持。外部未送信が確認できた場合のみ枠を`release`（返却） |
 
-- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・ジョブ作成・ポインタ更新を1トランザクションで処理します。カウンター行を作成した後、必ず「全体policy/total → 全体day → ユーザーday → entry/job」の固定順序で行ロックを取得し、キャンセル・解放処理でも同じロック順序を守ります。
+- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・ジョブ作成・ポインタ更新を1トランザクションで処理します。policy用2整数advisory transaction lock→global total→global day→user day→entry/jobの固定順序でロックし、キャンセル・解放処理でも同じ順を守ります。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
+- 既存キーのlookupは停止設定より先に行い、同一canonical requestなら停止後も既存`generation_id`を返します。CAPTCHA検証はAPI層の責務なので、APIはこの照会をCAPTCHA検証より前に行い、既存要求の再送で新しい枠を消費しません。別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`です。
+- canonical requestはAPI v1・`entryId`・`expectedRevision`のJSONB表現をUTF-8 SHA-256化した値です。JSON body、単価、profile ID、残り枠をRPC引数で受けず、本文・profileはDB正本から取得します。
 
 ### Storage（画像保存）と削除・再試行のルール
 

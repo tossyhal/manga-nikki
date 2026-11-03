@@ -409,6 +409,7 @@ try {
     '88888888-8888-4888-8888-888888888888',
     '99999999-9999-4999-8999-999999999999',
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    'abababab-abab-4bab-8bab-abababababab',
   ];
   const reservationEntries = succeeded(
     await sql(`
@@ -417,30 +418,29 @@ try {
         global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
         model_profile_json = '{"profile_id":"fictional-concurrency-v1","is_mock":true,"max_cost_micro_usd":7}'::jsonb;
       set role service_role;
-      insert into private.quota_counters(scope, subject, day_key)
-        values ('global_total', null, null),
-          ('global_day', null, (statement_timestamp() at time zone 'Asia/Tokyo')::date),
-          ('user_day', '${reservationActors[0]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
-          ('user_day', '${reservationActors[1]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
-          ('user_day', '${reservationActors[2]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date),
-          ('user_day', '${reservationActors[3]}', (statement_timestamp() at time zone 'Asia/Tokyo')::date)
-        on conflict do nothing;
       select (public.create_entry('${reservationActors[0]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同一キー競合用の架空日記','v1')).id;
       select (public.create_entry('${reservationActors[1]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同時実行A用の架空日記','v1')).id;
       select (public.create_entry('${reservationActors[1]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'同時実行B用の架空日記','v1')).id;
       select (public.create_entry('${reservationActors[2]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'全体枠競合A用の架空日記','v1')).id;
       select (public.create_entry('${reservationActors[3]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'全体枠競合B用の架空日記','v1')).id;
+      select (public.create_entry('${reservationActors[4]}',gen_random_uuid(),(statement_timestamp() at time zone 'Asia/Tokyo')::date,'policy更新競合用の架空日記','v1')).id;
     `),
   )
     .split('\n')
     .filter(Boolean);
-  assert.equal(reservationEntries.length, 5);
-  const [duplicateEntry, sameActorEntryA, sameActorEntryB, globalEntryA, globalEntryB] =
-    reservationEntries;
+  assert.equal(reservationEntries.length, 6);
+  const [
+    duplicateEntry,
+    sameActorEntryA,
+    sameActorEntryB,
+    globalEntryA,
+    globalEntryB,
+    policyUpdateEntry,
+  ] = reservationEntries;
   const reservationKey = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const duplicateReservations = await runBehindLock({
     holderName: 'mn-db-reserve-duplicate-holder',
-    lockSql: "select 1 from private.quota_counters where scope = 'global_total' for update",
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
     waiterPrefix: 'mn-db-reserve-duplicate-',
     queries: Array.from(
       { length: 6 },
@@ -448,10 +448,8 @@ try {
         `set role service_role; select public.reserve_generation('${reservationActors[0]}','${duplicateEntry}',1,'${reservationKey}',true);`,
     ),
   });
-  const duplicateReceipts = duplicateReservations.map((result) =>
-    JSON.parse(succeeded(result)),
-  );
-  assert.equal(new Set(duplicateReceipts.map((receipt) => receipt.generationId)).size, 1);
+  const duplicateReceipts = duplicateReservations.map((result) => JSON.parse(succeeded(result)));
+  assert.equal(new Set(duplicateReceipts.map((receipt) => receipt.generation_id)).size, 1);
   assert.equal(
     succeeded(
       await sql(`select (select count(*) from public.generations where owner_id = '${reservationActors[0]}') || ':' ||
@@ -489,7 +487,9 @@ try {
   console.log('成功: 別日記の同時要求でも同一ユーザーのactive jobを1件に制限');
 
   succeeded(
-    await sql('update private.generation_policy set global_daily_limit = 3, global_total_limit = 3;'),
+    await sql(
+      'update private.generation_policy set global_daily_limit = 3, global_total_limit = 3;',
+    ),
   );
   const globalFinalSlot = await runBehindLock({
     holderName: 'mn-db-reserve-global-final-holder',
@@ -520,6 +520,36 @@ try {
     '3:3:3:21:3:21',
   );
   console.log('成功: 全体の最後の1枠への別ユーザー同時要求は1件だけ予約');
+
+  succeeded(
+    await sql(
+      'update private.generation_policy set enabled = true, global_daily_limit = 10, global_total_limit = 10;',
+    ),
+  );
+  const policyUpdateRace = await runBehindLock({
+    holderName: 'mn-db-policy-reserve-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-policy-reserve-',
+    queries: [
+      `set role service_role; select public.reserve_generation('${reservationActors[4]}','${policyUpdateEntry}',1,'ffffffff-ffff-4fff-8fff-ffffffff0006',true);`,
+      'update private.generation_policy set enabled = false;',
+    ],
+  });
+  assert.equal(policyUpdateRace[1].code, 0);
+  const policyReservationSucceeded = policyUpdateRace[0].code === 0;
+  if (!policyReservationSucceeded) {
+    assert.match(policyUpdateRace[0].stderr, /GENERATION_DISABLED/);
+  }
+  assert.equal(
+    succeeded(
+      await sql(`select (select enabled::text from private.generation_policy where id = 1) || ':' ||
+        (select count || ':' || committed_micro_usd from private.quota_counters where scope = 'global_total') || ':' ||
+        (select count(*) from public.generations where owner_id = '${reservationActors[4]}') || ':' ||
+        (select count(*) from private.reservations where owner_id = '${reservationActors[4]}');`),
+    ),
+    policyReservationSucceeded ? 'false:4:28:1:1' : 'false:3:21:0:0',
+  );
+  console.log('成功: policy更新と予約はadvisory lockで直列化');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);

@@ -84,6 +84,7 @@
 - `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、既存の同一キー・同一要求の照会だけは停止中も同じjobを返します。
 - `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。設定profileには`profile_id`、`is_mock`、整数の`max_cost_micro_usd`を含め、最大費用を予約します。`is_mock=false`では最大費用0を許可しません。provider/modelなどの追加設定は日記本文やHTTP bodyから受けず、profile snapshotへ保持します。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
+- policy設定を変える運用者は、単独の短いtransactionで更新してcommitします。更新triggerと予約RPCは同じ2整数advisory transaction lockを使い、変更中のpolicy snapshotで予約が進まないよう直列化します。
 - 匿名認証のユーザーIDは「ブラウザ単位」であり「人間1人」を保証しないため、ユーザー単位の上限だけでなくシステム全体の上限（全体枠・総予算）が必須です。
 
 ### 最大費用の見積もりと予約方式

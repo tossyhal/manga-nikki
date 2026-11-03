@@ -20,7 +20,8 @@ begin
   perform test.assert(actual_state = expected_state,
     format('SQLSTATE: expected=%s actual=%s message=%s', expected_state, actual_state, actual_message));
   if expected_message is not null then
-    perform test.assert(actual_message = expected_message, '期待した業務エラーで拒否');
+    perform test.assert(actual_message = expected_message,
+      format('業務エラー: expected=%s actual=%s', expected_message, actual_message));
   end if;
 end;
 $$;
@@ -97,16 +98,20 @@ select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_u
 select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_uuid(), current_date, '削除用の架空日記', 'v1')).id as entry_b2 \gset
 select (public.create_entry('22222222-2222-4222-8222-222222222222', gen_random_uuid(), current_date, '期限用の架空日記', 'v1')).id as entry_b3 \gset
 select (public.create_entry('33333333-3333-4333-8333-333333333333', gen_random_uuid(), current_date, 'revision用の架空日記', 'v1')).id as entry_c1 \gset
-select public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
-  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', false) as disabled_receipt \gset
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 'P0001', 'GENERATION_DISABLED');
 select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
   '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0000'),
   'P0001', 'GENERATION_DISABLED');
+select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,null)',
+  '11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa0001'), 'P0001', 'GENERATION_DISABLED');
 select public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', true) as receipt_a1 \gset
-select (:'receipt_a1'::jsonb ->> 'generationId') as generation_a1 \gset
+select (:'receipt_a1'::jsonb ->> 'generation_id') as generation_a1 \gset
 select test.assert(:'receipt_a1'::jsonb ->> 'status' = 'queued'
-  and :'receipt_a1'::jsonb ->> 'statusUrl' = '/api/v1/generations/' || :'generation_a1',
+  and :'receipt_a1'::jsonb ->> 'status_url' = '/api/v1/generations/' || :'generation_a1',
   '受付RPCはGenerationReceiptを返す');
 select test.assert((select input_snapshot = '架空日記A1' and entry_revision = 1
   and model_profile_snapshot = '{"profile_id":"fictional-v1","is_mock":true,"max_cost_micro_usd":7,"script":{"model":"fictional-script"},"image":{"model":"fictional-image"}}'::jsonb
@@ -120,7 +125,7 @@ select test.assert((select owner_id = '11111111-1111-4111-8111-111111111111'
   from private.reservations where generation_id = :'generation_a1'::uuid),
   'JST日と最大費用を予約ledgerへ保存');
 select test.assert((public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
-  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', false) ->> 'generationId') = :'generation_a1',
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', false) ->> 'generation_id') = :'generation_a1',
   '同一キー再送は停止中も同じreceiptを返す');
 select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,false)',
   '11111111-1111-4111-8111-111111111111', :'entry_a2'::uuid,
@@ -146,7 +151,7 @@ where id = 1;
 set local role service_role;
 select public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a1'::uuid, 1,
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', false) as replay_after_stop \gset
-select test.assert(:'replay_after_stop'::jsonb ->> 'generationId' = :'generation_a1',
+select test.assert(:'replay_after_stop'::jsonb ->> 'generation_id' = :'generation_a1',
   '本文編集・policy変更・停止後の同じ要求は既存jobを維持');
 select test.assert((select input_snapshot = '架空日記A1'
   and model_profile_snapshot ->> 'profile_id' = 'fictional-v1' and is_mock
@@ -164,12 +169,12 @@ where id = 1;
 set local role service_role;
 select public.reserve_generation('11111111-1111-4111-8111-111111111111', :'entry_a2'::uuid, 1,
   'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', true) as receipt_a2 \gset
-select (:'receipt_a2'::jsonb ->> 'generationId') as generation_a2 \gset
+select (:'receipt_a2'::jsonb ->> 'generation_id') as generation_a2 \gset
 update public.generations set status = 'failed', completed_at = statement_timestamp()
   where id = :'generation_a2'::uuid;
 select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,true)',
   '11111111-1111-4111-8111-111111111111', :'entry_a3'::uuid,
-  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'), 'P0001', 'USER_LIMIT_REACHED');
+  'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeef'), 'P0001', 'USER_LIMIT_REACHED');
 select public.update_entry('33333333-3333-4333-8333-333333333333', :'entry_c1'::uuid, 1, current_date, 'revisionを増やす');
 select test.expect_error(format('select public.reserve_generation(%L,%L,1,%L,true)',
   '33333333-3333-4333-8333-333333333333', :'entry_c1'::uuid,
@@ -204,7 +209,7 @@ select public.reserve_generation('22222222-2222-4222-8222-222222222222', :'entry
   '11111111-aaaa-4aaa-8aaa-aaaaaaaa0005', true) as receipt_b1 \gset
 select test.assert((select is_mock is false
   and model_profile_snapshot ->> 'profile_id' = 'fictional-real-shaped-v1'
-  from public.generations where id = (:'receipt_b1'::jsonb ->> 'generationId')::uuid),
+  from public.generations where id = (:'receipt_b1'::jsonb ->> 'generation_id')::uuid),
   '架空profileでもCmax正数を検証しis_mockを固定');
 
 set local role anon;
@@ -213,5 +218,9 @@ select test.expect_error('select public.reserve_generation(null,null,null,null,t
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', true);
 select test.expect_error('select id from private.quota_counters', '42501');
+select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
+select set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', true);
+select test.expect_error('select id from private.generation_policy', '42501');
+select test.expect_error('select id from private.reservations', '42501');
 select test.expect_error('select public.reserve_generation(null,null,null,null,true)', '42501');
 rollback;
