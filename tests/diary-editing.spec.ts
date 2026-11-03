@@ -420,3 +420,80 @@ for (const accept of [false, true]) {
     else await expect(page).toHaveURL(/\/entries\//);
   });
 }
+
+test('削除応答後に別記録を編集中なら新しい画面の状態を維持する', async ({ page }) => {
+  await page.goto('/new');
+  await page.getByLabel('日記', { exact: true }).fill('削除応答を待つAの記録');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page).toHaveURL(/\/entries\//);
+  const firstId = new URL(page.url()).pathname.split('/').at(-1);
+  expect(firstId).toBeTruthy();
+
+  await page.goto('/new');
+  await page.getByLabel('日記', { exact: true }).fill('編集中に保護するBの記録');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await expect(page).toHaveURL(/\/entries\//);
+  const secondId = new URL(page.url()).pathname.split('/').at(-1);
+  expect(secondId).toBeTruthy();
+  expect(firstId).not.toBe(secondId);
+
+  let releaseDelete!: () => void;
+  const deleteGate = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  let deleteStarted!: () => void;
+  const deletionStarted = new Promise<void>((resolve) => {
+    deleteStarted = resolve;
+  });
+  await page.route(`**/api/v1/entries/${firstId}`, async (route) => {
+    if (route.request().method() !== 'DELETE') {
+      await route.continue();
+      return;
+    }
+    deleteStarted();
+    await deleteGate;
+    await route.fulfill({ json: { deleted: true } });
+  });
+
+  await page.goto(`/entries/${firstId}`);
+  respondToNextDialog(page, true);
+  await page.getByRole('button', { name: '記録を削除' }).click();
+  await deletionStarted;
+
+  respondToNextDialog(page, true);
+  await page.getByRole('link', { name: '← 記録の一覧' }).click();
+  await expect(page).toHaveURL(/\/library$/);
+  await page.getByText('編集中に保護するBの記録', { exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
+  await page.getByRole('button', { name: '日記を編集' }).click();
+  const diary = page.getByLabel('日記', { exact: true });
+  const editedBody = '削除Aの完了後も保持するBの未保存本文';
+  await diary.fill(editedBody);
+
+  const deletionResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'DELETE' &&
+      response.url().endsWith(`/api/v1/entries/${firstId}`),
+  );
+  releaseDelete();
+  await deletionResponse;
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+
+  await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
+  await expect(diary).toHaveValue(editedBody);
+  const leaveDialogPromise = page.waitForEvent('dialog');
+  const leaveNavigation = page.getByRole('link', { name: '← 記録の一覧' }).click();
+  const leaveDialog = await leaveDialogPromise;
+  expect(leaveDialog.message()).toContain('未保存の入力があります');
+  await leaveDialog.dismiss();
+  await leaveNavigation;
+  await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
+  await expect(diary).toHaveValue(editedBody);
+});

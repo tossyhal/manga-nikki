@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
   jstToday,
@@ -58,14 +58,22 @@ function DetailContent({
   const [draftDate, setDraftDate] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [editErrorStatus, setEditErrorStatus] = useState<number | null>(null);
+  const activeRef = useRef(true);
+  const actionInFlightRef = useRef(false);
   const draftDirty =
     editing && entry !== null && (draftDate !== entry.diaryDate || draftBody !== entry.body);
 
   useLayoutEffect(() => {
-    onActivityChange({ dirty: draftDirty, busy });
-  }, [busy, draftDirty, onActivityChange]);
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      onActivityChange({ dirty: false, busy: false });
+    };
+  }, [onActivityChange]);
 
-  useEffect(() => () => onActivityChange({ dirty: false, busy: false }), [onActivityChange]);
+  useLayoutEffect(() => {
+    if (activeRef.current) onActivityChange({ dirty: draftDirty, busy });
+  }, [busy, draftDirty, onActivityChange]);
 
   useEffect(() => {
     let active = true;
@@ -105,7 +113,7 @@ function DetailContent({
 
   async function saveEdit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!entry || pending) return;
+    if (!entry || pending || !activeRef.current || actionInFlightRef.current) return;
     const parsed = updateEntrySchema.safeParse({
       expectedRevision: entry.revision,
       diaryDate: draftDate,
@@ -120,11 +128,13 @@ function DetailContent({
     setBusy(true);
     setError('');
     setEditErrorStatus(null);
+    actionInFlightRef.current = true;
     try {
       const updated = await api<Entry>(`/entries/${encodeURIComponent(entry.id)}`, {
         method: 'PATCH',
         body: JSON.stringify(parsed.data),
       });
+      if (!activeRef.current) return;
       setEntry((current) =>
         current
           ? {
@@ -142,22 +152,29 @@ function DetailContent({
       setEditing(false);
       try {
         const latest = await getEntry(id);
+        if (!activeRef.current) return;
         setEntry(latest);
         setDraftDate(latest.diaryDate);
         setDraftBody(latest.body);
       } catch {
-        setError('変更は保存しましたが、詳細の最新状態を読み込めませんでした。');
+        if (activeRef.current)
+          setError('変更は保存しましたが、詳細の最新状態を読み込めませんでした。');
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '変更を保存できませんでした。');
-      setEditErrorStatus(failure instanceof ApiClientError ? failure.status : null);
+      if (activeRef.current) {
+        setError(failure instanceof Error ? failure.message : '変更を保存できませんでした。');
+        setEditErrorStatus(failure instanceof ApiClientError ? failure.status : null);
+      }
     } finally {
-      setBusy(false);
+      if (activeRef.current) {
+        actionInFlightRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
   async function reloadLatest() {
-    if (!entry) return;
+    if (!entry || !activeRef.current || actionInFlightRef.current) return;
     if (
       draftDirty &&
       !window.confirm('編集中の入力を最新の記録で置き換えます。最新の記録を読み込みますか？')
@@ -166,8 +183,10 @@ function DetailContent({
 
     setBusy(true);
     setError('');
+    actionInFlightRef.current = true;
     try {
       const latest = await getEntry(id);
+      if (!activeRef.current) return;
       setEntry(latest);
       setDraftDate(latest.diaryDate);
       setDraftBody(latest.body);
@@ -178,9 +197,13 @@ function DetailContent({
       if (latestIsPending) setError('この記録は生成中のため編集できません。');
       setEditErrorStatus(null);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '最新の記録を読み込めませんでした。');
+      if (activeRef.current)
+        setError(failure instanceof Error ? failure.message : '最新の記録を読み込めませんでした。');
     } finally {
-      setBusy(false);
+      if (activeRef.current) {
+        actionInFlightRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -215,22 +238,31 @@ function DetailContent({
     };
   }, [id, pending]);
   async function act(remove: boolean) {
-    if (!entry) return;
+    if (!entry || !activeRef.current || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setBusy(true);
     setError('');
     try {
       if (remove) {
         await api(`/entries/${entry.id}`, { method: 'DELETE' });
+        if (!activeRef.current) return;
         onActivityChange({ dirty: false, busy: false });
         navigate('/library');
       } else {
         await generate(entry);
-        setEntry(await getEntry(id));
+        if (!activeRef.current) return;
+        const latest = await getEntry(id);
+        if (!activeRef.current) return;
+        setEntry(latest);
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '操作できませんでした。');
+      if (activeRef.current)
+        setError(failure instanceof Error ? failure.message : '操作できませんでした。');
     } finally {
-      setBusy(false);
+      if (activeRef.current) {
+        actionInFlightRef.current = false;
+        setBusy(false);
+      }
     }
   }
   return (
