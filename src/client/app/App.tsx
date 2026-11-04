@@ -246,11 +246,12 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
       setRecords({ status: 'loading' });
       return;
     }
+    const currentConfig = config;
     let active = true;
     setRecords({ status: 'loading' });
     async function loadEntries() {
       try {
-        if (config.dataMode === 'live' && !(await getLiveAccessToken())) {
+        if (currentConfig.dataMode === 'live' && !(await getLiveAccessToken())) {
           if (active) setRecords({ status: 'sample' });
           return;
         }

@@ -60,7 +60,8 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
   const quotaRequestRef = useRef(0);
-  const errorRef = useRef<HTMLElement | null>(null);
+  const errorRef = useRef<HTMLParagraphElement | null>(null);
+  const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
   const previousOnlineRef = useRef(online);
   const [initialDate] = useState(() => {
@@ -170,7 +171,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
 
   useEffect(() => {
     if (!error) return;
-    const alert = errorRef.current;
+    const alert = saveErrorCardRef.current ?? errorRef.current;
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView({ block: 'center' });
   }, [error, saveErrorIntent, validationFailureCount]);
@@ -561,7 +562,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         )}
         {saveErrorIntent !== null ? (
           <section
-            ref={errorRef}
+            ref={saveErrorCardRef}
             className="save-error-card"
             aria-labelledby="save-error-title"
             role="alert"
