@@ -100,9 +100,6 @@ export function Comic({
           setZoomed(null);
         }}
         onClose={() => setZoomed(null)}
-        onClick={(event) => {
-          if (event.target === zoomDialogRef.current) setZoomed(null);
-        }}
       >
         {zoomed && (
           <div className="comic-zoom-content">

@@ -56,15 +56,20 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
   const { recent, historyError } = useRecentRecordsForHome(isMock);
   const todayEntries = recent?.filter((entry) => entry.diaryDate === jstToday()) ?? [];
   const [sampleOpen, setSampleOpen] = useState(false);
-  const now = new Date();
-  const today = `${new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'Asia/Tokyo',
-    month: 'long',
-    day: 'numeric',
-  }).format(now)} ${new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'Asia/Tokyo',
-    weekday: 'long',
-  }).format(now)}`;
+  const [today] = useState(() => {
+    const date = jstToday();
+    const value = new Date(`${date}T00:00:00.000Z`);
+    const monthDay = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'UTC',
+      month: 'long',
+      day: 'numeric',
+    }).format(value);
+    const weekday = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'UTC',
+      weekday: 'long',
+    }).format(value);
+    return { date, label: `${monthDay} ${weekday}` };
+  });
 
   if (showSample && sampleOpen) {
     return (
@@ -98,9 +103,9 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
 
   return (
     <div className="home-page">
-      {isMock && (
-        <time className="home-date" dateTime={jstToday()}>
-          {today}
+      {isMock && today && (
+        <time className="home-date" dateTime={today.date}>
+          {today.label}
         </time>
       )}
       <section className="today-section" aria-labelledby="today-heading">

@@ -144,6 +144,8 @@ function DetailContent({
   const [reloadLatestConfirmOpen, setReloadLatestConfirmOpen] = useState(false);
   const [journalExpanded, setJournalExpanded] = useState(false);
   const activeRef = useRef(true);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const actionInFlightRef = useRef(false);
   const generationFlowRef = useRef(false);
   const generationCaptchaAttemptRef = useRef(0);
@@ -239,6 +241,11 @@ function DetailContent({
     root.classList.toggle('entry-keyboard-active', useInlineActions);
     return () => root.classList.remove('entry-keyboard-active');
   }, [editTyping]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [menuOpen]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
@@ -675,6 +682,7 @@ function DetailContent({
           <h1 className="detail-title">{summarizeDiary(entry.body)}</h1>
           <div className="detail-menu-anchor">
             <button
+              ref={menuTriggerRef}
               className="icon-button"
               type="button"
               aria-label="その他の操作"
@@ -686,11 +694,35 @@ function DetailContent({
             </button>
             {menuOpen && (
               <div
+                ref={menuRef}
                 className="detail-menu"
                 role="menu"
                 aria-label="記録の操作"
+                tabIndex={-1}
                 onKeyDown={(event) => {
-                  if (event.key === 'Escape') setMenuOpen(false);
+                  const items = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                      '[role="menuitem"]:not(:disabled)',
+                    ),
+                  );
+                  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setMenuOpen(false);
+                    menuTriggerRef.current?.focus();
+                  } else if (event.key === 'ArrowDown' && items.length > 0) {
+                    event.preventDefault();
+                    items[(currentIndex + 1) % items.length]?.focus();
+                  } else if (event.key === 'ArrowUp' && items.length > 0) {
+                    event.preventDefault();
+                    items[(currentIndex - 1 + items.length) % items.length]?.focus();
+                  } else if (event.key === 'Home' && items.length > 0) {
+                    event.preventDefault();
+                    items[0]?.focus();
+                  } else if (event.key === 'End' && items.length > 0) {
+                    event.preventDefault();
+                    items.at(-1)?.focus();
+                  }
                 }}
               >
                 {!pending && (
@@ -1110,15 +1142,17 @@ function DetailContent({
                     ? '利用枠を確認しています…'
                     : quotaState === 'unavailable' || quotaState === 'session-required'
                       ? '利用枠を確認できません'
-                      : quota?.remainingToday === 0
-                        ? '本日の生成上限に達しています'
-                        : quota?.activeGenerationId
-                          ? '進行中の漫画を確認してください'
-                          : !config.generationAvailable
-                            ? '漫画の受付を停止しています'
-                            : config.dataMode === 'live' && !siteKey
-                              ? '生成用の確認を利用できません'
-                              : '4コマにする'}
+                      : quota?.generationAvailable === false
+                        ? '漫画の受付を停止しています'
+                        : quota?.remainingToday === 0
+                          ? '本日の生成上限に達しています'
+                          : quota?.activeGenerationId
+                            ? '進行中の漫画を確認してください'
+                            : !config.generationAvailable
+                              ? '漫画の受付を停止しています'
+                              : config.dataMode === 'live' && !siteKey
+                                ? '生成用の確認を利用できません'
+                                : '4コマにする'}
             </button>
           )}
         </div>

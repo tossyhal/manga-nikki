@@ -45,9 +45,6 @@ export function ConfirmDialog({
         event.preventDefault();
         onCancel();
       }}
-      onClick={(event) => {
-        if (event.target === dialogRef.current) onCancel();
-      }}
     >
       <div className="confirm-dialog-content">
         <div className="confirm-dialog-icon">
