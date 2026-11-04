@@ -8,6 +8,7 @@ export function Comic({
   mock = false,
   imageError = false,
   titleAs: Title = 'h2',
+  hideTitle = false,
 }: {
   comic: ComicDocument;
   images: Record<string, string>;
@@ -15,6 +16,8 @@ export function Comic({
   imageError?: boolean;
   /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
   titleAs?: 'h2' | 'h3';
+  /** 周囲に同じ漫画タイトルの見出しがある場合は重複を避ける */
+  hideTitle?: boolean;
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
@@ -84,7 +87,7 @@ export function Comic({
           })}
         </div>
         <figcaption className="comic-transcript">
-          <Title className="comic-title sr-only">{comic.title}</Title>
+          {!hideTitle && <Title className="comic-title sr-only">{comic.title}</Title>}
           {comic.visual.kind === 'page' && comic.visual.textMode === 'external' && (
             <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
               <summary>4コマの内容を読む</summary>
