@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
@@ -60,6 +60,8 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
   const quotaRequestRef = useRef(0);
+  const pointerInteractionRef = useRef(false);
+  const restoreTypingAfterInteractionRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -87,6 +89,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [pendingSave, setPendingSave] = useState<boolean | null>(null);
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
+  const [generationFailureEntry, setGenerationFailureEntry] = useState<Entry | null>(null);
   const [typing, setTyping] = useState(false);
   const [quota, setQuota] = useState<GenerationQuota | null>(null);
   const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
@@ -249,6 +252,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       try {
         await generate(entry);
       } catch (failure) {
+        if (activeRef.current) setGenerationFailureEntry(entry);
         if (
           activeRef.current &&
           failure instanceof ApiClientError &&
@@ -423,6 +427,23 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       )}
       <form
         className="entry-form"
+        onPointerDownCapture={() => {
+          pointerInteractionRef.current = true;
+        }}
+        onPointerCancelCapture={() => {
+          pointerInteractionRef.current = false;
+          if (restoreTypingAfterInteractionRef.current) {
+            restoreTypingAfterInteractionRef.current = false;
+            setTyping(false);
+          }
+        }}
+        onClick={() => {
+          pointerInteractionRef.current = false;
+          if (restoreTypingAfterInteractionRef.current) {
+            restoreTypingAfterInteractionRef.current = false;
+            setTyping(false);
+          }
+        }}
         onSubmit={(event) => {
           event.preventDefault();
           void save(saveErrorIntent ?? canGenerate);
@@ -459,7 +480,16 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               required
               aria-describedby="count summary-preview"
               onFocus={() => setTyping(true)}
-              onBlur={() => setTyping(false)}
+              onBlur={(event) => {
+                const nextTarget = event.relatedTarget;
+                const movingToConsent =
+                  nextTarget instanceof HTMLElement && nextTarget.closest('.consent-card') !== null;
+                if (pointerInteractionRef.current || movingToConsent) {
+                  restoreTypingAfterInteractionRef.current = true;
+                  return;
+                }
+                setTyping(false);
+              }}
             />
             <div className="entry-editor-footer">
               <p id="summary-preview" className="summary-preview sr-only">
@@ -532,13 +562,15 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             disabled={busy || saved !== null}
             onChange={(event) => {
               setConsent(event.target.checked);
+              restoreTypingAfterInteractionRef.current = false;
+              setTyping(false);
               if (!event.target.checked) setPendingSave(null);
             }}
           />
           <span>
             {config.dataMode === 'mock'
               ? '記録は一時保存で、予告なく消えることがあります。漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。'
-              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名利用のため、ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
+              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名利用の記録はこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
           </span>
         </label>
         {pendingSave !== null && config.dataMode === 'live' && (
@@ -579,6 +611,21 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             {error}
           </p>
         ) : null}
+        {generationFailureEntry && (
+          <section className="draft-saved-card" aria-labelledby="generation-failure-saved-title">
+            <div className="draft-saved-check" aria-hidden="true">
+              <Icon name="check" size={40} />
+            </div>
+            <h2 id="generation-failure-saved-title">日記を保存しました</h2>
+            <p>漫画の受付状態は、保存した記録から確認できます。</p>
+            <Link
+              className="button button-secondary"
+              to={`/entries/${encodeURIComponent(generationFailureEntry.id)}`}
+            >
+              保存した記録を見る
+            </Link>
+          </section>
+        )}
         {generationCheckEntry && (
           <button
             className="button button-secondary"

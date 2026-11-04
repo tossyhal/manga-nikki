@@ -21,6 +21,7 @@ import { Detail } from '../features/library/Detail';
 import { getEntries } from '../lib/api';
 import { getLiveAccessToken } from '../lib/auth';
 import { getClientConfig, type ClientConfig } from '../lib/config';
+import { useOnlineStatus } from '../lib/useOnlineStatus';
 import { BottomNav } from './BottomNav';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Icon } from './Icon';
@@ -62,7 +63,7 @@ function generationLabel(
   if (error)
     return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
   if (!generation || generation.entryRevision !== entry.revision) {
-    if (loading && entry.latestGenerationId) return '状態を確認しています';
+    if (entry.latestGenerationId) return loading ? '状態を確認しています' : '状態を確認できません';
     return '下書き';
   }
   switch (generation.status) {
@@ -90,6 +91,7 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
   if (preview.isLoading) placeholder = '漫画を読み込んでいます';
   else if (preview.error?.includes('画像')) placeholder = '漫画を表示できません';
   else if (preview.error) placeholder = '記録の状態を確認できません';
+  else if (entry.latestGenerationId && !generation) placeholder = '記録の状態を確認できません';
   else if (generation?.status === 'queued' || generation?.status === 'running')
     placeholder = '漫画を作成中';
   else if (generation?.status === 'failed' || generation?.status === 'cancelled')
@@ -126,7 +128,7 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
   const entries = records.status === 'ready' ? records.entries : [];
   const todayEntries = entries.filter((entry) => entry.diaryDate === jstToday());
   const todayEntry = todayEntries[0] ?? null;
-  const recentEntries = entries.filter((entry) => entry.diaryDate !== jstToday()).slice(0, 2);
+  const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
   const [sampleOpen, setSampleOpen] = useState(false);
   const [today] = useState(() => {
     const date = jstToday();
@@ -237,13 +239,14 @@ type HomeRecords =
   | { status: 'error'; message: string };
 
 function useHomeRecords(config: ClientConfig | null, configError: boolean): HomeRecords {
+  const { online } = useOnlineStatus();
   const [loaded, setLoaded] = useState<{
     config: ClientConfig | null;
     configError: boolean;
     records: HomeRecords;
   }>({ config: null, configError: false, records: { status: 'loading' } });
   const records =
-    configError || config?.dataMode === 'sample'
+    configError || config?.dataMode === 'sample' || (config !== null && !online)
       ? { status: 'sample' as const }
       : !config
         ? { status: 'loading' as const }
@@ -252,7 +255,7 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
           : { status: 'loading' as const };
 
   useEffect(() => {
-    if (configError || !config || config.dataMode === 'sample') return;
+    if (configError || !config || config.dataMode === 'sample' || !online) return;
     const currentConfig = config;
     let active = true;
     async function loadEntries() {
@@ -278,10 +281,12 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
           setLoaded({
             config: currentConfig,
             configError,
-            records: {
-              status: 'error',
-              message: failure instanceof Error ? failure.message : '通信を確認してください。',
-            },
+            records: !navigator.onLine
+              ? { status: 'sample' }
+              : {
+                  status: 'error',
+                  message: failure instanceof Error ? failure.message : '通信を確認してください。',
+                },
           });
       }
     }
@@ -289,7 +294,7 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
     return () => {
       active = false;
     };
-  }, [config, configError]);
+  }, [config, configError, online]);
   return records;
 }
 

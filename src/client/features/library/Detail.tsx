@@ -78,7 +78,15 @@ function formatEntryDate(date: string) {
   return monthDay;
 }
 
-function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
+function SavedComic({
+  comic,
+  mock,
+  hideTitle,
+}: {
+  comic: ComicDocument;
+  mock: boolean;
+  hideTitle: boolean;
+}) {
   const [images, setImages] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   useEffect(() => {
@@ -102,7 +110,13 @@ function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
           画像を取得できません。{error}
         </p>
       )}
-      <Comic comic={comic} images={images} mock={mock} imageError={Boolean(error)} />
+      <Comic
+        comic={comic}
+        images={images}
+        mock={mock}
+        imageError={Boolean(error)}
+        hideTitle={hideTitle}
+      />
     </>
   );
 }
@@ -961,11 +975,16 @@ function DetailContent({
                     <Icon name="check" size={40} />
                   </div>
                   <h2 id="draft-saved-title">日記を保存しました</h2>
-                  <p>続けて4コマにできます。</p>
+                  {canStartGeneration && <p>続けて4コマにできます。</p>}
                 </section>
               )}
               {generation?.status === 'succeeded' && (
-                <SavedComic key={generation.id} comic={generation.comic} mock={generation.mock} />
+                <SavedComic
+                  key={generation.id}
+                  comic={generation.comic}
+                  mock={generation.mock}
+                  hideTitle={generationForCurrentRevision}
+                />
               )}
               {generation?.status === 'queued' && (
                 <section className="generation-card" aria-live="polite">
@@ -1162,8 +1181,12 @@ function DetailContent({
           {comicFromPreviousRevision && statusView && (
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
-          {showQuotaStatus && quota && !pending && !unknownGeneration && (
-            <div className="detail-quota-card">
+          {quota && !pending && !unknownGeneration && (
+            <div
+              className={
+                showQuotaStatus && !generationReferenceUnavailable ? 'detail-quota-card' : 'sr-only'
+              }
+            >
               <GenerationQuotaStatus
                 quota={quota}
                 activeGeneration={activeGeneration}
@@ -1187,6 +1210,28 @@ function DetailContent({
               </div>
             )}
         </>
+      )}
+      {entry && editing && quota && (
+        <div className="sr-only">
+          <GenerationQuotaStatus
+            quota={quota}
+            activeGeneration={activeGeneration}
+            currentEntryId={entry.id}
+            currentGenerationId={generation?.id ?? null}
+          />
+        </div>
+      )}
+      {entry && editing && (quotaState === 'session-required' || quotaState === 'unavailable') && (
+        <div className="inline-alert" role="alert">
+          <p>
+            {quotaState === 'session-required'
+              ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
+              : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
+          </p>
+          <button className="button-text" type="button" onClick={() => void refreshQuota()}>
+            利用枠を再確認
+          </button>
+        </div>
       )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
