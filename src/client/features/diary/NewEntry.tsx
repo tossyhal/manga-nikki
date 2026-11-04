@@ -165,7 +165,9 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   useEffect(() => {
     if (previousOnlineRef.current === online) return;
     previousOnlineRef.current = online;
-    if (online) void refreshQuota();
+    if (!online) return;
+    const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
+    return () => window.clearTimeout(refreshTimer);
   }, [online, refreshQuota]);
 
   useEffect(() => {

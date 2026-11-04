@@ -180,13 +180,14 @@ export function EntryThumbnail({
   placeholderLabel?: string;
 }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const imageUrl = preview.imageUrl && failedUrl !== preview.imageUrl ? preview.imageUrl : null;
+  const { imageUrl: previewImageUrl, observeRef } = preview;
+  const imageUrl = previewImageUrl && failedUrl !== previewImageUrl ? previewImageUrl : null;
   const currentPlaceholderLabel =
-    failedUrl && preview.imageUrl === failedUrl ? '漫画画像を表示できません' : placeholderLabel;
+    failedUrl && previewImageUrl === failedUrl ? '漫画画像を表示できません' : placeholderLabel;
 
   return (
     <span
-      ref={preview.observeRef}
+      ref={observeRef}
       className={`entry-thumbnail ${className}`.trim()}
       aria-hidden={ariaHidden}
     >
