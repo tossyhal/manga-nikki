@@ -116,6 +116,8 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
 
   const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
     const requestId = ++quotaRequestRef.current;
+    if (!activeRef.current) return null;
+    setQuotaState('loading');
     try {
       const currentQuota = await getQuotaForExistingSession();
       if (!activeRef.current || requestId !== quotaRequestRef.current) return null;
@@ -163,10 +165,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   useEffect(() => {
     if (previousOnlineRef.current === online) return;
     previousOnlineRef.current = online;
-    if (online) {
-      setQuotaState('loading');
-      void refreshQuota();
-    }
+    if (online) void refreshQuota();
   }, [online, refreshQuota]);
 
   useEffect(() => {

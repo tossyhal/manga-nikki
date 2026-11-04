@@ -286,9 +286,8 @@ function DetailContent({
   }, [location.pathname, location.state, navigate]);
   useEffect(() => {
     if (!draftSavedNavigation || location.state === null) return;
-    setDraftSavedEntryId(id);
     navigate(location.pathname, { replace: true, state: null });
-  }, [draftSavedNavigation, id, location.pathname, location.state, navigate]);
+  }, [draftSavedNavigation, location.pathname, location.state, navigate]);
   const generation = entry?.latestGeneration;
   const pending = generation?.status === 'queued' || generation?.status === 'running';
   const generationForCurrentRevision = generation?.entryRevision === entry?.revision;

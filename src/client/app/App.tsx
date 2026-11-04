@@ -236,32 +236,51 @@ type HomeRecords =
   | { status: 'error'; message: string };
 
 function useHomeRecords(config: ClientConfig | null, configError: boolean): HomeRecords {
-  const [records, setRecords] = useState<HomeRecords>({ status: 'loading' });
+  const [loaded, setLoaded] = useState<{
+    config: ClientConfig | null;
+    configError: boolean;
+    records: HomeRecords;
+  }>({ config: null, configError: false, records: { status: 'loading' } });
+  const records =
+    configError || config?.dataMode === 'sample'
+      ? { status: 'sample' as const }
+      : !config
+        ? { status: 'loading' as const }
+        : loaded.config === config && loaded.configError === configError
+          ? loaded.records
+          : { status: 'loading' as const };
+
   useEffect(() => {
-    if (configError || config?.dataMode === 'sample') {
-      setRecords({ status: 'sample' });
-      return;
-    }
-    if (!config) {
-      setRecords({ status: 'loading' });
-      return;
-    }
+    if (configError || !config || config.dataMode === 'sample') return;
     const currentConfig = config;
     let active = true;
-    setRecords({ status: 'loading' });
     async function loadEntries() {
       try {
         if (currentConfig.dataMode === 'live' && !(await getLiveAccessToken())) {
-          if (active) setRecords({ status: 'sample' });
+          if (active)
+            setLoaded({
+              config: currentConfig,
+              configError,
+              records: { status: 'sample' },
+            });
           return;
         }
         const result = await getEntries({ limit: 20 });
-        if (active) setRecords({ status: 'ready', entries: result.items });
+        if (active)
+          setLoaded({
+            config: currentConfig,
+            configError,
+            records: { status: 'ready', entries: result.items },
+          });
       } catch (failure) {
         if (active)
-          setRecords({
-            status: 'error',
-            message: failure instanceof Error ? failure.message : '通信を確認してください。',
+          setLoaded({
+            config: currentConfig,
+            configError,
+            records: {
+              status: 'error',
+              message: failure instanceof Error ? failure.message : '通信を確認してください。',
+            },
           });
       }
     }

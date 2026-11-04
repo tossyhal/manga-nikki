@@ -40,12 +40,6 @@ export function useEntryPreview(
   useEffect(() => {
     let active = true;
     let started = false;
-    setResult({
-      key,
-      imageUrl: null,
-      generation: null,
-      isLoading: Boolean(eager && entryId && generationId),
-    });
 
     if (!entryId || !generationId) {
       return () => {
@@ -159,7 +153,14 @@ export function useEntryPreview(
   }, [eager, entryId, generationId, key, revision, target]);
 
   const current =
-    result.key === key ? result : { key, imageUrl: null, generation: null, isLoading: false };
+    result.key === key
+      ? result
+      : {
+          key,
+          imageUrl: null,
+          generation: null,
+          isLoading: Boolean(eager && entryId && generationId),
+        };
   return { ...current, observeRef };
 }
 
