@@ -1,7 +1,8 @@
 import { Link } from 'react-router';
-import type { Entry } from '../../../shared/schemas';
+import type { Entry, Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import { Icon } from '../../app/Icon';
+import { EntryThumbnail, useEntryPreview } from './EntryPreview';
 import './library.css';
 
 type EntryHistoryProps = {
@@ -22,6 +23,62 @@ function formatMonth(date: string) {
 function formatDate(date: string) {
   const [, month = '', day = ''] = date.split('-');
   return `${Number(month)}月${Number(day)}日`;
+}
+
+function generationLabel(status: Generation['status']) {
+  switch (status) {
+    case 'queued':
+      return '生成待ち';
+    case 'running':
+      return '生成中';
+    case 'succeeded':
+      return '4コマ漫画';
+    case 'failed':
+      return '生成失敗';
+    case 'unknown':
+      return '結果確認中';
+    case 'cancelled':
+      return '生成中止';
+    default:
+      return null;
+  }
+}
+
+function EntryHistoryItem({
+  entry,
+  compact,
+  showDate,
+}: {
+  entry: Entry;
+  compact: boolean;
+  showDate: boolean;
+}) {
+  const preview = useEntryPreview(entry);
+  const statusLabel = (() => {
+    if (preview.generation?.status === 'succeeded') return showDate ? null : '4コマ漫画';
+    if (preview.generation) return generationLabel(preview.generation.status);
+    return showDate || entry.latestGenerationId ? null : '下書き';
+  })();
+
+  return (
+    <li className="entry-history-item">
+      <Link className="entry-history-card" to={`/entries/${entry.id}`}>
+        <EntryThumbnail
+          preview={preview}
+          className="entry-history-art"
+          iconSize={compact ? 24 : 30}
+        />
+        <span className="entry-history-copy">
+          <strong className="entry-history-summary">{summarizeDiary(entry.body)}</strong>
+          <span className="entry-history-meta">
+            {showDate && <time dateTime={entry.diaryDate}>{formatDate(entry.diaryDate)}</time>}
+            {statusLabel && <span>{statusLabel}</span>}
+          </span>
+        </span>
+        <Icon name="chevron-right" size={20} />
+      </Link>
+    </li>
+  );
 }
 
 export function EntryHistory({
@@ -52,25 +109,12 @@ export function EntryHistory({
             )}
             <ul className={`entry-history-list${compact ? ' entry-history-list--compact' : ''}`}>
               {items.map((entry) => (
-                <li className="entry-history-item" key={entry.id}>
-                  <Link className="entry-history-card" to={`/entries/${entry.id}`}>
-                    <span className="entry-history-art" aria-hidden="true">
-                      <Icon name="book" size={compact ? 24 : 30} />
-                    </span>
-                    <span className="entry-history-copy">
-                      <strong className="entry-history-summary">
-                        {summarizeDiary(entry.body)}
-                      </strong>
-                      <span className="entry-history-meta">
-                        {showDate && (
-                          <time dateTime={entry.diaryDate}>{formatDate(entry.diaryDate)}</time>
-                        )}
-                        <span>{entry.latestGenerationId ? '生成履歴あり' : '下書き'}</span>
-                      </span>
-                    </span>
-                    <Icon name="chevron-right" size={20} />
-                  </Link>
-                </li>
+                <EntryHistoryItem
+                  entry={entry}
+                  compact={compact}
+                  showDate={showDate}
+                  key={entry.id}
+                />
               ))}
             </ul>
           </section>

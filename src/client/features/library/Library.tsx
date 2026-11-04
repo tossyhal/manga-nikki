@@ -29,12 +29,11 @@ function shiftMonth(value: string, amount: number) {
   return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function moveDateToMonth(value: string, targetMonth: string, today: string) {
+function moveDateToMonth(value: string, targetMonth: string) {
   const { year, month } = dateParts(`${targetMonth}-01`);
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const day = Math.min(dateParts(value).day, lastDay);
-  const candidate = `${targetMonth}-${String(day).padStart(2, '0')}`;
-  return candidate > today ? today : candidate;
+  return `${targetMonth}-${String(day).padStart(2, '0')}`;
 }
 
 function daysInMonth(value: string) {
@@ -247,7 +246,7 @@ export function Library() {
     const targetMonth = shiftMonth(visibleMonth, amount);
     if (targetMonth > currentMonth || busy) return;
     setVisibleMonth(targetMonth);
-    setSelectedDate(moveDateToMonth(selectedDate, targetMonth, today));
+    setSelectedDate(moveDateToMonth(selectedDate, targetMonth));
     setBusy(true);
     setError('');
     setSessionUnavailable(false);
@@ -412,7 +411,7 @@ export function Library() {
                           aria-label={`${dateParts(date).year}年${dateParts(date).month}月${day}日${count ? `、記録${count}件` : ''}${future ? '、未来の日付' : ''}`}
                           aria-pressed={isSelected}
                           aria-current={date === today ? 'date' : undefined}
-                          disabled={future || busy || !monthCovered}
+                          disabled={busy || !monthCovered}
                           onClick={() => setSelectedDate(date)}
                         >
                           <span>{day}</span>

@@ -18,7 +18,7 @@ export function ConfirmDialog({
   description: string;
   confirmLabel: string;
   cancelLabel: string;
-  icon?: IconName;
+  icon?: IconName | null;
   destructive?: boolean;
   cancelPrimary?: boolean;
   onConfirm: () => void;
@@ -38,7 +38,7 @@ export function ConfirmDialog({
   return (
     <dialog
       ref={dialogRef}
-      className="confirm-dialog"
+      className={`confirm-dialog${icon === null ? ' confirm-dialog--plain' : ''}`}
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       onCancel={(event) => {
@@ -47,9 +47,11 @@ export function ConfirmDialog({
       }}
     >
       <div className="confirm-dialog-content">
-        <div className="confirm-dialog-icon">
-          <Icon name={icon} size={30} />
-        </div>
+        {icon !== null && (
+          <div className="confirm-dialog-icon">
+            <Icon name={icon} size={icon === 'trash' ? 40 : 30} />
+          </div>
+        )}
         <h2 id={titleId}>{title}</h2>
         <p id={descriptionId}>{description}</p>
         {cancelPrimary ? (

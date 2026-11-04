@@ -42,27 +42,32 @@ export function Comic({
               comic.visual.kind === 'page'
                 ? `${comic.title}の4コマ漫画`
                 : `${index + 1}コマ目：${panel?.scene ?? comic.title}`;
+            const image = src && !imageFailed && (
+              <button
+                className="comic-image-button"
+                type="button"
+                aria-label={`${alt}を拡大`}
+                onClick={() => setZoomed({ src, alt })}
+              >
+                <img
+                  src={src}
+                  loading="lazy"
+                  decoding="async"
+                  alt={alt}
+                  onError={() =>
+                    setFailedImageIds((current) =>
+                      current.includes(id) ? current : [...current, id],
+                    )
+                  }
+                />
+              </button>
+            );
             return (
               <figure className="comic-panel-card" key={id}>
-                {src && !imageFailed && (
-                  <button
-                    className="comic-image-button"
-                    type="button"
-                    aria-label={`${alt}を拡大`}
-                    onClick={() => setZoomed({ src, alt })}
-                  >
-                    <img
-                      src={src}
-                      loading="lazy"
-                      decoding="async"
-                      alt={alt}
-                      onError={() =>
-                        setFailedImageIds((current) =>
-                          current.includes(id) ? current : [...current, id],
-                        )
-                      }
-                    />
-                  </button>
+                {comic.visual.kind === 'panels' ? (
+                  <div className="comic-panel-image-frame">{image}</div>
+                ) : (
+                  image
                 )}
                 {comic.visual.kind === 'panels' && panel && (
                   <figcaption className="comic-panel-caption">
