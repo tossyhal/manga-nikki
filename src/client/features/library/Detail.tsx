@@ -106,7 +106,7 @@ function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
           画像を取得できません。{error}
         </p>
       )}
-      <Comic comic={comic} images={images} mock={mock} />
+      <Comic comic={comic} images={images} mock={mock} imageError={Boolean(error)} />
     </>
   );
 }
@@ -779,7 +779,7 @@ function DetailContent({
           </button>
         </header>
       )}
-      {error && (
+      {!editing && error && (
         <p role="alert" className="error">
           {error}
         </p>
@@ -1142,10 +1142,10 @@ function DetailContent({
                     ? '利用枠を確認しています…'
                     : quotaState === 'unavailable' || quotaState === 'session-required'
                       ? '利用枠を確認できません'
-                      : quota?.generationAvailable === false
-                        ? '漫画の受付を停止しています'
-                        : quota?.remainingToday === 0
-                          ? '本日の生成上限に達しています'
+                      : quota?.remainingToday === 0
+                        ? '本日の生成上限に達しています'
+                        : quota?.generationAvailable === false
+                          ? '漫画の受付を停止しています'
                           : quota?.activeGenerationId
                             ? '進行中の漫画を確認してください'
                             : !config.generationAvailable

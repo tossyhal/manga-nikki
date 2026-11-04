@@ -6,17 +6,22 @@ export function Comic({
   comic,
   images,
   mock = false,
+  imageError = false,
   titleAs: Title = 'h2',
 }: {
   comic: ComicDocument;
   images: Record<string, string>;
   mock?: boolean;
+  imageError?: boolean;
   /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
   titleAs?: 'h2' | 'h3';
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
+  const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
   const zoomDialogRef = useRef<HTMLDialogElement>(null);
+  const pageImageFailed =
+    comic.visual.kind === 'page' && (imageError || failedImageIds.includes(comic.visual.assetId));
 
   useEffect(() => {
     const dialog = zoomDialogRef.current;
@@ -31,7 +36,7 @@ export function Comic({
         <div className={`comic-images is-${comic.visual.kind}`}>
           {ids.map((id, index) => {
             const src = images[id];
-            if (!src) return null;
+            const imageFailed = failedImageIds.includes(id);
             const panel = comic.panels[index];
             const alt =
               comic.visual.kind === 'page'
@@ -39,14 +44,26 @@ export function Comic({
                 : `${index + 1}コマ目：${panel?.scene ?? comic.title}`;
             return (
               <figure className="comic-panel-card" key={id}>
-                <button
-                  className="comic-image-button"
-                  type="button"
-                  aria-label={`${alt}を拡大`}
-                  onClick={() => setZoomed({ src, alt })}
-                >
-                  <img src={src} loading="lazy" decoding="async" alt={alt} />
-                </button>
+                {src && !imageFailed && (
+                  <button
+                    className="comic-image-button"
+                    type="button"
+                    aria-label={`${alt}を拡大`}
+                    onClick={() => setZoomed({ src, alt })}
+                  >
+                    <img
+                      src={src}
+                      loading="lazy"
+                      decoding="async"
+                      alt={alt}
+                      onError={() =>
+                        setFailedImageIds((current) =>
+                          current.includes(id) ? current : [...current, id],
+                        )
+                      }
+                    />
+                  </button>
+                )}
                 {comic.visual.kind === 'panels' && panel && (
                   <figcaption className="comic-panel-caption">
                     <span className="comic-panel-number">{panel.index}</span>
@@ -64,7 +81,7 @@ export function Comic({
         <figcaption className="comic-transcript">
           <Title className="comic-title sr-only">{comic.title}</Title>
           {comic.visual.kind === 'page' && comic.visual.textMode === 'external' && (
-            <details className="comic-script">
+            <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
               <summary>4コマの内容を読む</summary>
               <ol>
                 {comic.panels.map((panel) => (
@@ -78,15 +95,31 @@ export function Comic({
             </details>
           )}
           {comic.visual.kind === 'page' && comic.visual.textMode === 'embedded' && (
-            <ol className="sr-only">
-              {comic.panels.map((panel) => (
-                <li key={panel.index}>
-                  <p>{panel.scene}</p>
-                  {panel.caption && <p>{panel.caption}</p>}
-                  {panel.dialogue && <p>「{panel.dialogue}」</p>}
-                </li>
-              ))}
-            </ol>
+            <>
+              <ol className="sr-only">
+                {comic.panels.map((panel) => (
+                  <li key={panel.index}>
+                    <p>{panel.scene}</p>
+                    {panel.caption && <p>{panel.caption}</p>}
+                    {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                  </li>
+                ))}
+              </ol>
+              {pageImageFailed && (
+                <details className="comic-script comic-image-fallback" defaultOpen>
+                  <summary>漫画の画像を表示できません。内容を読む</summary>
+                  <ol>
+                    {comic.panels.map((panel) => (
+                      <li key={panel.index}>
+                        <p>{panel.scene}</p>
+                        {panel.caption && <p>{panel.caption}</p>}
+                        {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+            </>
           )}
           {mock && <small>固定サンプルです。入力内容は反映されず、AIにも送信されません。</small>}
         </figcaption>
