@@ -815,14 +815,24 @@ function DetailContent({
             </div>
           )}
           {quotaState === 'session-required' && (
-            <p className="inline-alert" role="alert">
-              保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。
-            </p>
+            <div className="inline-alert" role="alert">
+              <p>
+                保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。
+              </p>
+              <button className="button-text" type="button" onClick={() => void refreshQuota()}>
+                利用枠を再確認
+              </button>
+            </div>
           )}
           {quotaState === 'unavailable' && (
-            <p className="inline-alert" role="alert">
-              利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。
-            </p>
+            <div className="inline-alert" role="alert">
+              <p>
+                利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。
+              </p>
+              <button className="button-text" type="button" onClick={() => void refreshQuota()}>
+                利用枠を再確認
+              </button>
+            </div>
           )}
           {comicFromPreviousRevision && (
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
@@ -1084,7 +1094,7 @@ function DetailContent({
               {busy ? '状態を確認しています…' : '状態を確認する'}
             </button>
           )}
-          {generation?.status === 'failed' && (
+          {generation?.status === 'failed' && generationForCurrentRevision && (
             <button
               className="button button-primary"
               type="button"
@@ -1096,7 +1106,7 @@ function DetailContent({
               保存した日記を見る
             </button>
           )}
-          {generation?.status === 'cancelled' && (
+          {generation?.status === 'cancelled' && generationForCurrentRevision && (
             <button className="button button-primary" type="button" onClick={beginEditing}>
               日記に戻る
             </button>

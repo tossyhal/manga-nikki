@@ -685,6 +685,10 @@ p {
   margin: 4px 0 0;
 }
 
+.inline-alert p {
+  margin: 0;
+}
+
 .error {
   border: 1px solid #e4e4e4;
 }
@@ -1281,6 +1285,10 @@ p {
   gap: 1px;
   color: #252525;
   text-decoration: none;
+}
+
+.bottom-nav-item:focus-visible {
+  outline-offset: -3px;
 }
 
 .bottom-nav-item.is-active {
