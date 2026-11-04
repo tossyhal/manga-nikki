@@ -44,7 +44,7 @@ const messages: Record<string, string> = {
   ENTRY_BUSY: '生成中の記録は編集できません。',
   IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
   INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
-  USER_LIMIT_REACHED: 'モックの本日の生成上限に達しました。',
+  USER_LIMIT_REACHED: '本日の生成上限に達しました。',
   GLOBAL_LIMIT_REACHED: '現在、生成の上限に達しています。',
   TOO_MANY_ACTIVE: '生成中の記録があります。完了後にもう一度お試しください。',
   CAPTCHA_FAILED: '確認に失敗しました。新しい確認を行ってください。',
@@ -118,7 +118,10 @@ export function createApp(
       {
         error: {
           code: failure.code,
-          message: messages[failure.code],
+          message:
+            error instanceof LiveGenerationError && error.code === 'GENERATION_DISABLED'
+              ? '現在、新しい漫画の生成を利用できません。'
+              : messages[failure.code],
           requestId: crypto.randomUUID(),
           retryable: false,
         },
@@ -316,7 +319,7 @@ export function createApp(
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
     const current = mode(c.env);
-    if (current === 'live-demo') throw new ApiError(503, 'GENERATION_DISABLED');
+    if (current === 'live-demo') throw new LiveGenerationError(503, 'GENERATION_DISABLED');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
     if (current !== 'local-mock') {
       const receipt = await reserveLiveMockGeneration(

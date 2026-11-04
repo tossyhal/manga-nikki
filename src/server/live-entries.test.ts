@@ -824,9 +824,22 @@ describe('live generation HTTP API', () => {
       AI_MODE: 'live',
       GENERATION_ENABLED: 'true',
     };
+    const entry = entryRow(owner);
+    boundary.entries.push(entry);
     const liveDemoApp = appWith(boundary);
     const config = await liveDemoApp.request('https://app.example/api/v1/config', {}, liveDemo);
     expect((await config.json()).generationAvailable).toBe(false);
+    const listed = await apiRequest(liveDemoApp, liveDemo, token, '/entries');
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).items).toMatchObject([{ id: entry.id, body: entry.body }]);
+    const saved = await apiRequest(liveDemoApp, liveDemo, token, '/entries', 'POST', {
+      createRequestId: crypto.randomUUID(),
+      diaryDate: entry.diary_date,
+      body: '保存できる架空日記',
+      consentVersion: 'v1',
+    });
+    expect(saved.status).toBe(201);
+    expect((await saved.json()).body).toBe('保存できる架空日記');
     const stopped = await apiRequest(
       liveDemoApp,
       liveDemo,
@@ -837,7 +850,11 @@ describe('live generation HTTP API', () => {
       { 'Idempotency-Key': crypto.randomUUID() },
     );
     expect(stopped.status).toBe(503);
-    expect((await stopped.json()).error.code).toBe('GENERATION_DISABLED');
+    expect((await stopped.json()).error).toMatchObject({
+      code: 'GENERATION_DISABLED',
+      message: '現在、新しい漫画の生成を利用できません。',
+      retryable: false,
+    });
   });
 
   it('disables local-connected ingress without a Queue binding', async () => {

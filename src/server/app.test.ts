@@ -125,6 +125,25 @@ describe('local mock API', () => {
     );
     expect(new Set(generated.map((x) => x.generationId)).size).toBe(1);
     expect((await (await request('/me/quota')).json()).remainingToday).toBe(1);
+    const secondGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(secondGeneration.status).toBe(202);
+    const limited = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(limited.status).toBe(429);
+    expect((await limited.json()).error).toMatchObject({
+      code: 'USER_LIMIT_REACHED',
+      message: '本日の生成上限に達しました。',
+      retryable: false,
+    });
     expect(
       (
         await request(
