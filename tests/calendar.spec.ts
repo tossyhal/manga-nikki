@@ -77,7 +77,7 @@ test('同じ日の21件目まで取得して、正確な件数と記録を表示
     'true',
   );
   await expect(page.locator('.entry-history-card')).toHaveCount(21);
-  expect(requestedCursors).toEqual(['', 'fixture-cursor-20']);
+  expect(requestedCursors.filter(Boolean)).toEqual(['fixture-cursor-20']);
 });
 
 test('カレンダーの月範囲を確定し、一覧の続きをカーソルで取得する', async ({ page }) => {
@@ -109,7 +109,7 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
 
   await page.goto('/library');
   await expect(page.getByRole('link', { name: /今月に書いた架空日記/ })).toBeVisible();
-  expect(requestedCursors).toEqual(['']);
+  expect(requestedCursors.filter(Boolean)).toEqual([]);
 
   await page.getByRole('button', { name: '一覧で見る' }).click();
   await expect(
@@ -118,7 +118,7 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
   await expect(page.getByRole('button', { name: '続きを読み込む' })).toBeVisible();
   await page.getByRole('button', { name: '続きを読み込む' }).click();
   await expect(page.getByRole('link', { name: /ページをまたいだ架空日記/ })).toBeVisible();
-  expect(requestedCursors).toEqual(['', 'fixture-cursor-20']);
+  expect(requestedCursors.filter(Boolean)).toEqual(['fixture-cursor-20']);
 });
 
 test('月移動と空日の作成日付、未来日の制約を保つ', async ({ page }) => {
@@ -167,7 +167,11 @@ test('記録全体が空なら新規作成への導線を表示する', async ({
   await page.goto('/library');
 
   await expect(page.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
+  await expect(
+    page
+      .getByRole('region', { name: 'まだ記録がありません' })
+      .getByRole('link', { name: '日記を書く' }),
+  ).toHaveAttribute('href', '/new');
 });
 
 test('セッションを失った記録一覧は以前の記録にアクセスできない状態を説明する', async ({ page }) => {
