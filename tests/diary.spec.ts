@@ -26,8 +26,9 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /図書館で本を読んだ。/ })).toBeVisible();
-  await page.getByRole('link', { name: /図書館で本を読んだ。/ }).click();
+  const recentRecords = page.getByRole('region', { name: '最近の記録' });
+  await expect(recentRecords.getByRole('link', { name: /図書館で本を読んだ。/ })).toBeVisible();
+  await recentRecords.getByRole('link', { name: /図書館で本を読んだ。/ }).click();
 
   await clickEntryMenuItem(page, '日記を削除');
   const deleteDialogTitle = 'この日記を削除しますか？';
@@ -80,15 +81,36 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
   await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
 });
 
-test('設定を読み込めない画面では通信確認と再読み込みを案内する', async ({ page }) => {
+test('設定取得失敗時は案内と公開サンプルだけを表示する', async ({ page }) => {
   const message = '現在、読み込めません。通信を確認して再読み込みしてください。';
+  const personalApiRequests: string[] = [];
+  const externalAuthRequests: string[] = [];
   await page.route('**/api/v1/config', (route) => route.abort('failed'));
+  page.on('request', (request) => {
+    if (request.url().includes('/api/v1/entries')) personalApiRequests.push(request.url());
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
+      externalAuthRequests.push(request.url());
+  });
 
-  for (const path of ['/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
+  for (const path of ['/', '/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
     await page.goto(path);
     await expect(page.locator('.notice')).toHaveText(message);
-    await expect(page.getByRole('alert')).toHaveText(message);
+    if (path === '/') {
+      await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
+      await page.getByRole('button', { name: '漫画を読む' }).click();
+      await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+      await expect(
+        page.getByText('朝はトーストを食べた。図書館で本を読んだ。帰り道で猫を見かけた。'),
+      ).toBeVisible();
+      await page.getByRole('button', { name: '戻る' }).click();
+    } else {
+      await expect(page.locator('#main').getByRole('alert')).toHaveText(message);
+    }
   }
+  expect(personalApiRequests).toEqual([]);
+  expect(externalAuthRequests).toEqual([]);
 });
 
 test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出さない', async ({ page }) => {
@@ -113,9 +135,7 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
   });
 
   await page.goto('/');
-  await expect(page.locator('.notice')).toHaveText(
-    '架空サンプルを表示しています。保存・生成は利用できません。',
-  );
+  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
   await page.getByRole('button', { name: '漫画を読む' }).click();
@@ -147,9 +167,8 @@ test('liveホームは履歴取得と匿名登録を始めない', async ({ page
   });
 
   await page.goto('/');
-  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
-  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
-  await expect(page.getByRole('link', { name: '日記を書く' }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
   await page.waitForLoadState('networkidle');
 
@@ -180,7 +199,10 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   });
 
   await page.goto('/new');
-  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
+  await expect(page.locator('.policy-note')).toContainText('匿名セッションはこのブラウザに保存');
+  await expect(page.locator('.policy-note')).toContainText(
+    '保存後30日を過ぎると閲覧できなくなります',
+  );
   await expect(page.getByText('現在、漫画生成は利用できません。', { exact: true })).toBeVisible();
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();

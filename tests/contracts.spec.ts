@@ -43,6 +43,9 @@ for (const [kind, template] of [
     await intercept(page, () => ({ ...fixtures.succeeded, comic }));
     await page.goto(`/entries/${entryId}`);
     await expect(page.getByRole('heading', { name: comic.title })).toBeVisible();
+    if (comic.visual.kind === 'page') {
+      await page.getByText('4コマの内容を読む', { exact: true }).click();
+    }
     await expect(page.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
     await expect(page.getByText('「波がきれい」')).toBeVisible();
     const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
@@ -64,10 +67,10 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
     return generation;
   });
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByText('受付済みです。生成を待っています。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
   generation = fixtures.running;
   await page.clock.runFor(5000);
-  await expect(page.getByText('画像を描いています。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '4コマを描いています' })).toBeVisible();
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
   await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
@@ -103,8 +106,10 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
     if (status === 'cancelled')
       await expect(page.getByText('生成は中止されました。')).toBeVisible();
     else if (status === 'unknown')
-      await expect(page.getByRole('alert')).toContainText('自動では再生成せず');
+      await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
     else await expect(page.getByRole('alert')).toContainText('漫画を作成できませんでした。');
+    if (status === 'unknown')
+      await expect(page.locator('.generation-card')).toContainText('自動では再生成せず');
     const terminalReads = reads;
     await page.clock.runFor(15000);
     expect(reads).toBe(terminalReads);

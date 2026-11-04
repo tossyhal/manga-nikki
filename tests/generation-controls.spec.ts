@@ -269,7 +269,8 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   await page.reload();
   await expect(page.getByRole('button', { name: '受付結果を確認' })).toBeVisible();
   await page.getByRole('button', { name: '受付結果を確認' }).click();
-  await expect(page.getByRole('alert')).toContainText('自動では再生成せず');
+  await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
+  await expect(page.locator('.generation-card')).toContainText('自動では再生成せず');
   expect(generationRequests).toHaveLength(2);
   expect(generationRequests[0]?.key).toBe(generationRequests[1]?.key);
   expect(generationRequests[0]?.captchaToken).toBe('generation-token-e2e-1');
@@ -554,7 +555,7 @@ for (const delayedCallback of ['token', 'error'] as const) {
 
     await clickEntryMenuItem(page, '日記を編集');
     await page.getByLabel('日記', { exact: true }).fill('保存処理を確認する架空の日記');
-    await page.getByRole('button', { name: '変更を保存' }).click();
+    await page.getByRole('button', { name: '保存', exact: true }).click();
     await patchReceived;
     await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
     await page.waitForTimeout(25);

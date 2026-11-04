@@ -128,7 +128,7 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await page.getByLabel('日付', { exact: true }).fill('2026-01-02');
   await diary.fill(updatedBody);
   await expect(page.getByText('1000 / 1,000文字')).toBeVisible();
-  await page.getByRole('button', { name: '変更を保存' }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
 
   await expect(page.getByText('2026-01-02 / 固定サンプル')).toBeVisible();
   await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
@@ -152,9 +152,9 @@ test('生成待ち・生成中の日記では編集操作を表示しない', as
     await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(
-      page.getByText(
-        status === 'queued' ? '受付済みです。生成を待っています。' : '画像を描いています。',
-      ),
+      page.getByText(status === 'queued' ? '生成を受け付けました' : '4コマを描いています', {
+        exact: true,
+      }),
     ).toBeVisible();
     await page.unrouteAll({ behavior: 'wait' });
   }
@@ -196,7 +196,7 @@ for (const failure of [
     await clickEntryMenuItem(page, '日記を編集');
     const draft = '失敗しても画面に残す架空の入力';
     await page.getByLabel('日記', { exact: true }).fill(draft);
-    await page.getByRole('button', { name: '変更を保存' }).click();
+    await page.getByRole('button', { name: '保存', exact: true }).click();
 
     await expect(page.getByRole('alert')).toContainText(
       failure.status === 401
@@ -241,7 +241,7 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
   await clickEntryMenuItem(page, '日記を編集');
   const draft = '別タブに上書きされない入力';
   await page.getByLabel('日記', { exact: true }).fill(draft);
-  await page.getByRole('button', { name: '変更を保存' }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('button', { name: '最新の記録を読み込む' })).toBeVisible();
   const initialReads = getCount;
   expect(initialReads).toBeGreaterThan(0);
@@ -251,7 +251,10 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
   await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
   expect(getCount).toBe(initialReads);
 
-  await page.getByRole('button', { name: '最新の記録を読み込む' }).click();
+  await page
+    .locator('#edit-entry-form')
+    .getByRole('button', { name: '最新の記録を読み込む', exact: true })
+    .click();
   await clickAppDialogButton(page, conflictDialogTitle, '最新の記録を読み込む');
   await expect(page.getByLabel('日記', { exact: true })).toHaveValue(latest.body);
   expect(getCount).toBe(initialReads + 1);
@@ -289,12 +292,15 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
   await page.getByLabel('日記', { exact: true }).fill('生成競合後も保持する架空の日記');
-  await page.getByRole('button', { name: '変更を保存' }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('button', { name: '最新の記録を読み込む' })).toBeVisible();
 
-  await page.getByRole('button', { name: '最新の記録を読み込む' }).click();
+  await page
+    .locator('#edit-entry-form')
+    .getByRole('button', { name: '最新の記録を読み込む', exact: true })
+    .click();
   await clickAppDialogButton(page, '最新の記録を読み込みますか？', '最新の記録を読み込む');
-  await expect(page.getByText('受付済みです。生成を待っています。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();
@@ -316,7 +322,7 @@ test('未来日は保存せず、日付と本文を保持する', async ({ page 
   await date.fill(future);
   const draft = '未来の日付では保存しない架空の日記';
   await page.getByLabel('日記', { exact: true }).fill(draft);
-  await page.getByRole('button', { name: '変更を保存' }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
 
   await expect(date).toHaveValue(future);
   expect(await date.evaluate((element: HTMLInputElement) => element.validity.rangeOverflow)).toBe(

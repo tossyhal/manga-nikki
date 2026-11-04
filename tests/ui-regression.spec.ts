@@ -93,9 +93,7 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       } else if (path === '/library') {
         await expect(page.locator('.entry-history-card')).toHaveCount(1);
       } else {
-        await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
-        await page.getByText('元の日記を読む', { exact: true }).click();
-        await expect(page.locator('.diary')).toBeVisible();
+        await expect(page.locator('.entry-draft-card .diary')).toBeVisible();
       }
 
       const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
