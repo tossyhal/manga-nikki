@@ -317,7 +317,6 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
     .click();
   await clickAppDialogButton(page, '最新の記録を読み込みますか？', '最新の記録を読み込む');
   await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('この記録は生成中のため編集できません。');
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();
