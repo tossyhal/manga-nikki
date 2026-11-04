@@ -58,6 +58,35 @@ for (const [kind, template] of [
     }
   });
 }
+
+test('panels漫画の画像URLを取得できなくても脚本を表示する', async ({ page }) => {
+  const comic = structuredClone(panelsComic);
+  comic.panels[0].caption = '画像URLがなくても読める架空の説明';
+  comic.panels[0].dialogue = '絵がなくても残る会話';
+  const generation = { ...fixtures.succeeded, comic };
+  const requestedAssetIds = new Set<string>();
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: detail(generation) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('**/api/v1/assets/*/url', async (route) => {
+    const assetId = new URL(route.request().url()).pathname.split('/').at(-2);
+    if (assetId) requestedAssetIds.add(assetId);
+    await route.abort('failed');
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.getByRole('heading', { name: comic.title })).toBeVisible();
+  await expect(page.locator('.comic-panel-card')).toHaveCount(4);
+  for (const panel of comic.panels) {
+    await expect(page.getByText(panel.caption, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByText('「絵がなくても残る会話」', { exact: true })).toBeVisible();
+  await expect.poll(() => requestedAssetIds.size).toBe(4);
+});
+
 test('queuedからrunning、succeededへ進み、完了後はポーリングを止める', async ({ page }) => {
   await page.clock.install();
   let generation: Generation = fixtures.queued;

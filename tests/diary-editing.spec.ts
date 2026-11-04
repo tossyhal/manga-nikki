@@ -130,7 +130,8 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await expect(page.getByText('1000 / 1,000文字')).toBeVisible();
   await page.getByRole('button', { name: '保存', exact: true }).click();
 
-  await expect(page.getByText('2026-01-02 / 固定サンプル')).toBeVisible();
+  await expect(page.locator('.detail-date-row time')).toHaveAttribute('datetime', '2026-01-02');
+  await expect(page.locator('.detail-date-row')).toContainText('固定サンプル');
   await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText(updatedBody, { exact: true })).toBeVisible();
@@ -247,6 +248,10 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
   expect(initialReads).toBeGreaterThan(0);
 
   const conflictDialogTitle = '最新の記録を読み込みますか？';
+  await page
+    .locator('#edit-entry-form')
+    .getByRole('button', { name: '最新の記録を読み込む', exact: true })
+    .click();
   await clickAppDialogButton(page, conflictDialogTitle, '編集に戻る');
   await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
   expect(getCount).toBe(initialReads);

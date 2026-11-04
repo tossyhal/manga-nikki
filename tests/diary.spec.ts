@@ -26,7 +26,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toBeVisible();
-  const recentRecords = page.getByRole('region', { name: '最近の記録' });
+  const recentRecords = page.locator('.recent-records');
   await expect(recentRecords.getByRole('link', { name: /図書館で本を読んだ。/ })).toBeVisible();
   await recentRecords.getByRole('link', { name: /図書館で本を読んだ。/ }).click();
 
@@ -203,7 +203,7 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   await expect(page.locator('.policy-note')).toContainText(
     '保存後30日を過ぎると閲覧できなくなります',
   );
-  await expect(page.getByText('現在、漫画生成は利用できません。', { exact: true })).toBeVisible();
+  await expect(page.locator('.policy-note')).toContainText('現在、漫画生成は利用できません。');
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
 

@@ -360,6 +360,60 @@ test('quota上限では受付せず、停止理由と更新時刻を表示する
   expect(generationRequests).toBe(0);
 });
 
+test('利用枠確認の失敗は再確認で復帰し、自動生成を始めない', async ({ page }) => {
+  await installLiveSession(page);
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+  );
+  let quotaRequests = 0;
+  let allowQuotaSuccess = false;
+  await page.route('**/api/v1/me/quota', (route) => {
+    quotaRequests++;
+    if (!allowQuotaSuccess) {
+      return route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: 'DEPENDENCY_UNAVAILABLE',
+            message: 'backend details are not displayed',
+            requestId: 'quota-unavailable-request',
+            retryable: true,
+          },
+        },
+      });
+    }
+    return route.fulfill({ json: availableQuota() });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: draftEntryDetailFixture }),
+  );
+  let generationRequests = 0;
+  await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+    generationRequests++;
+    return route.abort();
+  });
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(
+    page.getByText(
+      '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。',
+    ),
+  ).toBeVisible();
+  const retryQuota = page.getByRole('button', { name: '利用枠を再確認', exact: true });
+  await expect(retryQuota).toBeEnabled();
+  const failedReads = quotaRequests;
+  expect(failedReads).toBeGreaterThan(0);
+  expect(generationRequests).toBe(0);
+
+  allowQuotaSuccess = true;
+  await retryQuota.click();
+  await expect(page.getByText('本日の残り生成枠は3回です。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
+  expect(quotaRequests).toBeGreaterThan(failedReads);
+  expect(generationRequests).toBe(0);
+});
+
 test('生成停止中は残り枠があっても受付しない', async ({ page }) => {
   await installLiveSession(page);
   await page.route('**/api/v1/config', (route) =>
