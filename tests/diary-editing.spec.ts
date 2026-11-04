@@ -221,6 +221,62 @@ for (const failure of [
   });
 }
 
+test('同じ入力エラーを再試行しても再びalertへfocusして本文を保持する', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  let patchCount = 0;
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      patchCount++;
+      return route.fulfill({
+        status: 500,
+        json: {
+          error: {
+            code: 'UNEXPECTED_PATCH',
+            message: 'validation error must prevent PATCH',
+            requestId: 'validation-focus-e2e',
+            retryable: false,
+          },
+        },
+      });
+    }
+    return route.fulfill({ json: draftEntryDetailFixture });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を編集');
+  const diary = page.getByLabel('日記', { exact: true });
+  const invalidBody = '   ';
+  const errorText = '日付は今日以前、本文は1〜1,000文字で入力してください。';
+  await diary.fill(invalidBody);
+
+  const errorAlert = page.getByRole('alert');
+  const expectVisibleErrorAboveNavigation = async () => {
+    await expect(errorAlert).toContainText(errorText);
+    await expect(errorAlert).toBeFocused();
+    await expect(errorAlert).toBeInViewport();
+    const alertBottom = await errorAlert.evaluate(
+      (element) => element.getBoundingClientRect().bottom,
+    );
+    const navigationTop = await page
+      .getByRole('navigation', { name: 'メインナビゲーション' })
+      .evaluate((element) => element.getBoundingClientRect().top);
+    expect(alertBottom).toBeLessThanOrEqual(navigationTop);
+  };
+
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expectVisibleErrorAboveNavigation();
+  await expect(diary).toHaveValue(invalidBody);
+  expect(patchCount).toBe(0);
+
+  await diary.focus();
+  await expect(diary).toBeFocused();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expectVisibleErrorAboveNavigation();
+  await expect(diary).toHaveValue(invalidBody);
+  expect(patchCount).toBe(0);
+});
+
 test('409後は利用者が選んだ場合だけ最新を読み込み、キャンセル時は入力を保つ', async ({ page }) => {
   const latest: EntryDetail = {
     ...draftEntryDetailFixture,
