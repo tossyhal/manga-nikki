@@ -150,9 +150,16 @@ test('月移動と空日の作成日付、未来日の制約を保つ', async ({
   await page.getByRole('button', { name: '次の月' }).click();
   const tomorrow = shiftDay(today, 1);
   if (monthKey(tomorrow) === monthKey(today)) {
-    await expect(
-      page.getByRole('button', { name: `${dateLabel(tomorrow)}、未来の日付` }),
-    ).toBeDisabled();
+    const futureDay = page.getByRole('button', {
+      name: `${dateLabel(tomorrow)}、未来の日付`,
+    });
+    await expect(futureDay).toBeEnabled();
+    await futureDay.click();
+    await expect(page.locator('#library-selected-date')).toHaveText(
+      `${parts(tomorrow).month}月${parts(tomorrow).day}日`,
+    );
+    await expect(page.locator('.library-day-empty')).toContainText('この日の記録はありません');
+    await expect(page.getByRole('link', { name: 'この日の日記を書く' })).toHaveCount(0);
   } else {
     await expect(page.getByRole('button', { name: '次の月' })).toBeDisabled();
   }

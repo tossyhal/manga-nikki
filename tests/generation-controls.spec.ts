@@ -408,7 +408,9 @@ test('利用枠確認の失敗は再確認で復帰し、自動生成を始め�
 
   allowQuotaSuccess = true;
   await retryQuota.click();
-  await expect(page.getByText('本日の残り生成枠は3回です。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '本日の漫画生成枠' })).toContainText(
+    '本日の残り生成枠は3回です。',
+  );
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   expect(quotaRequests).toBeGreaterThan(failedReads);
   expect(generationRequests).toBe(0);
@@ -642,9 +644,11 @@ test('生成失敗後に編集・再保存で新しい受付へ進め、残り�
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('alert')).toContainText(
-    '本文を編集して保存すると新しく受付できます。利用枠は上の残り回数を確認してください。',
+    '本文を編集して保存すると新しく受付できます。',
   );
-  await expect(page.getByText('本日の残り生成枠は3回です。')).toBeVisible();
+  await expect(page.getByRole('region', { name: '本日の漫画生成枠' })).toContainText(
+    '本日の残り生成枠は3回です。',
+  );
   await openEntryMenu(page);
   await expect(page.getByRole('menuitem', { name: '日記を編集' })).toBeVisible();
 });
@@ -808,7 +812,9 @@ test('quota待ち中に編集を始めたら遅延した自動生成要求を破
   await page.getByLabel('日記', { exact: true }).fill('編集途中の日記を保護する架空の追記');
   releaseQuota();
 
-  await expect(page.getByText('本日の残り生成枠は3回です。')).toBeVisible();
+  await expect(page.getByRole('region', { name: '本日の漫画生成枠' })).toContainText(
+    '本日の残り生成枠は3回です。',
+  );
   await expect(page.getByRole('region', { name: '漫画生成の確認' })).toHaveCount(0);
   await expect(page.getByLabel('日記', { exact: true })).toHaveValue(
     '編集途中の日記を保護する架空の追記',

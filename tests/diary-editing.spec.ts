@@ -152,11 +152,7 @@ test('生成待ち・生成中の日記では編集操作を表示しない', as
     await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
     await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(
-      page.getByText(status === 'queued' ? '生成を受け付けました' : '4コマを描いています', {
-        exact: true,
-      }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
     await page.unrouteAll({ behavior: 'wait' });
   }
 });
@@ -372,7 +368,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
     .getByRole('button', { name: '最新の記録を読み込む', exact: true })
     .click();
   await clickAppDialogButton(page, '最新の記録を読み込みますか？', '最新の記録を読み込む');
-  await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();

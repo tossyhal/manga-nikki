@@ -120,10 +120,10 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
     return generation;
   });
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
   generation = fixtures.running;
   await page.clock.runFor(5000);
-  await expect(page.getByRole('heading', { name: '4コマを描いています' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
   await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
@@ -156,11 +156,13 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
     await page.getByText('元の日記を読む', { exact: true }).click();
     await expect(page.locator('.diary')).toHaveText('架空のテスト日記');
     await expect(page.locator('.comic')).toHaveCount(0);
-    if (status === 'cancelled')
+    if (status === 'cancelled') {
+      await expect(page.getByRole('heading', { name: '生成を終了しました' })).toBeVisible();
       await expect(page.getByText('生成は中止されました。')).toBeVisible();
-    else if (status === 'unknown')
+    } else if (status === 'unknown')
       await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
-    else await expect(page.getByRole('alert')).toContainText('漫画を作成できませんでした。');
+    else
+      await expect(page.getByRole('heading', { name: '漫画を生成できませんでした' })).toBeVisible();
     if (status === 'unknown')
       await expect(page.locator('.generation-card')).toContainText('自動では再生成せず');
     const terminalReads = reads;
@@ -231,8 +233,13 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(`/entries/${savedId}`);
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(page.locator('.draft-saved-card')).toBeVisible();
+  await expect(page.getByRole('button', { name: '4コマにする' })).toBeVisible();
   expect(requestIds).toHaveLength(2);
   expect(requestIds[0]).toBe(requestIds[1]);
+  await page.reload();
+  await expect(page.locator('.entry-draft-card .diary')).toHaveText('保存だけ成功した架空の日記');
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
   await page.getByRole('button', { name: '一覧で見る' }).click();
   await expect(page.locator('.entry-history-card')).toHaveCount(1);
