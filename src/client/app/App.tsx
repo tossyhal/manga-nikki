@@ -8,15 +8,18 @@ import {
   type BlockerFunction,
   type RouteObject,
 } from 'react-router';
-import { jstToday, type Entry } from '../../shared/schemas';
+import { jstToday, type Entry, type Generation } from '../../shared/schemas';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
+import { summarizeDiary } from '../../shared/summary';
 import catSleeping from '../../../design/assets/cat_sleeping.svg?url';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
 import { EntryHistory } from '../features/library/EntryHistory';
+import { EntryThumbnail, useEntryPreview } from '../features/library/EntryPreview';
 import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
 import { getEntries } from '../lib/api';
+import { getLiveAccessToken } from '../lib/auth';
 import { getClientConfig, type ClientConfig } from '../lib/config';
 import { BottomNav } from './BottomNav';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -50,11 +53,79 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
   );
 }
 
+function generationLabel(
+  generation: Generation | null,
+  entry: Entry,
+  loading: boolean,
+  error?: string,
+) {
+  if (error) return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
+  if (!generation || generation.entryRevision !== entry.revision) {
+    if (loading && entry.latestGenerationId) return '状態を確認しています';
+    return '下書き';
+  }
+  switch (generation.status) {
+    case 'queued':
+    case 'running':
+      return '漫画を作成中';
+    case 'unknown':
+      return '生成結果を確認中';
+    case 'failed':
+      return '漫画を生成できませんでした';
+    case 'cancelled':
+      return '生成を終了しました';
+    case 'succeeded':
+      return '完成';
+    default:
+      return '状態を確認しています';
+  }
+}
+
+function TodayEntryHero({ entry }: { entry: Entry }) {
+  const preview = useEntryPreview(entry, { eager: true });
+  const generation =
+    preview.generation?.entryRevision === entry.revision ? preview.generation : null;
+  let placeholder = '漫画はまだありません';
+  if (preview.isLoading) placeholder = '漫画を読み込んでいます';
+  else if (preview.error?.includes('画像')) placeholder = '漫画を表示できません';
+  else if (preview.error) placeholder = '記録の状態を確認できません';
+  else if (generation?.status === 'queued' || generation?.status === 'running')
+    placeholder = '漫画を作成中';
+  else if (generation?.status === 'failed' || generation?.status === 'cancelled')
+    placeholder = '漫画はありません';
+  const hasComic = generation?.status === 'succeeded';
+  const comicTitle =
+    generation?.status === 'succeeded' ? generation.comic.title : summarizeDiary(entry.body);
+
+  return (
+    <div className="home-today-hero">
+      <div className="home-today-content">
+        <h2>{summarizeDiary(entry.body)}</h2>
+        <p>{generationLabel(generation, entry, preview.isLoading, preview.error)}</p>
+        <Link className="today-write-link" to={`/entries/${encodeURIComponent(entry.id)}`}>
+          <span>{hasComic ? '漫画を読む' : '記録を読む'}</span>
+          <Icon name="chevron-right" size={18} />
+        </Link>
+      </div>
+      <EntryThumbnail
+        preview={preview}
+        className="home-today-image"
+        iconSize={32}
+        alt={`${comicTitle}の4コマ漫画`}
+        ariaHidden={false}
+        placeholderLabel={placeholder}
+      />
+    </div>
+  );
+}
+
 function Home({ config, configError }: { config: ClientConfig | null; configError: boolean }) {
-  const isMock = config?.dataMode === 'mock';
-  const showSample = configError || config?.dataMode === 'sample' || config?.dataMode === 'live';
-  const { recent, historyError } = useRecentRecordsForHome(isMock);
-  const todayEntries = recent?.filter((entry) => entry.diaryDate === jstToday()) ?? [];
+  const records = useHomeRecords(config, configError);
+  const showSample = records.status === 'sample';
+  const entries = records.status === 'ready' ? records.entries : [];
+  const todayEntries = entries.filter((entry) => entry.diaryDate === jstToday());
+  const todayEntry = todayEntries[0] ?? null;
+  const recentEntries = entries.filter((entry) => entry.diaryDate !== jstToday()).slice(0, 2);
   const [sampleOpen, setSampleOpen] = useState(false);
   const [today] = useState(() => {
     const date = jstToday();
@@ -103,7 +174,7 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
 
   return (
     <div className="home-page">
-      {isMock && today && (
+      {today && (
         <time className="home-date" dateTime={today.date}>
           {today.label}
         </time>
@@ -111,9 +182,8 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
       <section className="today-section" aria-labelledby="today-heading">
         <h1 id="today-heading">{showSample ? 'サンプル' : '今日の記録'}</h1>
         {showSample ? (
-          <div className="today-sample-card">
-            <img src="/sample-comic.svg" alt="架空の一日の4コマ漫画" loading="lazy" />
-            <div className="today-sample-copy">
+          <div className="home-today-hero">
+            <div className="home-today-content">
               <span className="sample-tag">架空サンプル</span>
               <h2>{pageComic.title}</h2>
               <p>日記を漫画にしたサンプルです。</p>
@@ -126,21 +196,22 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
                 <Icon name="chevron-right" size={18} />
               </button>
             </div>
+            <div className="home-today-image">
+              <img src="/sample-comic.svg" alt="架空の一日の4コマ漫画" loading="lazy" />
+            </div>
           </div>
         ) : config === null ? (
           <output className="today-card-loading">読み込んでいます…</output>
-        ) : isMock && recent === null ? (
+        ) : records.status === 'loading' ? (
           <output className="today-card-loading">読み込んでいます…</output>
-        ) : isMock && historyError ? (
+        ) : records.status === 'error' ? (
           <div className="today-unavailable-card" role="alert">
             <Icon name="alert" size={24} />
-            <p>今日の記録を読み込めませんでした。</p>
-            <span>{historyError}</span>
+            <p>記録を読み込めませんでした。</p>
+            <span>{records.message}</span>
           </div>
-        ) : todayEntries.length > 0 ? (
-          <div className="today-records">
-            <EntryHistory entries={todayEntries} />
-          </div>
+        ) : todayEntry ? (
+          <TodayEntryHero entry={todayEntry} />
         ) : (
           <div className="today-empty-card">
             <p>今日はまだ記録がありません</p>
@@ -153,32 +224,52 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
         )}
       </section>
 
-      {isMock && recent !== null && !historyError && <RecentRecords entries={recent} />}
+      {records.status === 'ready' && <RecentRecords entries={recentEntries} />}
     </div>
   );
 }
 
-function useRecentRecordsForHome(enabled: boolean) {
-  const [recent, setRecent] = useState<Entry[] | null>(null);
-  const [historyError, setHistoryError] = useState('');
+type HomeRecords =
+  | { status: 'loading' }
+  | { status: 'sample' }
+  | { status: 'ready'; entries: Entry[] }
+  | { status: 'error'; message: string };
+
+function useHomeRecords(config: ClientConfig | null, configError: boolean): HomeRecords {
+  const [records, setRecords] = useState<HomeRecords>({ status: 'loading' });
   useEffect(() => {
-    if (!enabled) return;
+    if (configError || config?.dataMode === 'sample') {
+      setRecords({ status: 'sample' });
+      return;
+    }
+    if (!config) {
+      setRecords({ status: 'loading' });
+      return;
+    }
     let active = true;
-    getEntries({ limit: 20 })
-      .then((result) => {
-        if (active) setRecent(result.items);
-      })
-      .catch((failure: Error) => {
-        if (active) {
-          setRecent([]);
-          setHistoryError(failure.message);
+    setRecords({ status: 'loading' });
+    async function loadEntries() {
+      try {
+        if (config.dataMode === 'live' && !(await getLiveAccessToken())) {
+          if (active) setRecords({ status: 'sample' });
+          return;
         }
-      });
+        const result = await getEntries({ limit: 20 });
+        if (active) setRecords({ status: 'ready', entries: result.items });
+      } catch (failure) {
+        if (active)
+          setRecords({
+            status: 'error',
+            message: failure instanceof Error ? failure.message : '通信を確認してください。',
+          });
+      }
+    }
+    void loadEntries();
     return () => {
       active = false;
     };
-  }, [enabled]);
-  return { recent, historyError };
+  }, [config, configError]);
+  return records;
 }
 
 function HomeRoute() {
@@ -298,14 +389,18 @@ function App() {
           {configUnavailableMessage}
         </aside>
       )}
-      <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
+      <PwaNotice
+        diaryDirty={diaryActivity.dirty}
+        diaryBusy={diaryActivity.busy}
+        hideOfflineNotice={location.pathname === '/new'}
+      />
       <main id="main" className={`app-main${location.pathname === '/' ? ' app-main-home' : ''}`}>
         <Outlet context={context} />
       </main>
       <BottomNav />
       <ConfirmDialog
         open={blockedActivity !== null && blocker.state === 'blocked'}
-        icon="alert"
+        icon={blockedActivity?.busy ? 'alert' : null}
         title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
         description={
           blockedActivity?.busy

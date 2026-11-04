@@ -52,7 +52,7 @@ function generationStateMessage(generation: Generation): string {
     return '結果の確認を待っています。自動では再生成せず、利用枠を保持しています。状態を再確認してください。';
   }
   if (generation.status === 'failed') {
-    return '漫画を作成できませんでした。日記は保存されています。本文を編集して保存すると新しく受付できます。利用枠は上の残り回数を確認してください。';
+    return '漫画を作成できませんでした。日記は保存されています。本文を編集して保存すると新しく受付できます。';
   }
   return '生成は中止されました。日記は保存されています。';
 }
@@ -75,11 +75,7 @@ function formatEntryDate(date: string) {
     month: 'long',
     day: 'numeric',
   }).format(value);
-  const weekday = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    weekday: 'long',
-  }).format(value);
-  return `${monthDay} ${weekday}`;
+  return monthDay;
 }
 
 function SavedComic({ comic, mock }: { comic: ComicDocument; mock: boolean }) {
@@ -122,6 +118,15 @@ function DetailContent({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const draftSavedNavigation = Boolean(
+    location.state &&
+      typeof location.state === 'object' &&
+      'draftSaved' in location.state &&
+      location.state.draftSaved === true,
+  );
+  const [draftSavedEntryId, setDraftSavedEntryId] = useState<string | null>(() =>
+    draftSavedNavigation ? id : null,
+  );
   const [entry, setEntry] = useState<EntryDetail | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -167,6 +172,7 @@ function DetailContent({
   const openGenerationCaptcha = useCallback(
     (retry = false) => {
       if (generationFlowRef.current) return;
+      setDraftSavedEntryId(null);
       if (!siteKey) {
         generationFlowRef.current = false;
         setError('生成用の確認を利用できません。保存した記録はこの画面から引き続き確認できます。');
@@ -278,6 +284,11 @@ function DetailContent({
     if (autoGenerationRequestedRef.current && location.state !== null)
       navigate(location.pathname, { replace: true, state: null });
   }, [location.pathname, location.state, navigate]);
+  useEffect(() => {
+    if (!draftSavedNavigation || location.state === null) return;
+    setDraftSavedEntryId(id);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [draftSavedNavigation, id, location.pathname, location.state, navigate]);
   const generation = entry?.latestGeneration;
   const pending = generation?.status === 'queued' || generation?.status === 'running';
   const generationForCurrentRevision = generation?.entryRevision === entry?.revision;
@@ -309,7 +320,58 @@ function DetailContent({
     !generationForCurrentRevision &&
     !hasUnresolvedRequest,
   );
+  const draftSavedConfirmation = Boolean(
+    entry &&
+      draftSavedEntryId === id &&
+      !generation &&
+      !generationReferenceUnavailable &&
+      !editing,
+  );
   const editFormVisible = Boolean(entry && editing && !pending);
+  const statusKind: 'queued' | 'running' | 'unknown' | 'failed' | 'cancelled' | null =
+    generation?.status === 'queued'
+      ? 'queued'
+      : generation?.status === 'running'
+        ? 'running'
+        : generation?.status === 'unknown' || generationReferenceUnavailable
+          ? 'unknown'
+          : generation?.status === 'failed'
+            ? 'failed'
+            : generation?.status === 'cancelled'
+              ? 'cancelled'
+              : null;
+  const statusTitle =
+    statusKind === 'queued' || statusKind === 'running'
+      ? '漫画をつくっています'
+      : statusKind === 'unknown'
+        ? '生成結果を確認中'
+        : statusKind === 'failed'
+          ? '漫画を生成できませんでした'
+          : statusKind === 'cancelled'
+            ? '生成を終了しました'
+            : '';
+  const statusView = Boolean(statusKind && !editing);
+  const detailPageClass = [
+    'detail-page',
+    statusView && 'is-status',
+    statusView && statusKind && `is-${statusKind}`,
+    !statusView &&
+      (draftSavedConfirmation ||
+        (generation?.status === 'succeeded' && generationForCurrentRevision)) &&
+      'is-saved',
+    !statusView &&
+      !draftSavedConfirmation &&
+      !(generation?.status === 'succeeded' && generationForCurrentRevision) &&
+      'is-draft',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const showQuotaStatus = Boolean(
+    quota &&
+      (quota.remainingToday === 0 ||
+        !quota.generationAvailable ||
+        quota.activeGenerationId !== null),
+  );
 
   useEffect(() => {
     if (!error || !editFormVisible) return;
@@ -386,6 +448,7 @@ function DetailContent({
     generationRequestRef.current = true;
     generationFlowRef.current = true;
     actionInFlightRef.current = true;
+    setDraftSavedEntryId(null);
     setGenerationCaptchaOpen(false);
     setGenerationRequestSending(true);
     setBusy(true);
@@ -498,6 +561,7 @@ function DetailContent({
 
   function beginEditing() {
     if (!entry || pending || busy || actionInFlightRef.current) return;
+    setDraftSavedEntryId(null);
     autoGenerationRequestedRef.current = false;
     if (generationFlowRef.current) {
       generationFlowRef.current = false;
@@ -628,6 +692,13 @@ function DetailContent({
     setDiscardEditConfirmOpen(true);
   }
 
+  function showOriginalDiary() {
+    setJournalExpanded(true);
+    window.requestAnimationFrame(() =>
+      document.getElementById('original-diary')?.scrollIntoView({ block: 'center' }),
+    );
+  }
+
   useEffect(() => {
     const generationId = generation?.id;
     if (!pending || !generationId) return;
@@ -684,13 +755,26 @@ function DetailContent({
     }
   }
   return (
-    <div className="detail-page">
+    <div className={detailPageClass}>
       {entry && !editing && (
         <header className="detail-toolbar">
           <Link className="icon-button" to="/library" aria-label="記録の一覧へ戻る">
             <Icon name="back" />
           </Link>
-          <h1 className="detail-title">{summarizeDiary(entry.body)}</h1>
+          <div className="detail-title-group">
+            <h1 className={`detail-title${statusView ? ' detail-state-title' : ''}`}>
+              {draftSavedConfirmation
+                ? '下書きを保存しました'
+                : statusView
+                  ? statusTitle
+                  : generation?.status === 'succeeded' && generationForCurrentRevision
+                    ? generation.comic.title
+                    : summarizeDiary(entry.body)}
+            </h1>
+            {statusView && (
+              <p className="detail-state-summary">{summarizeDiary(entry.body)}</p>
+            )}
+          </div>
           <div className="detail-menu-anchor">
             <button
               ref={menuTriggerRef}
@@ -790,62 +874,20 @@ function DetailContent({
           </button>
         </header>
       )}
-      {error && !editFormVisible && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
       {entry ? (
         <>
-          {!editing && (
+          {!editing && !statusView && !draftSavedConfirmation && (
             <div className="detail-date-row">
               <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
               {generation?.mock && <span className="sample-tag">固定サンプル</span>}
             </div>
           )}
-          <output className="detail-save-status">
-            {config.dataMode === 'mock'
-              ? '一時保存しました。'
-              : `この匿名アカウントに保存しました。保存後${config.retentionDays}日を過ぎると閲覧できなくなります。`}
-          </output>
-          {config.dataMode !== 'sample' &&
-            config.generationAvailable &&
-            !(generation?.status === 'succeeded' && generation.mock) && (
-              <p className="hint">
-                このアプリの漫画は固定サンプルです。入力内容は反映されず、AIにも送信されません。
-              </p>
-            )}
-          {quota && (
-            <div className="detail-quota-card">
-              <GenerationQuotaStatus
-                quota={quota}
-                activeGeneration={activeGeneration}
-                currentEntryId={entry.id}
-                currentGenerationId={generation?.id ?? null}
-              />
-            </div>
+          {!editing && draftSavedConfirmation && (
+            <time className="detail-draft-saved-date" dateTime={entry.diaryDate}>
+              {formatEntryDate(entry.diaryDate)}
+            </time>
           )}
-          {quotaState === 'session-required' && (
-            <div className="inline-alert" role="alert">
-              <p>
-                保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。
-              </p>
-              <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-                利用枠を再確認
-              </button>
-            </div>
-          )}
-          {quotaState === 'unavailable' && (
-            <div className="inline-alert" role="alert">
-              <p>
-                利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。
-              </p>
-              <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-                利用枠を再確認
-              </button>
-            </div>
-          )}
-          {comicFromPreviousRevision && (
+          {comicFromPreviousRevision && !statusView && (
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
 
@@ -922,13 +964,22 @@ function DetailContent({
             </form>
           ) : (
             <>
+              {draftSavedConfirmation && (
+                <section className="draft-saved-card" aria-labelledby="draft-saved-title">
+                  <div className="draft-saved-check" aria-hidden="true">
+                    <Icon name="check" size={40} />
+                  </div>
+                  <h2 id="draft-saved-title">日記を保存しました</h2>
+                  <p>続けて4コマにできます。</p>
+                </section>
+              )}
               {generation?.status === 'succeeded' && (
                 <SavedComic key={generation.id} comic={generation.comic} mock={generation.mock} />
               )}
               {generation?.status === 'queued' && (
                 <section className="generation-card" aria-live="polite">
                   <Icon name="clock" size={40} />
-                  <h2>生成を受け付けました</h2>
+                  <h2>受付済み</h2>
                   <p>順番に処理しています。</p>
                   <p className="generation-card-note">画面を閉じても、あとで確認できます。</p>
                 </section>
@@ -938,10 +989,10 @@ function DetailContent({
                   <Icon name="clock" size={40} />
                   <h2>
                     {generation.stage === 'script'
-                      ? '物語を考えています'
+                      ? '構成を考えています'
                       : generation.stage === 'images'
-                        ? '4コマを描いています'
-                        : 'もうすぐ完成です'}
+                        ? '画像を描いています'
+                        : '漫画を保存しています'}
                   </h2>
                   <p>{generationStageMessage(generation)}</p>
                   <ol className="generation-steps" aria-label="生成の進行段階">
@@ -969,21 +1020,21 @@ function DetailContent({
               {generation?.status === 'unknown' && (
                 <section className="generation-card" aria-live="polite">
                   <Icon name="clock" size={40} />
-                  <h2>生成結果を確認中</h2>
+                  <h2>状態を再確認してください</h2>
                   <p>{generationStateMessage(generation)}</p>
                 </section>
               )}
               {generation?.status === 'failed' && (
                 <section className="generation-card" role="alert">
                   <Icon name="alert" size={40} />
-                  <h2>生成に失敗しました</h2>
+                  <h2>日記は保存されています</h2>
                   <p>{generationStateMessage(generation)}</p>
                 </section>
               )}
               {generation?.status === 'cancelled' && (
                 <section className="generation-card">
                   <Icon name="close" size={40} />
-                  <h2>生成はキャンセルされました</h2>
+                  <h2>日記は保存されています</h2>
                   <p>{generationStateMessage(generation)}</p>
                 </section>
               )}
@@ -994,16 +1045,18 @@ function DetailContent({
                   <p>状態が確認できるまで新しい生成は受け付けません。</p>
                 </section>
               )}
-              {!generation && !generationReferenceUnavailable && (
-                <section className="entry-draft-card">
-                  <p className="diary">{entry.body}</p>
+              {!generation && !generationReferenceUnavailable && !draftSavedConfirmation && (
+                <>
+                  <section className="entry-draft-card">
+                    <p className="diary">{entry.body}</p>
+                  </section>
                   <button className="button button-secondary" type="button" onClick={beginEditing}>
                     <Icon name="edit" size={18} />
                     日記を編集
                   </button>
-                </section>
+                </>
               )}
-              {generation && (
+              {generation && !pending && !unknownGeneration && (
                 <details
                   id="original-diary"
                   className="original-diary"
@@ -1088,6 +1141,62 @@ function DetailContent({
       ) : (
         !error && <output>読み込んでいます…</output>
       )}
+      {error && !editFormVisible && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {entry && !editing && (
+        <>
+          <aside className="detail-meta-note">
+            {statusView && (
+              <div className="detail-date-row">
+                <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
+                {generation?.mock && <span className="sample-tag">固定サンプル</span>}
+              </div>
+            )}
+            <p>
+              {config.dataMode === 'mock'
+                ? '一時保存しました。'
+                : `この匿名アカウントに保存しました。保存後${config.retentionDays}日を過ぎると閲覧できなくなります。`}
+            </p>
+            {config.dataMode !== 'sample' &&
+              config.generationAvailable &&
+              !(generation?.status === 'succeeded' && generation.mock) && (
+                <p>
+                  このアプリの漫画は固定サンプルです。入力内容は反映されず、AIにも送信されません。
+                </p>
+              )}
+          </aside>
+          {comicFromPreviousRevision && statusView && (
+            <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
+          )}
+          {showQuotaStatus && quota && !pending && !unknownGeneration && (
+            <div className="detail-quota-card">
+              <GenerationQuotaStatus
+                quota={quota}
+                activeGeneration={activeGeneration}
+                currentEntryId={entry.id}
+                currentGenerationId={generation?.id ?? null}
+              />
+            </div>
+          )}
+          {(quotaState === 'session-required' || quotaState === 'unavailable') &&
+            !pending &&
+            !unknownGeneration && (
+              <div className="inline-alert" role="alert">
+                <p>
+                  {quotaState === 'session-required'
+                    ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
+                    : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
+                </p>
+                <button className="button-text" type="button" onClick={() => void refreshQuota()}>
+                  利用枠を再確認
+                </button>
+              </div>
+            )}
+        </>
+      )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
           {pending && (
@@ -1109,16 +1218,13 @@ function DetailContent({
             <button
               className="button button-primary"
               type="button"
-              onClick={() => {
-                setJournalExpanded(true);
-                document.getElementById('original-diary')?.scrollIntoView({ behavior: 'smooth' });
-              }}
+              onClick={showOriginalDiary}
             >
               保存した日記を見る
             </button>
           )}
           {generation?.status === 'cancelled' && generationForCurrentRevision && (
-            <button className="button button-primary" type="button" onClick={beginEditing}>
+            <button className="button button-primary" type="button" onClick={showOriginalDiary}>
               日記に戻る
             </button>
           )}
@@ -1198,6 +1304,7 @@ function DetailContent({
         description="変更を破棄して、記録に戻りますか？"
         confirmLabel="変更を破棄"
         cancelLabel="編集に戻る"
+        icon={null}
         cancelPrimary
         onConfirm={() => {
           setDiscardEditConfirmOpen(false);
@@ -1211,6 +1318,7 @@ function DetailContent({
         description="編集中の入力を最新の記録で置き換えます。"
         confirmLabel="最新の記録を読み込む"
         cancelLabel="編集に戻る"
+        icon={null}
         onConfirm={() => {
           setReloadLatestConfirmOpen(false);
           void reloadLatest();

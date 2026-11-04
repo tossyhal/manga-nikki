@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { useOnlineStatus } from '../lib/useOnlineStatus';
 
 type PwaNoticeProps = {
   diaryDirty: boolean;
   diaryBusy: boolean;
+  hideOfflineNotice?: boolean;
 };
 
-export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
+export function PwaNotice({ diaryDirty, diaryBusy, hideOfflineNotice = false }: PwaNoticeProps) {
   const updateBlocked = diaryDirty || diaryBusy;
   const updateBlockedRef = useRef(updateBlocked);
   useLayoutEffect(() => {
@@ -28,17 +30,7 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
     offlineReady: [offlineReady, setOfflineReady],
     updateServiceWorker,
   } = useRegisterSW({ onNeedReload });
-  const [online, setOnline] = useState(() => navigator.onLine);
-
-  useEffect(() => {
-    const updateOnlineStatus = () => setOnline(navigator.onLine);
-    window.addEventListener('online', updateOnlineStatus);
-    window.addEventListener('offline', updateOnlineStatus);
-    return () => {
-      window.removeEventListener('online', updateOnlineStatus);
-      window.removeEventListener('offline', updateOnlineStatus);
-    };
-  }, []);
+  const { online } = useOnlineStatus();
 
   function requestUpdate() {
     if (updateBlockedRef.current) return;
@@ -58,7 +50,7 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
 
   return (
     <>
-      {!online && (
+      {!online && !hideOfflineNotice && (
         <output className="pwa-notice" aria-live="polite">
           <p>
             オフラインです。架空サンプルは見られますが、日記の保存・履歴の取得・漫画の生成には通信が必要です。日記本文や生成画像はオフライン用に保存しません。
