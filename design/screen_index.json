@@ -1,0 +1,344 @@
+[
+  {
+    "number": 1,
+    "title": "ホーム / 今日の記録なし",
+    "file": "01_home_empty.svg",
+    "nav": "home",
+    "cta": []
+  },
+  {
+    "number": 2,
+    "title": "ホーム / 今日の記録あり",
+    "file": "02_home_exists.svg",
+    "nav": "home",
+    "cta": []
+  },
+  {
+    "number": 3,
+    "title": "日記を書く / 空フォーム",
+    "file": "03_write_empty.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 4,
+    "title": "日記を書く / 入力済み",
+    "file": "04_write_filled.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 5,
+    "title": "記録 / カレンダー",
+    "file": "05_records_calendar.svg",
+    "nav": "records",
+    "cta": []
+  },
+  {
+    "number": 6,
+    "title": "記録 / 一覧",
+    "file": "06_records_list.svg",
+    "nav": "records",
+    "cta": []
+  },
+  {
+    "number": 7,
+    "title": "漫画詳細 / 完成",
+    "file": "07_detail_completed.svg",
+    "nav": "records",
+    "cta": []
+  },
+  {
+    "number": 8,
+    "title": "漫画詳細 / 下書き",
+    "file": "08_detail_draft.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 9,
+    "title": "漫画生成 / 受付・待機中",
+    "file": "09_generation_0.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 10,
+    "title": "漫画生成 / 構成を考える",
+    "file": "10_generation_1.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 11,
+    "title": "漫画生成 / 絵を描く",
+    "file": "11_generation_2.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 12,
+    "title": "漫画生成 / 保存中",
+    "file": "12_generation_3.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 13,
+    "title": "生成結果 / 確認中",
+    "file": "13_generation_unknown.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "状態を確認する",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 14,
+    "title": "生成 / 失敗",
+    "file": "14_generation_failed.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "保存した日記を見る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 15,
+    "title": "生成 / キャンセル済み",
+    "file": "15_generation_cancelled.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "日記に戻る",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 16,
+    "title": "生成不可 / 上限到達",
+    "file": "16_generation_limit.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "下書きとして保存",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 17,
+    "title": "オフライン / 通信不可",
+    "file": "17_offline.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "接続を再確認する",
+        680,
+        "secondary"
+      ]
+    ]
+  },
+  {
+    "number": 18,
+    "title": "記録 / まだ記録がない",
+    "file": "18_records_empty.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "日記を書く",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 19,
+    "title": "下書き / 保存済み",
+    "file": "19_draft_saved.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 20,
+    "title": "日記編集 / 下書き再開",
+    "file": "20_draft_edit.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 21,
+    "title": "漫画詳細 / 元の日記を展開",
+    "file": "21_detail_journal_expanded.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を閉じる",
+        680,
+        "secondary"
+      ]
+    ]
+  },
+  {
+    "number": 22,
+    "title": "日記削除 / 確認ダイアログ",
+    "file": "22_delete_confirm.svg",
+    "nav": "records",
+    "cta": []
+  },
+  {
+    "number": 23,
+    "title": "セッション / 記録を表示できない",
+    "file": "23_session_lost.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "新しい日記を書く",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 24,
+    "title": "漫画詳細 / 編集前の漫画",
+    "file": "24_detail_outdated.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を読む",
+        680,
+        "secondary"
+      ]
+    ]
+  },
+  {
+    "number": 25,
+    "title": "漫画詳細 / 1枚画像方式",
+    "file": "25_detail_singlepage.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を読む",
+        680,
+        "secondary"
+      ]
+    ]
+  },
+  {
+    "number": 26,
+    "title": "記録 / 同日に複数件",
+    "file": "26_records_multi.svg",
+    "nav": "records",
+    "cta": []
+  },
+  {
+    "number": 27,
+    "title": "記録 / 選択した日に記録なし",
+    "file": "27_records_day_empty.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "この日の日記を書く",
+        680,
+        "secondary"
+      ]
+    ]
+  },
+  {
+    "number": 28,
+    "title": "保存失敗 / 入力を保持",
+    "file": "28_save_failed.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "もう一度保存",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 29,
+    "title": "漫画詳細 / その他の操作メニュー",
+    "file": "29_detail_overflow.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ]
+  },
+  {
+    "number": 30,
+    "title": "日記入力 / 未保存で戻る",
+    "file": "30_unsaved_confirmation.svg",
+    "nav": "write",
+    "cta": []
+  }
+]
