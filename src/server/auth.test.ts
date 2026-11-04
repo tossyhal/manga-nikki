@@ -223,8 +223,10 @@ describe('Supabase access token boundary', () => {
     expect((await app.request('https://app.example/api/v1/config', {}, environment)).status).toBe(
       200,
     );
-    expect((await app.request('https://app.example/api/v1/entries', {}, environment)).status).toBe(
-      503,
+    const personalApi = await app.request('https://app.example/api/v1/entries', {}, environment);
+    expect(personalApi.status).toBe(503);
+    expect((await personalApi.json()).error.message).toBe(
+      'この環境では個人データの操作は利用できません。',
     );
     expect(
       (
