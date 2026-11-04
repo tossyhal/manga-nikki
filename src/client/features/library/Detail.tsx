@@ -120,9 +120,9 @@ function DetailContent({
   const location = useLocation();
   const draftSavedNavigation = Boolean(
     location.state &&
-      typeof location.state === 'object' &&
-      'draftSaved' in location.state &&
-      location.state.draftSaved === true,
+    typeof location.state === 'object' &&
+    'draftSaved' in location.state &&
+    location.state.draftSaved === true,
   );
   const [draftSavedEntryId, setDraftSavedEntryId] = useState<string | null>(() =>
     draftSavedNavigation ? id : null,
@@ -320,11 +320,7 @@ function DetailContent({
     !hasUnresolvedRequest,
   );
   const draftSavedConfirmation = Boolean(
-    entry &&
-      draftSavedEntryId === id &&
-      !generation &&
-      !generationReferenceUnavailable &&
-      !editing,
+    entry && draftSavedEntryId === id && !generation && !generationReferenceUnavailable && !editing,
   );
   const editFormVisible = Boolean(entry && editing && !pending);
   const statusKind: 'queued' | 'running' | 'unknown' | 'failed' | 'cancelled' | null =
@@ -367,9 +363,7 @@ function DetailContent({
     .join(' ');
   const showQuotaStatus = Boolean(
     quota &&
-      (quota.remainingToday === 0 ||
-        !quota.generationAvailable ||
-        quota.activeGenerationId !== null),
+    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
 
   useEffect(() => {
@@ -770,9 +764,7 @@ function DetailContent({
                     ? generation.comic.title
                     : summarizeDiary(entry.body)}
             </h1>
-            {statusView && (
-              <p className="detail-state-summary">{summarizeDiary(entry.body)}</p>
-            )}
+            {statusView && <p className="detail-state-summary">{summarizeDiary(entry.body)}</p>}
           </div>
           <div className="detail-menu-anchor">
             <button
@@ -1214,11 +1206,7 @@ function DetailContent({
             </button>
           )}
           {generation?.status === 'failed' && generationForCurrentRevision && (
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={showOriginalDiary}
-            >
+            <button className="button button-primary" type="button" onClick={showOriginalDiary}>
               保存した日記を見る
             </button>
           )}

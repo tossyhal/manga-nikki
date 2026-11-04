@@ -100,17 +100,15 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     (sessionRequired || (quotaState === 'ready' && generationIsAvailable(quota)));
   const quotaLimited = Boolean(
     config.dataMode !== 'sample' &&
-      (!config.generationAvailable ||
-        (quota &&
-          (quota.remainingToday === 0 ||
-            !quota.generationAvailable ||
-            quota.activeGenerationId !== null))),
+    (!config.generationAvailable ||
+      (quota &&
+        (quota.remainingToday === 0 ||
+          !quota.generationAvailable ||
+          quota.activeGenerationId !== null))),
   );
   const showQuotaStatus = Boolean(
     quota &&
-      (quota.remainingToday === 0 ||
-        !quota.generationAvailable ||
-        quota.activeGenerationId !== null),
+    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
 

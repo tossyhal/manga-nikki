@@ -59,7 +59,8 @@ function generationLabel(
   loading: boolean,
   error?: string,
 ) {
-  if (error) return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
+  if (error)
+    return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
   if (!generation || generation.entryRevision !== entry.revision) {
     if (loading && entry.latestGenerationId) return '状態を確認しています';
     return '下書き';
