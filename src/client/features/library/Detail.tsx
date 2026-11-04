@@ -314,7 +314,7 @@ function DetailContent({
     if (!error || !editFormVisible) return;
     const alert = editErrorRef.current;
     alert?.focus({ preventScroll: true });
-    alert?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    alert?.scrollIntoView({ block: 'center' });
   }, [editFormVisible, error]);
 
   async function readLatestEntry(): Promise<EntryDetail> {
