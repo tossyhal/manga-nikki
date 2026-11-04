@@ -441,12 +441,15 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   const diary = page.getByLabel('日記', { exact: true });
   await expect(diary).toBeVisible();
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
+  await diary.fill('再接続まで画面に残す架空の日記');
+  const consent = page.getByRole('checkbox');
+  await consent.check();
+  await expect(consent).toBeChecked();
   const beforeOffline = apiRequests.length;
   await page.context().setOffline(true);
   await expect(page.getByRole('heading', { name: 'オフラインです' })).toBeVisible();
-  await diary.fill('再接続まで画面に残す架空の日記');
-  await page.getByRole('checkbox').check();
-  await expect(page.getByRole('button', { name: '下書き保存' })).toBeDisabled();
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(diary).toHaveValue('再接続まで画面に残す架空の日記');
   await page.getByRole('button', { name: '接続を再確認する' }).click();
   expect(apiRequests.slice(beforeOffline)).toEqual([]);
   expect(entryPosts).toBe(0);
@@ -456,6 +459,7 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   await page.context().setOffline(false);
   await expect(page.getByRole('heading', { name: 'オフラインです' })).toHaveCount(0);
   await expect(diary).toHaveValue('再接続まで画面に残す架空の日記');
+  await expect(consent).toBeChecked();
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   const reconnectRequests = apiRequests.slice(beforeReconnect);
   expect(reconnectRequests.length).toBeGreaterThan(0);
