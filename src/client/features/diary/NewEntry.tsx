@@ -581,31 +581,33 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </button>
           </>
         )}
-        <label className="consent-card" onPointerDownCapture={beginPointerInteraction}>
-          <input
-            type="checkbox"
-            checked={consent}
-            disabled={busy || saved !== null}
-            onChange={(event) => {
-              setConsent(event.target.checked);
-              if (!pointerInteractionRef.current && document.activeElement?.id !== 'body') {
+        {online && (
+          <label className="consent-card" onPointerDownCapture={beginPointerInteraction}>
+            <input
+              type="checkbox"
+              checked={consent}
+              disabled={busy || saved !== null}
+              onChange={(event) => {
+                setConsent(event.target.checked);
+                if (!pointerInteractionRef.current && document.activeElement?.id !== 'body') {
+                  restoreTypingAfterInteractionRef.current = false;
+                  setTyping(false);
+                }
+                if (!event.target.checked) setPendingSave(null);
+              }}
+              onBlur={() => {
+                if (pointerInteractionRef.current) return;
                 restoreTypingAfterInteractionRef.current = false;
                 setTyping(false);
-              }
-              if (!event.target.checked) setPendingSave(null);
-            }}
-            onBlur={() => {
-              if (pointerInteractionRef.current) return;
-              restoreTypingAfterInteractionRef.current = false;
-              setTyping(false);
-            }}
-          />
-          <span>
-            {config.dataMode === 'mock'
-              ? '記録は一時保存で、予告なく消えることがあります。漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。'
-              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名セッションはこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
-          </span>
-        </label>
+              }}
+            />
+            <span>
+              {config.dataMode === 'mock'
+                ? '記録は一時保存で、予告なく消えることがあります。漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。'
+                : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名セッションはこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
+            </span>
+          </label>
+        )}
         {pendingSave !== null && config.dataMode === 'live' && (
           <section className="captcha-card" aria-label="匿名登録">
             <p>匿名登録を続けるため、登録用の確認を行います。</p>
