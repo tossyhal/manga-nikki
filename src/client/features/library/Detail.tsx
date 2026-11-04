@@ -114,6 +114,7 @@ function DetailContent({
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
   const generationFlowRef = useRef(false);
+  const generationCaptchaAttemptRef = useRef(0);
   const generationRequestRef = useRef(false);
   const quotaRequestRef = useRef(0);
   const autoGenerationRequestedRef = useRef(
@@ -138,7 +139,9 @@ function DetailContent({
       generationFlowRef.current = true;
       setGenerationCaptchaRetry(retry);
       setGenerationCaptchaOpen(true);
-      setGenerationCaptchaAttempt((attempt) => attempt + 1);
+      const attempt = generationCaptchaAttemptRef.current + 1;
+      generationCaptchaAttemptRef.current = attempt;
+      setGenerationCaptchaAttempt(attempt);
       setError('');
     },
     [siteKey],
@@ -422,7 +425,13 @@ function DetailContent({
   }
 
   function beginEditing() {
-    if (!entry || pending) return;
+    if (!entry || pending || busy || actionInFlightRef.current) return;
+    if (generationFlowRef.current) {
+      generationFlowRef.current = false;
+      generationCaptchaAttemptRef.current += 1;
+      setGenerationCaptchaOpen(false);
+      setGenerationCaptchaRetry(false);
+    }
     setDraftDate(entry.diaryDate);
     setDraftBody(entry.body);
     setEditErrorStatus(null);
@@ -822,10 +831,21 @@ function DetailContent({
                   siteKey={siteKey}
                   requestKey={generationCaptchaAttempt}
                   onToken={(token) => {
-                    if (activeRef.current) void submitGeneration(token);
+                    if (
+                      activeRef.current &&
+                      generationFlowRef.current &&
+                      generationCaptchaAttemptRef.current === generationCaptchaAttempt
+                    )
+                      void submitGeneration(token);
                   }}
                   onError={() => {
-                    if (!activeRef.current || generationRequestRef.current) return;
+                    if (
+                      !activeRef.current ||
+                      generationRequestRef.current ||
+                      !generationFlowRef.current ||
+                      generationCaptchaAttemptRef.current !== generationCaptchaAttempt
+                    )
+                      return;
                     generationFlowRef.current = false;
                     setGenerationCaptchaOpen(false);
                     setGenerationCaptchaRetry(true);

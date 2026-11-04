@@ -9,15 +9,25 @@ const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 declare global {
   interface Window {
     __e2eTurnstileEvents?: Array<{ action: string | null; token: string }>;
+    __releaseE2eGenerationCaptcha?: () => void;
   }
 }
 
 async function installTurnstileFake(
   page: import('@playwright/test').Page,
-  { failFirstGeneration = false }: { failFirstGeneration?: boolean } = {},
+  {
+    failFirstGeneration = false,
+    delayFirstGenerationCallback,
+  }: {
+    failFirstGeneration?: boolean;
+    delayFirstGenerationCallback?: 'token' | 'error';
+  } = {},
 ) {
   await page.addInitScript(
-    ({ failFirstGeneration: failOnFirstGeneration }) => {
+    ({
+      failFirstGeneration: failOnFirstGeneration,
+      delayFirstGenerationCallback: delayedCallback,
+    }) => {
       const widgets = new Map<
         string,
         {
@@ -49,15 +59,23 @@ async function installTurnstileFake(
             action === 'generate'
               ? `generation-token-e2e-${generationAttempts}`
               : 'registration-token-e2e';
-          window.__e2eTurnstileEvents?.push({ action, token });
-          window.setTimeout(() => widget.callback(token), 0);
+          const deliverToken = () => {
+            window.__e2eTurnstileEvents?.push({ action, token });
+            widget.callback(token);
+          };
+          if (action === 'generate' && generationAttempts === 1 && delayedCallback) {
+            window.__releaseE2eGenerationCaptcha =
+              delayedCallback === 'token' ? deliverToken : () => widget['error-callback']();
+            return;
+          }
+          window.setTimeout(deliverToken, 0);
         },
         remove(id) {
           widgets.delete(id);
         },
       };
     },
-    { failFirstGeneration },
+    { failFirstGeneration, delayFirstGenerationCallback },
   );
 }
 
@@ -466,3 +484,86 @@ test('生成処理中の連打と離脱を確認し、遅れた応答では画�
   expect(generationReads).toBe(0);
   expect(generationRequests).toBe(1);
 });
+
+for (const delayedCallback of ['token', 'error'] as const) {
+  test(`日記の保存中に届いた古い生成CAPTCHAの${delayedCallback} callbackを無視する`, async ({
+    page,
+  }) => {
+    await installLiveSession(page);
+    await installTurnstileFake(page, { delayFirstGenerationCallback: delayedCallback });
+    let currentEntry = { ...draftEntryDetailFixture };
+    let releasePatch!: () => void;
+    let notifyPatch!: () => void;
+    const patchReceived = new Promise<void>((resolve) => {
+      notifyPatch = resolve;
+    });
+    const patchGate = new Promise<void>((resolve) => {
+      releasePatch = resolve;
+    });
+    let generationRequests = 0;
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+    );
+    await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+    await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+      if (route.request().method() === 'PATCH') {
+        const update = route.request().postDataJSON() as {
+          diaryDate: string;
+          body: string;
+        };
+        notifyPatch();
+        await patchGate;
+        currentEntry = {
+          ...currentEntry,
+          ...update,
+          revision: 2,
+          updatedAt: '2026-01-02T00:00:00Z',
+        };
+      }
+      return route.fulfill({ json: currentEntry });
+    });
+    await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+      generationRequests++;
+      return route.fulfill({
+        status: 202,
+        json: {
+          generationId,
+          status: 'succeeded',
+          statusUrl: `/api/v1/generations/${generationId}`,
+        },
+      });
+    });
+    await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+      route.fulfill({ json: generationFixtures(entryId, generationId).succeeded }),
+    );
+    await page.route('**/api/v1/assets/*/url', (route) =>
+      route.fulfill({
+        json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
+      }),
+    );
+    await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+    await page.goto(`/entries/${entryId}`);
+    await page.getByRole('button', { name: '漫画を作成する' }).click();
+    await expect
+      .poll(() => page.evaluate(() => Boolean(window.__releaseE2eGenerationCaptcha)))
+      .toBe(true);
+
+    await page.getByRole('button', { name: '日記を編集' }).click();
+    await page.getByLabel('日記', { exact: true }).fill('保存処理を確認する架空の日記');
+    await page.getByRole('button', { name: '変更を保存' }).click();
+    await patchReceived;
+    await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
+    await page.waitForTimeout(25);
+    expect(generationRequests).toBe(0);
+    releasePatch();
+
+    await expect(page.locator('.diary')).toHaveText('保存処理を確認する架空の日記');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '新しい確認を取得' })).toHaveCount(0);
+    const createButton = page.getByRole('button', { name: '漫画を作成する' });
+    await expect(createButton).toBeEnabled();
+    await createButton.click();
+    await expect.poll(() => generationRequests).toBe(1);
+  });
+}
