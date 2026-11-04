@@ -61,7 +61,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const actionInFlightRef = useRef(false);
   const quotaRequestRef = useRef(0);
   const pointerInteractionRef = useRef(false);
-  const pointerCompletionFrameRef = useRef<number | null>(null);
+  const pointerCompletionTimerRef = useRef<number | null>(null);
   const restoreTypingAfterInteractionRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
@@ -117,9 +117,9 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
 
   function beginPointerInteraction() {
-    if (pointerCompletionFrameRef.current !== null) {
-      window.cancelAnimationFrame(pointerCompletionFrameRef.current);
-      pointerCompletionFrameRef.current = null;
+    if (pointerCompletionTimerRef.current !== null) {
+      window.clearTimeout(pointerCompletionTimerRef.current);
+      pointerCompletionTimerRef.current = null;
     }
     pointerInteractionRef.current = true;
   }
@@ -181,21 +181,11 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   }, [online, refreshQuota]);
 
   useEffect(() => {
-    const finishPointerInteraction = () => {
+    const completePointerInteraction = () => {
       if (!pointerInteractionRef.current) return;
-      pointerCompletionFrameRef.current = window.requestAnimationFrame(() => {
-        pointerCompletionFrameRef.current = null;
-        pointerInteractionRef.current = false;
-        if (restoreTypingAfterInteractionRef.current) {
-          restoreTypingAfterInteractionRef.current = false;
-          setTyping(false);
-        }
-      });
-    };
-    const cancelPointerInteraction = () => {
-      if (pointerCompletionFrameRef.current !== null) {
-        window.cancelAnimationFrame(pointerCompletionFrameRef.current);
-        pointerCompletionFrameRef.current = null;
+      if (pointerCompletionTimerRef.current !== null) {
+        window.clearTimeout(pointerCompletionTimerRef.current);
+        pointerCompletionTimerRef.current = null;
       }
       pointerInteractionRef.current = false;
       if (restoreTypingAfterInteractionRef.current) {
@@ -203,13 +193,21 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         setTyping(false);
       }
     };
+    const finishPointerInteraction = () => {
+      if (!pointerInteractionRef.current) return;
+      if (pointerCompletionTimerRef.current !== null)
+        window.clearTimeout(pointerCompletionTimerRef.current);
+      pointerCompletionTimerRef.current = window.setTimeout(completePointerInteraction, 300);
+    };
     window.addEventListener('pointerup', finishPointerInteraction, true);
-    window.addEventListener('pointercancel', cancelPointerInteraction, true);
+    window.addEventListener('pointercancel', completePointerInteraction, true);
+    window.addEventListener('click', completePointerInteraction);
     return () => {
       window.removeEventListener('pointerup', finishPointerInteraction, true);
-      window.removeEventListener('pointercancel', cancelPointerInteraction, true);
-      if (pointerCompletionFrameRef.current !== null)
-        window.cancelAnimationFrame(pointerCompletionFrameRef.current);
+      window.removeEventListener('pointercancel', completePointerInteraction, true);
+      window.removeEventListener('click', completePointerInteraction);
+      if (pointerCompletionTimerRef.current !== null)
+        window.clearTimeout(pointerCompletionTimerRef.current);
     };
   }, []);
 
