@@ -14,19 +14,19 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
   await page.getByRole('checkbox').check();
-  await expect(
-    page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。'),
-  ).toBeVisible();
+  await expect(page.getByRole('checkbox')).toHaveAccessibleName(
+    /漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。/,
+  );
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await page.reload();
   await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toBeVisible();
   const todaySection = page.getByRole('region', { name: '今日の記録' });
@@ -41,7 +41,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await expect(page.getByRole('dialog', { name: deleteDialogTitle })).toBeVisible();
   await clickAppDialogButton(page, deleteDialogTitle, 'キャンセル');
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
 
   await clickEntryMenuItem(page, '日記を削除');
   await clickAppDialogButton(page, deleteDialogTitle, '削除する');
@@ -144,7 +144,7 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
   await page.getByRole('button', { name: '漫画を読む' }).click();
   await expect(page).toHaveURL(/\/$/);

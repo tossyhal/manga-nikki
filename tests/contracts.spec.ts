@@ -42,7 +42,7 @@ for (const [kind, template] of [
     comic.panels[0].dialogue = '波がきれい';
     await intercept(page, () => ({ ...fixtures.succeeded, comic }));
     await page.goto(`/entries/${entryId}`);
-    await expect(page.getByRole('heading', { name: comic.title })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
     if (comic.visual.kind === 'page') {
       await page.getByText('4コマの内容を読む', { exact: true }).click();
     }
@@ -78,7 +78,7 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   });
 
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByRole('heading', { name: comic.title })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
   await expect(page.locator('.comic-panel-card')).toHaveCount(4);
   for (const panel of comic.panels) {
     await expect(page.getByText(panel.caption, { exact: true })).toBeVisible();
@@ -128,7 +128,7 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
   await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
-  await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: pageComic.title })).toBeVisible();
   const completedReads = reads;
   await page.clock.runFor(15000);
   expect(reads).toBe(completedReads);

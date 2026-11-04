@@ -201,10 +201,10 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   await page.getByLabel('日記', { exact: true }).fill('入力内容を反映しない架空の日記');
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '4コマにする' }).click();
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
-  await expect(
-    page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。').first(),
-  ).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('checkbox')).toHaveAccessibleName(
+    /漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。/,
+  );
 
   const captchaEvents = await page.evaluate(() => window.__e2eTurnstileEvents ?? []);
   expect(captchaEvents).toEqual([
@@ -322,7 +322,7 @@ test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り�
   await expect(page.getByRole('alert')).toContainText('保存済みの日記はそのままです');
   await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   await page.getByRole('button', { name: '新しい確認を取得' }).click();
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
   expect(await page.evaluate(() => window.__e2eTurnstileEvents ?? [])).toEqual([
     { action: 'generate', token: 'generation-token-e2e-2' },
@@ -896,5 +896,5 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
   await expect(retryButton).toBeVisible();
   await retryButton.click();
   await expect.poll(() => generationRequests).toBe(1);
-  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
 });
