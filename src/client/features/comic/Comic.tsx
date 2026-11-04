@@ -22,6 +22,8 @@ export function Comic({
               <img
                 key={id}
                 src={images[id]}
+                loading="lazy"
+                decoding="async"
                 alt={
                   comic.visual.kind === 'page'
                     ? `${comic.title}の4コマ漫画`

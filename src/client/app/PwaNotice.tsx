@@ -68,7 +68,11 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
       {offlineReady && (
         <output className="pwa-notice" aria-live="polite">
           <p>架空サンプルを含む画面をオフラインで表示できます。日記本文や生成画像は対象外です。</p>
-          <button className="secondary" type="button" onClick={() => setOfflineReady(false)}>
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => setOfflineReady(false)}
+          >
             閉じる
           </button>
         </output>
@@ -88,10 +92,15 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
             </p>
           )}
           <div className="pwa-notice-actions">
-            <button type="button" disabled={updateBlocked} onClick={requestUpdate}>
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={updateBlocked}
+              onClick={requestUpdate}
+            >
               {reloadPending ? 'この画面を再読み込み' : '更新する'}
             </button>
-            <button className="secondary" type="button" onClick={dismissUpdate}>
+            <button className="button button-secondary" type="button" onClick={dismissUpdate}>
               あとで
             </button>
           </div>

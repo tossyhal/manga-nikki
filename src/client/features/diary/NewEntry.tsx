@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
@@ -15,6 +15,7 @@ import {
 } from '../../lib/api';
 import { registerAnonymousSession, getLiveAccessToken } from '../../lib/auth';
 import type { ClientConfig } from '../../lib/config';
+import { Icon } from '../../app/Icon';
 
 export type DiaryActivity = { dirty: boolean; busy: boolean };
 
@@ -34,12 +35,35 @@ function generationIsAvailable(quota: GenerationQuota | null): boolean {
   );
 }
 
+function formatDiaryDate(date: string) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  const monthDay = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: 'numeric',
+  }).format(value);
+  const weekday = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'UTC',
+    weekday: 'long',
+  }).format(value);
+  return `${monthDay} ${weekday}`;
+}
+
 export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
-  const [initialDate] = useState(() => jstToday());
+  const [initialDate] = useState(() => {
+    const today = jstToday();
+    const requestedDate = new URLSearchParams(location.search).get('date');
+    if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) return today;
+    const parsedDate = new Date(`${requestedDate}T00:00:00.000Z`);
+    if (Number.isNaN(parsedDate.valueOf()) || parsedDate.toISOString().slice(0, 10) !== requestedDate)
+      return today;
+    return requestedDate <= today ? requestedDate : today;
+  });
   const [saved, setSaved] = useState<Entry | null>(null);
   const [date, setDate] = useState(initialDate);
   const [body, setBody] = useState('');
@@ -49,6 +73,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [pendingSave, setPendingSave] = useState<boolean | null>(null);
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
+  const [typing, setTyping] = useState(false);
   const [quota, setQuota] = useState<GenerationQuota | null>(null);
   const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
   const [quotaState, setQuotaState] = useState<QuotaState>('loading');
@@ -101,6 +126,13 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       onActivityChange({ dirty: false, busy: false });
     };
   }, [onActivityChange, refreshQuota]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const useInlineActions = typing && window.matchMedia('(max-width: 700px)').matches;
+    root.classList.toggle('entry-keyboard-active', useInlineActions);
+    return () => root.classList.remove('entry-keyboard-active');
+  }, [typing]);
 
   async function persist(makeComic: boolean, registrationToken?: string) {
     const parsed = createEntrySchema.safeParse({
@@ -261,17 +293,28 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     setError('確認に失敗しました。本文は残っています。新しい確認を取得して再操作してください。');
   }
 
+  const primaryDisabled =
+    busy || saved !== null || (quotaState === 'loading' && configAllowsGeneration);
+
   return (
-    <>
-      <p className="eyebrow">今日の記録</p>
-      <h1>どんな一日でしたか。</h1>
-      <p>うまくまとめなくて大丈夫。覚えておきたいことを、そのまま。</p>
+    <section className="new-entry-page">
+      <header className="form-page-header">
+        <h1>日記を書く</h1>
+        <button
+          className="button-text"
+          disabled={busy || saved !== null}
+          type="button"
+          onClick={() => void save(false)}
+        >
+          下書き保存
+        </button>
+      </header>
       {config.dataMode === 'live' && (
-        <p className="hint">
-          匿名セッションはこのブラウザに保存されます。ブラウザデータを削除した場合や別端末では復旧できず、既存の記録を引き継げません。保存した記録は保存後
+        <p className="policy-note">
+          匿名セッションはこのブラウザに保存され、別端末へ引き継げません。記録は保存後
           {config.retentionDays}日を過ぎると閲覧できなくなります。
           {config.generationAvailable
-            ? '漫画は固定サンプルです。入力内容は反映されず、AIにも送信されません。'
+            ? '漫画は固定サンプルで、入力内容をAIに送信しません。'
             : '現在、漫画生成は利用できません。'}
         </p>
       )}
@@ -283,43 +326,71 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         />
       )}
       {quotaState === 'unavailable' && (
-        <p className="hint" role="alert">
+        <p className="inline-alert" role="alert">
           利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
+          <button
+            className="button-text"
+            disabled={busy}
+            type="button"
+            onClick={() => {
+              setQuotaState('loading');
+              void refreshQuota();
+            }}
+          >
+            利用枠を再確認
+          </button>
         </p>
       )}
       <form
+        className="entry-form"
         onSubmit={(event) => {
           event.preventDefault();
           void save(canGenerate);
         }}
       >
-        <fieldset disabled={busy || saved !== null}>
-          <label htmlFor="date">日付</label>
-          <input
-            id="date"
-            type="date"
-            value={date}
-            max={jstToday()}
-            onChange={(event) => setDate(event.target.value)}
-            required
-          />
-          <label htmlFor="body">日記</label>
-          <textarea
-            id="body"
-            rows={8}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="今日は何がありましたか？"
-            required
-            aria-describedby="count summary-preview"
-          />
-          <p id="count" className="hint">
-            {[...body.trim()].length} / 1,000文字
-          </p>
-          <p id="summary-preview" className="summary-preview">
-            見出し：{body.trim() ? summarizeDiary(body) : '本文の先頭から自動で作ります'}
-          </p>
-          <label className="consent">
+        <fieldset disabled={busy || saved !== null} className="entry-form-fields">
+          <div className="date-row">
+            <label className="date-display" htmlFor="date">
+              <time dateTime={date}>{formatDiaryDate(date)}</time>
+              <Icon name="calendar" size={20} />
+            </label>
+            <input
+              id="date"
+              aria-label="日付"
+              className="date-picker-input"
+              type="date"
+              value={date}
+              max={jstToday()}
+              onChange={(event) => setDate(event.target.value)}
+              required
+            />
+          </div>
+          <div className="entry-editor-card">
+            <label className="entry-editor-title" htmlFor="body">
+              今日はどんな日だった？
+            </label>
+            <textarea
+              id="body"
+              aria-label="日記"
+              rows={8}
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              placeholder="今日のできごとを書いてみよう。"
+              required
+              aria-describedby="count summary-preview"
+              onFocus={() => setTyping(true)}
+              onBlur={() => setTyping(false)}
+            />
+            <div className="entry-editor-footer">
+              <p id="summary-preview" className="summary-preview">
+                {body.trim() ? `見出し：${summarizeDiary(body)}` : '見出しは本文から自動で作ります'}
+              </p>
+              <p id="count" className="character-count">
+                {[...body.trim()].length} / 1,000
+              </p>
+            </div>
+          </div>
+          <label className="consent-card">
             <input
               type="checkbox"
               checked={consent}
@@ -328,13 +399,15 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
                 if (!event.target.checked) setPendingSave(null);
               }}
             />
-            {config.dataMode === 'mock'
-              ? '記録は一時保存で、予告なく消えることがあります。AIには送信されません。'
-              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名利用のため、ブラウザデータを失うと過去の記録を復旧できません。`}
+            <span>
+              {config.dataMode === 'mock'
+                ? '記録は一時保存で、予告なく消えることがあります。AIには送信されません。'
+                : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名利用のため、ブラウザデータを失うと記録を復旧できない場合があります。`}
+            </span>
           </label>
         </fieldset>
         {pendingSave !== null && config.dataMode === 'live' && (
-          <section aria-label="匿名登録">
+          <section className="captcha-card" aria-label="匿名登録">
             <p>匿名登録を続けるため、登録用の確認を行います。</p>
             {siteKey ? (
               <RegistrationCaptcha
@@ -356,9 +429,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             {error}
           </p>
         )}
-        {config.dataMode === 'live' && !config.generationAvailable && (
-          <p className="hint">現在、漫画生成は利用できません。</p>
-        )}
         {config.dataMode === 'mock' && config.generationAvailable && (
           <p className="hint">固定サンプルです。入力内容は反映されず、AIにも送信されません。</p>
         )}
@@ -369,7 +439,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         )}
         {generationCheckEntry && (
           <button
-            className="secondary"
+            className="button button-secondary"
             disabled={busy}
             type="button"
             onClick={() => void checkGenerationReceipt()}
@@ -377,49 +447,18 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             {busy ? '受付結果を確認しています…' : '受付結果を確認'}
           </button>
         )}
-        <div className="actions">
-          {canGenerate ? (
-            <button disabled={busy || saved !== null} type="submit">
-              {busy
-                ? '保存しています…'
-                : config.dataMode === 'mock'
-                  ? '保存して固定サンプルを見る'
-                  : config.generationAvailable
-                    ? '保存して固定サンプルを見る'
-                    : '保存して記録を見る'}
-            </button>
-          ) : (
-            <button disabled type="button">
-              {quotaState === 'loading' && configAllowsGeneration
-                ? '利用枠を確認しています…'
-                : quotaState === 'unavailable' && configAllowsGeneration
-                  ? '利用枠を確認できません'
-                  : '漫画生成は利用できません'}
-            </button>
-          )}
-          <button
-            className="secondary"
-            disabled={busy || saved !== null}
-            type="button"
-            onClick={() => void save(false)}
-          >
-            下書き保存
+        <div className="primary-action-dock">
+          <button className="button button-primary" disabled={primaryDisabled} type="submit">
+            {busy
+              ? '保存しています…'
+              : canGenerate
+                ? '4コマにする'
+                : quotaState === 'loading' && configAllowsGeneration
+                  ? '利用枠を確認しています…'
+                  : '下書きとして保存'}
           </button>
-          {quotaState === 'unavailable' && !saved && (
-            <button
-              className="secondary"
-              disabled={busy}
-              type="button"
-              onClick={() => {
-                setQuotaState('loading');
-                void refreshQuota();
-              }}
-            >
-              利用枠を再確認
-            </button>
-          )}
         </div>
       </form>
-    </>
+    </section>
   );
 }

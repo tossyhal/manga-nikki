@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Link,
-  NavLink,
   Outlet,
   useBlocker,
+  useLocation,
   useOutletContext,
   type BlockerFunction,
   type RouteObject,
 } from 'react-router';
+import { jstToday, type Entry } from '../../shared/schemas';
 import { pageComic, sampleDiary } from '../../shared/fixtures';
-import type { Entry } from '../../shared/schemas';
+import catSleeping from '../../../design/assets/cat_sleeping.svg?url';
 import { Comic } from '../features/comic/Comic';
 import { NewEntry, type DiaryActivity } from '../features/diary/NewEntry';
 import { EntryHistory } from '../features/library/EntryHistory';
@@ -17,6 +18,9 @@ import { Library } from '../features/library/Library';
 import { Detail } from '../features/library/Detail';
 import { getEntries } from '../lib/api';
 import { getClientConfig, type ClientConfig } from '../lib/config';
+import { BottomNav } from './BottomNav';
+import { ConfirmDialog } from './ConfirmDialog';
+import { Icon } from './Icon';
 import { PwaNotice } from './PwaNotice';
 
 const configUnavailableMessage = '現在、読み込めません。通信を確認して再読み込みしてください。';
@@ -28,12 +32,144 @@ type AppContext = {
   onActivityChange: (activity: DiaryActivity) => void;
 };
 
-function RecentRecords() {
+function RecentRecords({ entries }: { entries: Entry[] }) {
+  return (
+    <section className="recent-records">
+      <div className="section-heading-row">
+        <h2>最近の記録</h2>
+        <Link className="icon-link" to="/library" aria-label="すべての記録を見る">
+          <Icon name="chevron-right" />
+        </Link>
+      </div>
+      {entries.length === 0 ? (
+        <p className="muted-copy">書いた記録がここに並びます。</p>
+      ) : (
+        <EntryHistory entries={entries.slice(0, 2)} />
+      )}
+    </section>
+  );
+}
+
+function Home({
+  config,
+  configError,
+}: {
+  config: ClientConfig | null;
+  configError: boolean;
+}) {
+  const isMock = config?.dataMode === 'mock';
+  const showSample = config?.dataMode === 'sample' || config?.dataMode === 'live';
+  const { recent, historyError } = useRecentRecordsForHome(isMock);
+  const todayEntries = recent?.filter((entry) => entry.diaryDate === jstToday()) ?? [];
+  const [sampleOpen, setSampleOpen] = useState(false);
+  const now = new Date();
+  const today = `${new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    month: 'long',
+    day: 'numeric',
+  }).format(now)} ${new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    weekday: 'long',
+  }).format(now)}`;
+
+  if (showSample && sampleOpen) {
+    return (
+      <section className="sample-detail" aria-labelledby="sample-detail-title">
+        <div className="detail-toolbar">
+          <button className="icon-button" type="button" onClick={() => setSampleOpen(false)}>
+            <Icon name="back" />
+            <span className="sr-only">戻る</span>
+          </button>
+          <span className="sample-tag">架空サンプル</span>
+          <span aria-hidden="true" className="toolbar-spacer" />
+        </div>
+        <h1 id="sample-detail-title" className="detail-title">
+          {pageComic.title}
+        </h1>
+        <Comic
+          comic={pageComic}
+          images={{
+            [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']:
+              '/sample-comic.svg',
+          }}
+          mock
+          titleAs="h2"
+        />
+        <details className="original-diary" open>
+          <summary>元の日記</summary>
+          <p>{sampleDiary}</p>
+        </details>
+      </section>
+    );
+  }
+
+  return (
+    <div className="home-page">
+      {isMock && (
+        <time className="home-date" dateTime={jstToday()}>
+          {today}
+        </time>
+      )}
+      {configError && (
+        <div className="today-unavailable-card" role="alert">
+          <Icon name="alert" size={24} />
+          <p>{configUnavailableMessage}</p>
+        </div>
+      )}
+      <section className="today-section" aria-labelledby="today-heading">
+        <h1 id="today-heading">今日の記録</h1>
+        {configError ? null : config === null ? (
+          <output className="today-card-loading">読み込んでいます…</output>
+        ) : showSample ? (
+          <div className="today-sample-card">
+            <img src="/sample-comic.svg" alt="架空の一日の4コマ漫画" loading="lazy" />
+            <div className="today-sample-copy">
+              <span className="sample-tag">架空サンプル</span>
+              <h2>{pageComic.title}</h2>
+              <p>日記を漫画にしたサンプルです。</p>
+              <button className="today-write-link" type="button" onClick={() => setSampleOpen(true)}>
+                <span>漫画を読む</span>
+                <Icon name="chevron-right" size={18} />
+              </button>
+            </div>
+          </div>
+        ) : isMock && recent === null ? (
+          <output className="today-card-loading">読み込んでいます…</output>
+        ) : isMock && historyError ? (
+          <div className="today-unavailable-card" role="alert">
+            <Icon name="alert" size={24} />
+            <p>今日の記録を読み込めませんでした。</p>
+            <span>{historyError}</span>
+          </div>
+        ) : todayEntries.length > 0 ? (
+          <div className="today-records">
+            <EntryHistory entries={todayEntries} />
+          </div>
+        ) : (
+          <div className="today-empty-card">
+            <p>今日はまだ記録がありません</p>
+            <img src={catSleeping} alt="丸くなって眠る猫" width="148" height="100" />
+            <Link className="today-write-link" to="/new">
+              <Icon name="plus" size={20} />
+              <span>日記を書く</span>
+            </Link>
+          </div>
+        )}
+      </section>
+
+      {isMock && recent !== null && !historyError && <RecentRecords entries={recent} />}
+
+    </div>
+  );
+}
+
+function useRecentRecordsForHome(enabled: boolean) {
   const [recent, setRecent] = useState<Entry[] | null>(null);
   const [historyError, setHistoryError] = useState('');
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
-    getEntries({ limit: 5 })
+    getEntries({ limit: 20 })
       .then((result) => {
         if (active) setRecent(result.items);
       })
@@ -46,69 +182,13 @@ function RecentRecords() {
     return () => {
       active = false;
     };
-  }, []);
-  return (
-    <section>
-      <h2>過去の記録</h2>
-      {historyError && (
-        <p role="alert" className="error">
-          {historyError}
-        </p>
-      )}
-      {recent === null ? (
-        <output>読み込んでいます…</output>
-      ) : recent.length === 0 ? (
-        <p>まだ保存した日記はありません。書いた記録は、要約を見出しにしてここに並びます。</p>
-      ) : (
-        <>
-          <EntryHistory entries={recent} />
-          <p>
-            <Link to="/library">すべての記録を見る →</Link>
-          </p>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Home({ config }: { config: ClientConfig | null }) {
-  return (
-    <>
-      <p className="eyebrow">一日を、4つの場面に。</p>
-      <h1>
-        今日のことを、
-        <br />
-        また読みたくなる形に。
-      </h1>
-      <p>
-        短い日記を書いて、漫画で振り返る。まずは架空のサンプルで、使い心地を確かめてみてください。
-      </p>
-      <div className="actions">
-        <Link className="button" to="/new">
-          日記を書く
-        </Link>
-        <Link to="/library">保存した記録を見る →</Link>
-      </div>
-      {config?.dataMode === 'mock' && <RecentRecords />}
-      <section className="sample">
-        <h2>サンプルの一日</h2>
-        <p>{sampleDiary}</p>
-        <Comic
-          comic={pageComic}
-          images={{
-            [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
-          }}
-          mock
-          titleAs="h3"
-        />
-      </section>
-    </>
-  );
+  }, [enabled]);
+  return { recent, historyError };
 }
 
 function HomeRoute() {
-  const { config } = useOutletContext<AppContext>();
-  return <Home config={config} />;
+  const { config, configError } = useOutletContext<AppContext>();
+  return <Home config={config} configError={configError} />;
 }
 function NewEntryRoute() {
   const { config, configError, personalDataAvailable, onActivityChange } =
@@ -157,9 +237,11 @@ function NotFound() {
 }
 
 function App() {
+  const location = useLocation();
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
   const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
+  const [blockedActivity, setBlockedActivity] = useState<DiaryActivity | null>(null);
   const diaryActivityRef = useRef(diaryActivity);
   const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
     diaryActivityRef.current = activity;
@@ -182,16 +264,9 @@ function App() {
       .catch(() => setConfigError(true));
   }, []);
   useEffect(() => {
-    if (blocker.state !== 'blocked') return;
-    const { dirty, busy } = diaryActivityRef.current;
-    const message = busy
-      ? '保存などの処理中です。この画面を離れると結果を確認できなくなることがあります。移動しますか？'
-      : dirty
-        ? '未保存の入力があります。画面を離れると入力内容が失われます。移動しますか？'
-        : 'この画面を離れますか？';
-    if (window.confirm(message)) blocker.proceed();
-    else blocker.reset();
-  }, [blocker]);
+    if (blocker.state === 'blocked') setBlockedActivity(diaryActivityRef.current);
+    else setBlockedActivity(null);
+  }, [blocker.state]);
   useLayoutEffect(() => {
     if (!diaryActivity.dirty && !diaryActivity.busy) return;
     const preventUnloading = (event: BeforeUnloadEvent) => {
@@ -209,36 +284,53 @@ function App() {
     onActivityChange: reportDiaryActivity,
   };
   return (
-    <>
+    <div className="app-shell">
       <a className="skip" href="#main">
         本文へ移動
       </a>
-      <header>
-        <Link className="brand" to="/">
-          漫画日記<span>小さな一日を、残す。</span>
-        </Link>
-        <nav aria-label="メインナビゲーション">
-          <NavLink to="/new">日記を書く</NavLink>
-          <NavLink to="/library">記録</NavLink>
-        </nav>
-      </header>
-      <aside className="notice">
-        {config?.dataMode === 'mock'
-          ? '記録は一時的に保存され、予告なく消える場合があります。AIには送信されません。'
-          : config?.dataMode === 'live'
-            ? '記録を保存する前に利用条件をご確認ください。'
-            : config?.dataMode === 'sample'
-              ? 'サンプルを表示しています。保存・生成は利用できません。'
-              : configError
-                ? configUnavailableMessage
-                : '利用できる機能を確認しています…'}
-      </aside>
+      {location.pathname === '/' && (
+        <header className="app-header">
+          <Link className="brand" to="/" aria-label="漫画日記 ホーム">
+            まんが日記
+          </Link>
+          <span className="header-settings" aria-hidden="true">
+            <Icon name="settings" />
+          </span>
+        </header>
+      )}
+      {configError && (
+        <aside className="notice" role="alert">
+          {configUnavailableMessage}
+        </aside>
+      )}
       <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
-      <main id="main">
+      <main id="main" className="app-main">
         <Outlet context={context} />
       </main>
-      <footer>漫画日記</footer>
-    </>
+      <BottomNav />
+      <ConfirmDialog
+        open={blockedActivity !== null && blocker.state === 'blocked'}
+        icon="alert"
+        title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
+        description={
+          blockedActivity?.busy
+            ? '保存などの処理中です。この画面を離れると結果を確認できなくなることがあります。'
+            : 'このまま画面を離れますか？'
+        }
+        confirmLabel={blockedActivity?.busy ? '移動する' : '保存せずに離れる'}
+        cancelLabel="入力に戻る"
+        cancelPrimary
+        destructive
+        onConfirm={() => {
+          setBlockedActivity(null);
+          if (blocker.state === 'blocked') blocker.proceed();
+        }}
+        onCancel={() => {
+          setBlockedActivity(null);
+          if (blocker.state === 'blocked') blocker.reset();
+        }}
+      />
+    </div>
   );
 }
 
