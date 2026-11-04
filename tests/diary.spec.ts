@@ -346,7 +346,7 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   await page.goto('/new');
   const consent = page.getByRole('checkbox');
   await expect(consent).toHaveAccessibleName(
-    /匿名利用の記録はこのブラウザに保存され、別の端末へ引き継げません。/,
+    /匿名セッションはこのブラウザに保存され、別の端末へ引き継げません。/,
   );
   await expect(consent).toHaveAccessibleName(/保存後30日を過ぎると閲覧できなくなります/);
   await expect(consent).toHaveAccessibleName(/現在、漫画生成は利用できません。/);
