@@ -144,7 +144,7 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'いつもの一日' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
   await page.getByRole('button', { name: '漫画を読む' }).click();
   await expect(page).toHaveURL(/\/$/);

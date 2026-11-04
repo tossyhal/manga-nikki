@@ -200,11 +200,16 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('入力内容を反映しない架空の日記');
   await page.getByRole('checkbox').check();
+  await expect(page.getByRole('checkbox')).toHaveAccessibleName(
+    /漫画は固定サンプルで、入力内容をAIに送信しません。/,
+  );
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
-  await expect(page.getByRole('checkbox')).toHaveAccessibleName(
-    /漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。/,
-  );
+  await expect(
+    page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。', {
+      exact: true,
+    }),
+  ).toBeVisible();
 
   const captchaEvents = await page.evaluate(() => window.__e2eTurnstileEvents ?? []);
   expect(captchaEvents).toEqual([
