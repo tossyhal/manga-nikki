@@ -201,7 +201,7 @@ for (const failure of [
         ? '匿名セッションを確認できません。'
         : failure.code === 'REVISION_CONFLICT'
           ? '記録が更新されています。最新の内容を読み込んでから操作してください。'
-          : '必要な機能を確認できないため、漫画の受付を停止しています。',
+          : '一時的に利用できません。時間をおいて再操作してください。',
     );
     await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
   });

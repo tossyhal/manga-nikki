@@ -79,6 +79,33 @@ describe('API error guidance', () => {
     });
   });
 
+  it('uses neutral retry guidance for a dependency failure on personal-data APIs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(() =>
+        Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: 'DEPENDENCY_UNAVAILABLE',
+                message: 'private backend detail',
+                requestId: 'dependency-request',
+                retryable: true,
+              },
+            },
+            { status: 503 },
+          ),
+        ),
+      ),
+    );
+
+    await expect(api('/entries')).rejects.toMatchObject({
+      status: 503,
+      code: 'DEPENDENCY_UNAVAILABLE',
+      message: '一時的に利用できません。時間をおいて再操作してください。',
+    });
+  });
+
   it('maps API codes to safe guidance without exposing server messages', async () => {
     vi.stubGlobal(
       'fetch',

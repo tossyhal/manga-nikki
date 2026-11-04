@@ -241,7 +241,10 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     setError('');
     try {
       await recheckGeneration(generationCheckEntry);
-      if (activeRef.current) navigate(`/entries/${generationCheckEntry.id}`);
+      if (activeRef.current) {
+        onActivityChange({ dirty: false, busy: false });
+        navigate(`/entries/${generationCheckEntry.id}`);
+      }
     } catch (failure) {
       if (activeRef.current)
         setError(failure instanceof Error ? failure.message : '受付結果を確認できませんでした。');
