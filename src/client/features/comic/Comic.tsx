@@ -42,7 +42,7 @@ export function Comic({
             </li>
           ))}
         </ol>
-        {mock && <small>固定サンプルです。入力した日記から生成した画像ではありません。</small>}
+        {mock && <small>固定サンプルです。入力内容は反映されず、AIにも送信されません。</small>}
       </figcaption>
     </figure>
   );

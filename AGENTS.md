@@ -10,7 +10,9 @@
 
 ## 2. 変更の進め方
 
-- ブランチとPR：「1タスク＝1目的」の小さなPRに分ける。`main`から作業ブランチを作成し、Merge commitで統合する。`main`への直接コミット・`force push`・破壊的な`reset` / `clean`・他人の履歴変更は禁止。
+- ブランチとPR：「1タスク＝1目的」の小さなPRに分ける。通常は`main`から、Stacked PRは親branchから作業ブランチを作成し、Merge commitで統合する。`main`への直接コミット・`force push`・破壊的な`reset` / `clean`・他人の履歴変更は禁止。
+- 開発フロー：親担当者が計画し、freshなGPT-6-Luna Maxが実装する。Stacked PRは親branchをbaseとし、親側の修正を子branchへmergeして伝播させる。親PRのmerge後は子PRのbaseを`main`に切り替え、通常rebaseやforce pushはしない。PR前にCLIでfreshなOpus 5.5（medium）とGPT-6.1-sol（medium）の両レビューを通し、指摘修正後、画面変更は`agent-browser`で確認して日本語PRテンプレートに沿って提出する。ユーザーがMerge commitでmergeする。
+- 担当分担：Figmaデザインと漫画生成・保存の主担当は別メンバーとする。接続に必要な修正は担当PRで行ってよい。
 - 技術選定の遵守：既存の設計・命名規則に合わせる。採用技術は`docs/ARCHITECTURE.md`を正本とし、依存パッケージや外部サービスを独断で追加しない。技術変更が必要な場合は、理由と移行影響を同文書に記録して担当者と合意する。
 - 共通契約の保護：共有型・SQL migration・`package.json`・`pnpm-workspace.yaml`・lockfile・Wrangler設定は編集前に担当者と共有する。契約を変更する場合は、呼び出し側・テスト・ドキュメントをすべて揃えて更新し、契約v1を黙って破壊しない。
 - テンプレート生成：フレームワーク等のテンプレートはリポジトリ外の一時ディレクトリで生成し、必要な差分だけを取り込む。

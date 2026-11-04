@@ -5,21 +5,24 @@ import type { EntryDetail, Generation } from '../src/shared/schemas';
 const entryId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const fixtures = generationFixtures(entryId, generationId);
-function detail(generation: Generation): EntryDetail {
+function detail(generation: Generation, revision = 1): EntryDetail {
   return {
     id: entryId,
     diaryDate: '2026-01-01',
     body: '架空のテスト日記',
-    revision: 1,
+    revision,
     latestGenerationId: generation.id,
     latestGeneration: generation,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
   };
 }
-async function intercept(page: Page, getGeneration: () => Generation) {
+async function intercept(page: Page, getGeneration: () => Generation, revision = 1) {
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
-    route.fulfill({ json: detail(getGeneration()) }),
+    route.fulfill({ json: detail(getGeneration(), revision) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: getGeneration() }),
   );
   await page.route('**/api/v1/assets/*/url', (route) => {
     const id = route.request().url().split('/').at(-2);
@@ -61,16 +64,23 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
     return generation;
   });
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByText('生成待ちです。')).toBeVisible();
+  await expect(page.getByText('受付済みです。生成を待っています。')).toBeVisible();
   generation = fixtures.running;
   await page.clock.runFor(5000);
-  await expect(page.getByText('漫画を作成しています。')).toBeVisible();
+  await expect(page.getByText('画像を描いています。')).toBeVisible();
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
   await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
   const completedReads = reads;
   await page.clock.runFor(15000);
   expect(reads).toBe(completedReads);
+});
+test('編集後の日記では旧revisionから生成した漫画だと表示する', async ({ page }) => {
+  await intercept(page, () => fixtures.succeeded, 2);
+  await page.goto(`/entries/${entryId}`);
+  await expect(
+    page.getByText('編集前の日記から生成された漫画です。', { exact: true }),
+  ).toBeVisible();
 });
 for (const status of ['failed', 'unknown', 'cancelled'] as const) {
   test(`${status}では漫画なしで表示し、自動で生成しない`, async ({ page }) => {
@@ -90,7 +100,9 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
     await expect(page.locator('.comic')).toHaveCount(0);
     if (status === 'cancelled')
       await expect(page.getByText('生成は中止されました。')).toBeVisible();
-    else await expect(page.getByRole('alert')).toContainText(fixtures[status].error.message);
+    else if (status === 'unknown')
+      await expect(page.getByRole('alert')).toContainText('自動では再生成せず');
+    else await expect(page.getByRole('alert')).toContainText('漫画を作成できませんでした。');
     const terminalReads = reads;
     await page.clock.runFor(15000);
     expect(reads).toBe(terminalReads);

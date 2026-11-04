@@ -4,10 +4,32 @@ import { pageComic } from '../shared/fixtures';
 import { createEntrySchema, updateEntrySchema, generateSchema, jstToday } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
 import { createMockRepository, type MockRepository } from './repositories/mock';
+import {
+  createLiveEntry,
+  deleteLiveEntry,
+  getLiveEntryDetail,
+  listLiveEntries,
+  LiveEntryError,
+  updateLiveEntry,
+} from './live-entries';
+import {
+  generationIngressConfigured,
+  getLiveGeneration,
+  getLiveGenerationQuota,
+  getLiveMockAssetUrl,
+  LiveGenerationError,
+  reserveLiveMockGeneration,
+} from './live-generations';
+import {
+  getBearerToken,
+  InvalidAccessTokenError,
+  SupabaseAuthUnavailableError,
+  verifySupabaseAccessToken,
+} from './auth';
 
 class ApiError extends Error {
   constructor(
-    public status: 400 | 401 | 404 | 409 | 413 | 429 | 503,
+    public status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 503,
     public code: string,
   ) {
     super(code);
@@ -15,14 +37,19 @@ class ApiError extends Error {
 }
 const messages: Record<string, string> = {
   INVALID_INPUT: '入力内容を確認してください。',
-  AUTH_REQUIRED: '開発用セッションを確認してください。',
+  AUTH_REQUIRED: '認証情報を確認してください。',
+  CONSENT_REQUIRED: '利用への同意を確認してください。',
   NOT_FOUND: '記録が見つかりません。',
   REVISION_CONFLICT: '記録が更新されています。再読み込みしてください。',
+  ENTRY_BUSY: '生成中の記録は編集できません。',
   IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
   INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
-  USER_LIMIT_REACHED: 'モックの本日の生成上限に達しました。',
+  USER_LIMIT_REACHED: '本日の生成上限に達しました。',
+  GLOBAL_LIMIT_REACHED: '現在、生成の上限に達しています。',
+  TOO_MANY_ACTIVE: '生成中の記録があります。完了後にもう一度お試しください。',
+  CAPTCHA_FAILED: '確認に失敗しました。新しい確認を行ってください。',
   DRAFT_LIMIT_REACHED: '下書きが上限に達しました。不要な記録を削除してください。',
-  DEPENDENCY_UNAVAILABLE: 'この接続方式は初期基盤では未対応です。',
+  DEPENDENCY_UNAVAILABLE: '一時的に利用できません。時間をおいて再操作してください。',
   GENERATION_DISABLED: 'この環境では個人データの操作は利用できません。',
 };
 async function jsonBody(request: Request): Promise<unknown> {
@@ -58,10 +85,20 @@ async function jsonBody(request: Request): Promise<unknown> {
   }
 }
 export function createApp(
-  options: { localDevelopment?: boolean; repository?: MockRepository } = {},
+  options: {
+    localDevelopment?: boolean;
+    repository?: MockRepository;
+    authFetch?: typeof fetch;
+    supabaseFetch?: typeof fetch;
+    turnstileFetch?: typeof fetch;
+  } = {},
 ) {
-  const repository = options.repository ?? createMockRepository();
-  const app = new Hono<{ Bindings: Environment; Variables: { owner: string } }>();
+  let repository = options.repository;
+  const getRepository = () => (repository ??= createMockRepository());
+  const app = new Hono<{
+    Bindings: Environment;
+    Variables: { owner: string; accessToken: string | null };
+  }>();
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     await next();
@@ -70,14 +107,21 @@ export function createApp(
     const failure =
       error instanceof ApiError
         ? error
-        : error instanceof z.ZodError
-          ? new ApiError(400, 'INVALID_INPUT')
-          : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+        : error instanceof LiveEntryError
+          ? new ApiError(error.status, error.code)
+          : error instanceof LiveGenerationError
+            ? new ApiError(error.status, error.code)
+            : error instanceof z.ZodError
+              ? new ApiError(400, 'INVALID_INPUT')
+              : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     return c.json(
       {
         error: {
           code: failure.code,
-          message: messages[failure.code],
+          message:
+            error instanceof LiveGenerationError && error.code === 'GENERATION_DISABLED'
+              ? '現在、新しい漫画の生成を利用できません。'
+              : messages[failure.code],
           requestId: crypto.randomUUID(),
           retryable: false,
         },
@@ -99,7 +143,9 @@ export function createApp(
   app.get('/api/v1/config', (c) => {
     const current = mode(c.env);
     return c.json({
-      generationAvailable: current === 'local-mock',
+      generationAvailable:
+        current === 'local-mock' ||
+        (current === 'local-connected' && generationIngressConfigured(c.env)),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
       consentVersion: 'v1',
@@ -108,31 +154,69 @@ export function createApp(
   });
   app.use('/api/v1/*', async (c, next) => {
     const current = mode(c.env);
-    if (current !== 'local-mock')
-      throw new ApiError(
-        503,
-        current === 'preview-sample' ? 'GENERATION_DISABLED' : 'DEPENDENCY_UNAVAILABLE',
-      );
+    if (current === 'preview-sample') throw new ApiError(503, 'GENERATION_DISABLED');
     const url = new URL(c.req.url);
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-      throw new ApiError(401, 'AUTH_REQUIRED');
     const origin = c.req.header('Origin');
     if (origin && origin !== url.origin) throw new ApiError(401, 'AUTH_REQUIRED');
-    const owner = c.req.header('Authorization')?.match(/^Bearer mock:([0-9a-f-]+)$/)?.[1];
-    if (!owner || !z.uuid().safeParse(owner).success) throw new ApiError(401, 'AUTH_REQUIRED');
+
+    let owner: string;
+    let accessToken: string | null = null;
+    if (current === 'local-mock') {
+      if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+        throw new ApiError(401, 'AUTH_REQUIRED');
+      owner = c.req.header('Authorization')?.match(/^Bearer mock:([0-9a-f-]+)$/)?.[1] ?? '';
+      if (!z.uuid().safeParse(owner).success) throw new ApiError(401, 'AUTH_REQUIRED');
+    } else {
+      try {
+        const token = getBearerToken(c.req.header('Authorization'));
+        owner = await verifySupabaseAccessToken(c.env, token, options.authFetch);
+        accessToken = token;
+      } catch (error) {
+        if (error instanceof InvalidAccessTokenError) throw new ApiError(401, 'AUTH_REQUIRED');
+        if (error instanceof SupabaseAuthUnavailableError)
+          throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+        throw error;
+      }
+    }
     c.set('owner', owner);
+    c.set('accessToken', accessToken);
     await next();
   });
+  const liveContext = (c: {
+    env: Environment;
+    get: (key: 'owner' | 'accessToken') => string | null;
+  }) => {
+    const accessToken = c.get('accessToken');
+    if (!accessToken) throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    return {
+      environment: c.env,
+      owner: c.get('owner') as string,
+      accessToken,
+      fetcher: options.supabaseFetch,
+      turnstileFetch: options.turnstileFetch,
+    };
+  };
   const getEntry = (id: string, owner: string) => {
-    const found = repository.entries.get(id);
+    const found = getRepository().entries.get(id);
     if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
     return found;
   };
-  app.get('/api/v1/me/quota', (c) => {
+  app.get('/api/v1/me/quota', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock')
+      return c.json(
+        await getLiveGenerationQuota(
+          liveContext(c),
+          current === 'local-connected' && generationIngressConfigured(c.env),
+        ),
+      );
     const day = jstToday();
     const resetAt = new Date(Date.parse(`${day}T00:00:00+09:00`) + 86400000).toISOString();
     return c.json({
-      remainingToday: Math.max(0, 2 - (repository.counts.get(`${c.get('owner')}:${day}`) ?? 0)),
+      remainingToday: Math.max(
+        0,
+        2 - (getRepository().counts.get(`${c.get('owner')}:${day}`) ?? 0),
+      ),
       activeGenerationId: null,
       resetAt,
       generationAvailable: true,
@@ -140,8 +224,10 @@ export function createApp(
   });
   app.post('/api/v1/entries', async (c) => {
     const input = createEntrySchema.parse(await jsonBody(c.req.raw));
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await createLiveEntry(liveContext(c), input), 201);
     const owner = c.get('owner');
-    const existing = [...repository.entries.values()].find(
+    const existing = [...getRepository().entries.values()].find(
       (x) => x.owner === owner && x.requestId === input.createRequestId,
     );
     if (existing) {
@@ -150,7 +236,7 @@ export function createApp(
       return c.json(existing.entry, 201);
     }
     if (
-      [...repository.entries.values()].filter(
+      [...getRepository().entries.values()].filter(
         (x) => x.owner === owner && !x.entry.latestGenerationId,
       ).length >= 20
     )
@@ -165,17 +251,23 @@ export function createApp(
       createdAt: now,
       updatedAt: now,
     };
-    repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
+    getRepository().entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
     return c.json(entry, 201);
   });
-  app.get('/api/v1/entries', (c) => {
+  app.get('/api/v1/entries', async (c) => {
     const limit = z.coerce
       .number()
       .int()
       .min(1)
       .max(50)
       .parse(c.req.query('limit') ?? 20);
-    const sorted = [...repository.entries.values()]
+    if (mode(c.env) !== 'local-mock') {
+      const cursor = c.req.query('cursor');
+      return c.json(
+        await listLiveEntries(liveContext(c), { limit, ...(cursor ? { cursor } : {}) }),
+      );
+    }
+    const sorted = [...getRepository().entries.values()]
       .filter((x) => x.owner === c.get('owner'))
       .map((x) => x.entry)
       .sort((a, b) => b.diaryDate.localeCompare(a.diaryDate) || b.id.localeCompare(a.id));
@@ -188,17 +280,24 @@ export function createApp(
       nextCursor: sorted.length > index + 1 + limit ? (items.at(-1)?.id ?? null) : null,
     });
   });
-  app.get('/api/v1/entries/:id', (c) => {
+  app.get('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock') {
+      const detail = await getLiveEntryDetail(liveContext(c), c.req.param('id'));
+      if (!detail) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(detail);
+    }
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     return c.json({
       ...entry,
       latestGeneration: entry.latestGenerationId
-        ? (repository.generations.get(entry.latestGenerationId)?.generation ?? null)
+        ? (getRepository().generations.get(entry.latestGenerationId)?.generation ?? null)
         : null,
     });
   });
   app.patch('/api/v1/entries/:id', async (c) => {
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await updateLiveEntry(liveContext(c), c.req.param('id'), input));
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     if (input.expectedRevision !== entry.revision) throw new ApiError(409, 'REVISION_CONFLICT');
     Object.assign(entry, {
@@ -209,22 +308,42 @@ export function createApp(
     });
     return c.json(entry);
   });
-  app.delete('/api/v1/entries/:id', (c) => {
+  app.delete('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
-    repository.entries.delete(entry.id);
-    for (const [key, job] of repository.generations)
-      if (job.generation.entryId === entry.id) repository.generations.delete(key);
+    getRepository().entries.delete(entry.id);
+    for (const [key, job] of getRepository().generations)
+      if (job.generation.entryId === entry.id) getRepository().generations.delete(key);
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
+    const current = mode(c.env);
+    if (current === 'live-demo') throw new LiveGenerationError(503, 'GENERATION_DISABLED');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
+    if (current !== 'local-mock') {
+      const receipt = await reserveLiveMockGeneration(
+        { ...liveContext(c), turnstileFetch: options.turnstileFetch },
+        {
+          entryId: z.uuid().parse(c.req.param('id')),
+          expectedRevision: input.expectedRevision,
+          idempotencyKey: z.uuid().parse(c.req.header('Idempotency-Key')),
+          captchaToken: input.captchaToken,
+        },
+      );
+      return c.json(receipt, 202);
+    }
     const { entry } = getEntry(c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
     const owner = c.get('owner');
-    const old = [...repository.generations.values()].find(
+    const old = [...getRepository().generations.values()].find(
       (x) => x.owner === owner && x.key === key,
     );
-    if (old && (old.generation.entryId !== entry.id || old.revision !== input.expectedRevision))
+    if (
+      old &&
+      (old.generation.entryId !== entry.id ||
+        old.generation.entryRevision !== input.expectedRevision)
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     if (!old && input.expectedRevision !== entry.revision)
       throw new ApiError(409, 'REVISION_CONFLICT');
@@ -235,31 +354,52 @@ export function createApp(
     });
     if (old) return c.json(receipt(old.generation.id), 202);
     const counter = `${owner}:${jstToday()}`;
-    const count = repository.counts.get(counter) ?? 0;
+    const count = getRepository().counts.get(counter) ?? 0;
     if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');
     const id = crypto.randomUUID();
     const assetId = crypto.randomUUID();
+    const entryRevision = entry.revision;
     const comic = {
       ...pageComic,
       visual: { kind: 'page' as const, assetId, textMode: 'external' as const },
     };
-    repository.generations.set(id, {
+    getRepository().generations.set(id, {
       owner,
       key,
-      revision: entry.revision,
-      generation: { id, entryId: entry.id, status: 'succeeded', stage: null, comic, mock: true },
+      generation: {
+        id,
+        entryId: entry.id,
+        entryRevision,
+        status: 'succeeded',
+        stage: null,
+        comic,
+        mock: true,
+      },
     });
-    repository.counts.set(counter, count + 1);
+    getRepository().counts.set(counter, count + 1);
     entry.latestGenerationId = id;
     return c.json(receipt(id), 202);
   });
-  app.get('/api/v1/generations/:id', (c) => {
-    const job = repository.generations.get(c.req.param('id'));
+  app.get('/api/v1/generations/:id', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock') {
+      const generation = await getLiveGeneration(liveContext(c), c.req.param('id'));
+      if (!generation) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(generation);
+    }
+    const job = getRepository().generations.get(c.req.param('id'));
     if (!job || job.owner !== c.get('owner')) throw new ApiError(404, 'NOT_FOUND');
     return c.json(job.generation);
   });
-  app.get('/api/v1/assets/:id/url', (c) => {
-    const job = [...repository.generations.values()].find(
+  app.get('/api/v1/assets/:id/url', async (c) => {
+    const current = mode(c.env);
+    if (current === 'local-connected') {
+      const asset = await getLiveMockAssetUrl(liveContext(c), c.req.param('id'));
+      if (!asset) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(asset);
+    }
+    if (current !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    const job = [...getRepository().generations.values()].find(
       (x) =>
         x.owner === c.get('owner') &&
         x.generation.status === 'succeeded' &&

@@ -1,16 +1,22 @@
 import { expect, test } from '@playwright/test';
+import { liveClientConfigFixture } from './fixtures/client-config';
 test('入力からモック漫画と履歴を再読込して削除できる', async ({ page }) => {
+  const externalAuthRequests: string[] = [];
+  page.on('request', (request) => {
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
+      externalAuthRequests.push(request.url());
+  });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '保存してモック漫画を見る' }).click();
+  await page.getByRole('button', { name: '保存して固定サンプルを見る' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(page.getByRole('heading', { name: '図書館で本を読んだ。' })).toBeVisible();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await expect(
-    page.getByText('固定サンプルです。入力した日記から生成した画像ではありません。'),
+    page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。'),
   ).toBeVisible();
   await page.reload();
   await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
@@ -24,9 +30,13 @@ test('入力からモック漫画と履歴を再読込して削除できる', as
   await expect(page.getByRole('heading', { name: '保存した記録', exact: true })).toBeVisible();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toBeVisible();
   await page.getByText('図書館で本を読んだ。', { exact: true }).click();
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: '記録を削除' }).click();
+  const deleteDialogPromise = page.waitForEvent('dialog');
+  const deleteAction = page.getByRole('button', { name: '記録を削除' }).click();
+  const deleteDialog = await deleteDialogPromise;
+  await deleteDialog.accept();
+  await deleteAction;
   await expect(page.getByRole('heading', { name: '最初の一日を残しましょう。' })).toBeVisible();
+  expect(externalAuthRequests).toEqual([]);
 });
 test('狭い画面で下書き保存とHTML風の文字を安全に表示できる', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -65,6 +75,108 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
   release();
   await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
 });
+
+test('設定を読み込めない画面では通信確認と再読み込みを案内する', async ({ page }) => {
+  const message = '現在、読み込めません。通信を確認して再読み込みしてください。';
+  await page.route('**/api/v1/config', (route) => route.abort('failed'));
+
+  for (const path of ['/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
+    await page.goto(path);
+    await expect(page.locator('.notice')).toHaveText(message);
+    await expect(page.getByRole('alert')).toHaveText(message);
+  }
+});
+
+test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出さない', async ({ page }) => {
+  const externalAuthRequests: string[] = [];
+  let personalEntryReads = 0;
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({
+      json: {
+        dataMode: 'sample',
+        generationAvailable: false,
+        consentVersion: 'v1',
+        retentionDays: 30,
+      },
+    }),
+  );
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && request.url().includes('/api/v1/entries?')) {
+      personalEntryReads += 1;
+    }
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
+      externalAuthRequests.push(request.url());
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.notice')).toHaveText(
+    'サンプルを表示しています。保存・生成は利用できません。',
+  );
+  await expect(page.getByText('サンプルの一日')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
+  await expect(page.getByText('保存機能は利用できません。')).toBeVisible();
+  expect(personalEntryReads).toBe(0);
+  expect(externalAuthRequests).toEqual([]);
+});
+
+test('liveホームは履歴取得と匿名登録を始めない', async ({ page }) => {
+  let personalEntryReads = 0;
+  const externalAuthRequests: string[] = [];
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && request.url().includes('/api/v1/entries?')) {
+      personalEntryReads += 1;
+    }
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url())) {
+      externalAuthRequests.push(request.url());
+    }
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
+  await expect(page.getByText('サンプルの一日')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle');
+
+  expect(personalEntryReads).toBe(0);
+  expect(externalAuthRequests).toEqual([]);
+});
+
+test('同意がないライブ保存では登録や登録用CAPTCHAを開始しない', async ({ page }) => {
+  let entryPosts = 0;
+  const externalAuthRequests: string[] = [];
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({
+      json: {
+        dataMode: 'live',
+        generationAvailable: false,
+        consentVersion: 'v1',
+        retentionDays: 30,
+      },
+    }),
+  );
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() === 'POST') entryPosts++;
+    return route.continue();
+  });
+  page.on('request', (request) => {
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
+      externalAuthRequests.push(request.url());
+  });
+
+  await page.goto('/new');
+  await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
+  await expect(page.getByText('現在、漫画生成は利用できません。', { exact: true })).toBeVisible();
+  await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
+  await page.getByRole('button', { name: '下書き保存' }).click();
+
+  await expect(page.getByRole('alert')).toContainText('保存と匿名利用の条件を確認してください');
+  expect(entryPosts).toBe(0);
+  expect(externalAuthRequests).toEqual([]);
+});
+
 test('通信失敗時に入力と再送IDを維持する', async ({ page }) => {
   let first = true;
   const ids: string[] = [];

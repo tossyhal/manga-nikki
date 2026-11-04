@@ -5,8 +5,14 @@
 日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
-> 現在の状態（2026-10-27時点）
-> localhost限定の開発用モック基盤があります。日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。実AI・Supabase・Queue・PWAは未実装です。
+> 現在の状態（2026-11-04時点）
+> この状態はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+>
+> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、Storage先行の期限削除、環境別sample buildと公開設定guardを実装しています。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。実AI用adapter、画像検証・private保存・署名URLは未接続で、新しい実AI生成は停止しています。
+
+> 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
+
+日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。共有DBへのmigration適用と実クラウド環境での結合確認は未実施です。過去の隔離環境による部分検証の範囲は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 
@@ -66,6 +72,26 @@
 | migration | DB構造の変更を順番に再現するファイル |
 | revision | 日記の改訂番号。古い画面からの更新の衝突を検出する |
 | 秘密情報 | APIキー・認証トークンなど。Supabaseの固有名称だけsecret keyと記す |
+
+## PWAのビルド確認
+
+環境別の公開準備buildは`pnpm build:staging`または`pnpm build:production`で行います。どちらも`dist/`の成果物検査までで、Cloudflareへの公開はしません。実デプロイは別途承認後にだけ`pnpm exec wrangler deploy`を手動実行します。対象環境のビルド設定と公開手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)および[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)を参照してください。
+
+開発サーバーの起動とビルドでは、公開用設定に既知のSupabaseサーバー専用キー形式が入っている場合に処理を停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
+
+PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
+
+```sh
+pnpm test:e2e:pwa
+```
+
+`pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
+
+stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm build:staging`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。通常の`pnpm build`では開発用設定が混ざって`/config`が503になる場合があるため、sample previewには環境別buildを使います。日記保存の動作確認には`pnpm dev`を使ってください。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
+
+新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
+
+ローカルpreviewでの確認はAndroid Chrome・iPhone SafariのHTTPS実機確認の代わりにはなりません。実機インストール、standalone表示、更新の確認は公開前に別途行います。
 
 ## ライセンス・利用条件
 

@@ -67,6 +67,28 @@ nav a.active {
   background: #e8eee3;
   font-size: 12px;
 }
+.pwa-notice {
+  display: block;
+  max-width: 800px;
+  margin: 14px auto 0;
+  padding: 14px 18px;
+  border: 1px solid #a1b098;
+  background: white;
+}
+.pwa-notice p {
+  margin: 0 0 10px;
+}
+.pwa-notice p:last-child {
+  margin-bottom: 0;
+}
+.pwa-notice .hint {
+  margin-bottom: 10px;
+}
+.pwa-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
 main {
   max-width: 800px;
   margin: auto;
@@ -268,6 +290,9 @@ footer {
 @media (max-width: 560px) {
   header {
     padding: 18px 20px;
+  }
+  .pwa-notice {
+    margin: 12px 20px 0;
   }
   nav {
     gap: 16px;

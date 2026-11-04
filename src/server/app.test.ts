@@ -61,6 +61,27 @@ describe('local mock API', () => {
     expect((await request(`/assets/${asset}/url`)).status).toBe(404);
     expect((await request(`/entries/${entry.id}`)).status).toBe(404);
   });
+  it('keeps the generation revision fixed when the diary is edited later', async () => {
+    const entry = await create();
+    const generated = await request(
+      `/entries/${entry.id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(generated.status).toBe(202);
+
+    const edited = await request(`/entries/${entry.id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: jstToday(),
+      body: '編集後の日記',
+    });
+    expect((await edited.json()).revision).toBe(2);
+
+    const detail = await (await request(`/entries/${entry.id}`)).json();
+    expect(detail.revision).toBe(2);
+    expect(detail.latestGeneration.entryRevision).toBe(1);
+  });
   it('isolates entry, generation and asset by mock session', async () => {
     const entry = await create();
     await request(
@@ -104,6 +125,25 @@ describe('local mock API', () => {
     );
     expect(new Set(generated.map((x) => x.generationId)).size).toBe(1);
     expect((await (await request('/me/quota')).json()).remainingToday).toBe(1);
+    const secondGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(secondGeneration.status).toBe(202);
+    const limited = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
+    expect(limited.status).toBe(429);
+    expect((await limited.json()).error).toMatchObject({
+      code: 'USER_LIMIT_REACHED',
+      message: '本日の生成上限に達しました。',
+      retryable: false,
+    });
     expect(
       (
         await request(
@@ -208,7 +248,7 @@ it('serves all generation states and exposes only successful owned assets', asyn
   const fixtures = generationFixtures(entry.id, id);
   repository.entries.get(entry.id)!.entry.latestGenerationId = id;
   for (const generation of Object.values(fixtures)) {
-    repository.generations.set(id, { owner, key: crypto.randomUUID(), revision: 1, generation });
+    repository.generations.set(id, { owner, key: crypto.randomUUID(), generation });
     expect(await (await request(`/generations/${id}`)).json()).toEqual(generation);
     const detail = await (await request(`/entries/${entry.id}`)).json();
     expect(detail.latestGeneration.status).toBe(generation.status);
@@ -221,7 +261,6 @@ it('serves all generation states and exposes only successful owned assets', asyn
   repository.generations.set(id, {
     owner,
     key: crypto.randomUUID(),
-    revision: 1,
     generation: { ...fixtures.succeeded, comic: panelsComic },
   });
   if (panelsComic.visual.kind !== 'panels') throw new Error('panels fixture required');

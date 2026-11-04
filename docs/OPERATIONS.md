@@ -1,6 +1,8 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> この文書の実認証・DB・予算制御・公開機能は未実装です。初期基盤はlocalhostのモックだけを実装しています。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> 本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
+>
+> 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -12,11 +14,21 @@
 
 - JWTと匿名認証の検証
   - 認証セッションの保存・更新はSupabase SDKに管理させます。現行設計はHttpOnly Cookie方式ではありません。JWTをURLのクエリやフラグメントへ入れません。
-  - 既存の匿名セッションを再利用し、サーバー側でJWTの「署名・issuer・audience・有効期限・`sub`（ユーザーID）」を必ず検証します。
+  - Workerは`Authorization: Bearer <JWT>`を厳密に読み取り、Supabase SDKの`auth.getClaims(jwt)`で署名・期限を検証します。その後、`iss`が`${SUPABASE_URL}/auth/v1`、`aud`が`authenticated`、`sub`が有効なUUIDであることを個別に検証し、`auth.getUser(jwt)`でAuthサーバーから得た現在のユーザーIDとの一致も確認します。
+  - Auth/JWKSの依存先障害や接続設定不備は503として扱い、不正JWTは401として扱います。JWT・認証ヘッダー・生のSDKエラーはレスポンスやログに含めません。
+  - `getClaims`はJWTの署名と期限を確認し、`getUser(jwt)`はAuthサーバーへ現在のユーザーを照会します。Supabaseは`getUser`をサーバー側でセッション終了を検出する手段として案内しています。一方、sign-outで失効したaccess tokenも`exp`までは有効とされるため、この照会だけで全API操作の即時失効を保証するとは説明しません。セッションIDをDB照会する追加制御は未実装です。
   - Supabaseの匿名AuthユーザーもDB上は`authenticated`ロールになるため、「ログイン済みロールであること」だけでデータを公開せず、必ず`owner_id = sub`（所有者一致）を確認します。
+<a id="認証とセッション失効の確認範囲"></a>
+
+#### 認証とセッション失効の確認範囲
+
+- 各保護APIは`getClaims(jwt)`で署名・期限・issuer・audience・subjectを確認し、その後`getUser(jwt)`でAuthサーバーから現在のユーザーを取得してsubjectと一致することを確認します。明確な認証拒否は401、依存先障害は503です。
+- `getUser`はリクエストごとにAuthサーバーへ接続するため、Authサービス障害時には個人APIを利用できません。Supabaseはこれをサーバー側でセッション終了を検出する方法として案内していますが、失効済みJWTは有効期限`exp`まで残りうるとも明記しています。したがって即時失効は保証せず、`session_id`を使った`auth.sessions`照会も現行APIでは行いません。
+- 公式資料：[Authサーバー側ガイド](https://supabase.com/docs/guides/auth/server-side/advanced-guide)、[Auth sessions](https://supabase.com/docs/guides/auth/sessions)、[Signing out](https://supabase.com/docs/guides/auth/signout)。
 - 読み取りと書き込みの分離
-  - 読み取り（SELECT）：利用者のJWTを付与したリクエスト単位のクライアントを使い、RLSで自分のデータのみ取得します。
-  - 書き込み（INSERT / UPDATE / DELETE）：Cloudflare Worker内のサーバー専用RPCからのみ行います（API側とRPC内の両方で所有者を二重確認します。Supabase secret keyを使うクライアントはサーバー内部だけに閉じます）。
+  - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
+  - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・mock予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。実Turnstile結合、real profileの受付、live-demoの新しい実AI生成、生成画像のprivate Storage保存・署名URLは未接続です。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -24,13 +36,17 @@
   - 利用枠・予算・試行履歴（`quota` / `policy` / `attempts`）は`private`スキーマに置き、外部へ非公開とします。
   - サーバー専用RPCの実行権限（`EXECUTE`）は、`PUBLIC`・`anon`・`authenticated`から明示的に剥奪（REVOKE）します。
   - 関数は原則`SECURITY INVOKER`とし、どうしても`SECURITY DEFINER`が必要な場合は「空の`search_path`指定・スキーマ完全修飾名・関数内部での所有者検証」を必須とします。
+  - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
+  - `supabase/storage/comics-bucket.sql`はStorage APIが有効な環境だけで、`storage.buckets` / `storage.objects`を管理できるroleから適用します。local Supabaseでは検証済みの`supabase_admin`を使います（table ownerは`supabase_storage_admin`、CLI3の`postgres`には権限不足）。cloudの適用roleは未検証です。`service_role`へDDL権限を足さず、プラットフォーム既定のRLSを維持します。
+  - 過去のlocal Supabase Storage API検証ではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを確認しました。広域authenticated permissive policy下でもcomicsは拒否され、別bucket操作は阻害されませんでした。これは生成画像保存serviceの接続確認ではありません。cloudの適用・Storage API結合は未検証です。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
-  - 同じ`Idempotency-Key`による通信再送では新たなCAPTCHAや生成枠を消費しませんが、JWT認証・所有者・リクエストハッシュは必ず再確認します。
+  - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
+  - 同じ`Idempotency-Key`による通信再送では新たなCAPTCHAや生成枠を消費しませんが、JWT認証・有効な本人entry・リクエストハッシュは必ず再確認します。
   - ハッカソン会場など同一IPアドレスから多数のアクセスがあり匿名登録が制限される場合は、架空サンプルの閲覧へ誘導します。
 
 ---
@@ -40,8 +56,13 @@
 ### 公開設定と秘密情報の分離
 
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
-- 公開用scriptsを実装する際は環境別のフロント設定を分け、ローカルの`.env.local`等がstaging/productionのビルドへ混入しないことを生成物で確認します。公開用コマンドは現時点で未実装です。
+- Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
+- `pnpm build:staging` / `pnpm build:production`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
+- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。
+- release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
+- 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式またはJWTの`role=service_role`が見つかった場合に停止します。これは既知のSupabaseサーバー専用キー形式の誤設定対策であり、他の秘密情報形式まで検出する保証ではありません。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
+- local-connectedの例は`dev.vars.local-connected.example`です。値を設定して`.dev.vars.local-connected`へコピーし、`CLOUDFLARE_ENV=local-connected pnpm dev`で開発環境を選びます。`TURNSTILE_SECRET_KEY`と`TURNSTILE_ALLOWED_HOSTNAMES`がない場合、生成受付は停止します。例に含まれるSupabase URLはplaceholderで、実接続情報や秘密値はGitへ入れません。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
 
 ### プロンプトインジェクション・XSS・SSRF対策
@@ -52,7 +73,7 @@
 
 ### ログ出力の禁止事項
 
-- ログに残してよいもの：`requestId`、`generationId`、`stage` / `status`、処理時間、一般化した`errorCode`、画像バイト数、`modelId`、トークン等の`usage`のみ。
+- ログに残してよいもの：`requestId`、`generationId`、`stage` / `status`、処理時間、一般化した`errorCode`、画像バイト数、`modelId`、トークン等の`usage`、期限削除のaggregate件数（`claimed` / `deleted` / `retrying` / `stale`）のみ。
 - ログに出してはいけないもの：
   - 日記の本文・AIへのプロンプト
   - JWT・Cookie・`Authorization`ヘッダー・各種APIキー
@@ -69,6 +90,10 @@
 - 制限設定の正本はDBの`private.generation_policy`テーブルです。
   - 初期値：`enabled = false`、全体の日次枠・全期間枠・金額予算はすべて`0`、ユーザーごとの上限は「1日2試行まで・同時実行1ジョブまで」（日付の切り替わりはサーバー側の日本時間JST基準）。
 - 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃っている場合のみ実AIの生成を動かし、状態の取得に失敗したり不明な場合は安全側に倒して停止します。
+- `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、`find_generation_receipt`と`reserve_generation`の既存同一要求照会は停止中も同じjobを返します。
+- `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。設定profileには`profile_id`、`is_mock`、整数の`max_cost_micro_usd`を含め、最大費用を予約します。`is_mock=false`では最大費用0を許可しません。provider/modelなどの追加設定は日記本文やHTTP bodyから受けず、profile snapshotへ保持します。
+- `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
+- policy設定を変える運用者は、単独の短いtransactionで更新してcommitします。更新triggerと予約RPCは同じ2整数advisory transaction lockを使い、変更中のpolicy snapshotで予約が進まないよう直列化します。
 - 匿名認証のユーザーIDは「ブラウザ単位」であり「人間1人」を保証しないため、ユーザー単位の上限だけでなくシステム全体の上限（全体枠・総予算）が必須です。
 
 ### 最大費用の見積もりと予約方式
@@ -78,6 +103,7 @@
 - 承認予算 $B$ に対する生成可能回数の上限：
   $$\text{生成数候補} = \lfloor B / C_{\max} \rfloor$$
 - 金額はすべて整数（`micro USD` = $10^{-6}$ USD単位）で予約計算し、モデルの単価や出力トークン上限が不明な状態では外部公開しません（税金・為替変動・別用途のクラウド請求は別途余裕を見ます）。
+- 現行DB RPCはscriptを1回、imagesをprofileの`max_image_calls`回まで（整数1〜4、未指定時1）に制限します。`max_cost_micro_usd`にはこの最大呼出し数を含めます。失敗後の自動再送はせず、同じstageの次imageは直前の成功後だけ開始できます。
 
 | 予約状態（`state`） | 生成枠・予算金額の扱い |
 |---|---|
@@ -89,7 +115,7 @@
 - 予算運用の厳守ルール：
   - 生成成功時に「事前見積もり（$C_{\max}$）と実際の消費額の差額」が出ても、MVPでは自動的に余り枠として再利用しません。
   - ユーザーが後から日記を削除したり日付を変更しても、過去に消費した回数や支出カウンターは減らしません。
-  - AI SDKの自動リトライ機能は無効化するか、最大リトライ回数分を最初から $C_{\max}$ の予算に含めます。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。
+  - AI SDKの自動リトライ機能は無効にします。リクエスト送信後のタイムアウトや中断を「無料の失敗」とみなして自動再送してはいけません。再試行機能を別途承認する場合は、呼出し上限と$C_{\max}$を同時に見直します。
   - Queueのメッセージ再試行（retry）によって同じAI呼び出しを再実行せず、`unknown` / `held`状態にして人間が調査します。
 
 ### 実AI有効化前の承認記録ルール
@@ -111,11 +137,11 @@
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - Static Assets、Queue（バインディング名`GENERATION_QUEUE`）、Queue Consumer、Cron Triggers、および環境別の秘密情報と公開環境変数を設定します。
+   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。staging/productionにも日次Cronを準備しますが、初期`DATA_MODE=sample`のmode gateにより個人DB/Storageへ接続せず、Queue bindingもありません。Cron設定だけでremote Queue作成やdeployは行っていません。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
-   - 「標準検査（lint / typecheck / test / build） → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 少数の実生成による計測」の順に進めます。
-   - ビルドとデプロイは対象環境を明示し、最初は手動デプロイで構いません。
+   - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
+   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在デプロイ用scriptはありません。この作業では実デプロイを行っていません。
    - ストレージ容量・転送量・WorkerのCPU/メモリ・Queueの利用枠を実アカウントで確認します。
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
@@ -126,7 +152,7 @@
 ## 5. 公開前チェックリスト
 
 - 通常CIは実際の秘密情報を使わず、モック環境でlint・型検査・unit・build・E2Eを実行します。
-- DB/Queue統合は隔離環境、実AI確認は承認された少数の架空日記だけで行います。
+- local-connectedのDB / Queue結合は隔離環境と固定mockだけで行います。実AI確認は別承認後、承認された少数の架空日記だけで行います。
 - **PRのCIへ本番の秘密情報を渡しません。**`pull_request_target`で未信頼コードを実行せず、Actionsの版と権限を固定・最小化します。
 
 | 確認するテスト状況・シナリオ | 合格条件（すべて満たすこと） |
@@ -138,7 +164,7 @@
 | 同一`Idempotency-Key`の同時リクエスト / 異なる内容、最後の1枠への同時リクエスト | 生成ジョブと枠予約は1件だけ作られ、別内容は`409`、予算・回数上限の超過が起きない |
 | 匿名ユーザーIDの再作成、全体/期間/金額上限への到達、キルスイッチ停止時 | ユーザーを作り直しても全体上限で止まり、停止時は未開始のAIプロバイダを一切呼ばない |
 | サインアップ用と生成用のTurnstileトークン使い回し、会場等の同一IPからの多人数利用 | トークン使い回しは拒否され、IP制限時は意図通り架空サンプル画面へ案内される |
-| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | AIプロバイダの呼び出し回数が増えず、定期再送で復旧するか`unknown` / `held`として安全に止まる |
+| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mock重複配信はclaimで1回だけ処理し、未配送は照合で再送する。実AI経路は未接続で、将来は結果不明を`unknown` / `held`として安全に止める |
 | Storage保存成功後のDB失敗、古いジョブの遅延完了、生成中の日記削除 | AIの再生成が起きず、新しい`latest_generation_id`が巻き戻らず、削除済みデータが復活しない |
 | JST日付境界（0時またぎ）、30日保存期限切れ / 削除処理中のStorage障害 | 元の予約日のカウンターだけで精算され、画面からは即座に非表示となり削除が裏で再試行される |
 | 通信切断・ページ再訪・PWA更新・キャッシュ・HTMLや命令文の入力 | 新規ジョブの勝手な作成、入力中の本文消失、個人データのキャッシュ残留、スクリプト実行が起きない |
@@ -156,14 +182,19 @@
 ### 障害発生時の対応（インシデント対応）
 
 - 異常な課金やAIプロバイダ障害：ただちにDBの`private.generation_policy.enabled = false`に変更して生成を止め、必要に応じてAPIキー自体を失効させます。
+- 削除・保存期限・claim期限を越えて送信済みprovider応答が戻った場合も、attemptの確定stateとrequest IDを記録してから精算します。結果記録でjobや日記を再表示させず、既知費用の枠は返却しません。
 - `unknown`ジョブの発生：プロバイダの`requestId`を使って管理画面やログで実行有無を調査し、自動での再呼び出しは行いません。
 - Supabase Authの障害：代替として「全員共通のログインアカウント」を配るような危険な回避策はとらず、架空サンプルの閲覧へ誘導します。
 - デプロイ不具合：問題のあるWorkerは直前の正常なバージョンへロールバックし、DBの不整合は自動逆マイグレーションや破壊的な`reset`ではなく、互換性を確認した修正用migrationで直します。
 
 ### データ削除とハッカソン終了後の処理
 
-- 本人の削除操作または作成から30日で、閲覧と新しい署名URLの発行を止めます。
-- Storageの物理画像→DBメタデータの順に削除します。障害やプロジェクト休止で失敗した場合は復旧後に再試行します。
+- 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
+- `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
+- 1分のgeneration reconcileが動く環境では、取消済み・期限切れjobを既存の安全な精算RPCへ渡します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
+- Storage `remove`後に`list`でpath不在を確認できた時だけDB finalizeし、asset→job→entryを消します。remove/list障害ではDB metadata・jobを残し、すでに消えた画像は次回の`remove`と`list`確認で安全に再試行します。
+- 日次batch上限を超えたdue entryは次の日次実行以降に残ります。Storage障害のentryも15分lease失効後に再claim可能ですが、同じ日の日次Cronは再実行しないため、通常の再試行機会は次回日次実行です。active jobがsettleした後も、cleanup実行は次の日次枠まで待つことがあります。物理消去を30日以内に保証するものではありません。
+- cleanup結果のaggregate logは`claimed` / `deleted` / `retrying` / `stale`の件数だけで、owner・本文・object path・claim tokenは記録しません。claim/finalize RPCの依存障害は一般化したエラーでCron invocationを失敗扱いにします。retryingはStorage remove/list失敗、staleはlease/token/期限/path集合の再検証不一致です。
 - 発行済み署名URLの最大60秒の残存、外部AIの保持、DBバックアップは別の制約として事前に説明します。
 - 未参照画像・古い匿名ユーザー・残存ジョブも確認して掃除します。
 - 大会後は実AIを停止するか、継続予算・正式認証・保存期間を改めて合意します。
@@ -178,12 +209,17 @@
 - セキュリティ・機能仕様
   - [Supabase匿名サインイン（Anonymous Sign-Ins）](https://supabase.com/docs/guides/auth/auth-anonymous)
   - [Supabase JWT検証](https://supabase.com/docs/guides/auth/jwts)
+  - [Supabase Auth getUser/getClaims](https://supabase.com/docs/guides/auth/server-side/advanced-guide)
+  - [Supabase Auth sessions](https://supabase.com/docs/guides/auth/sessions)
+  - [Supabase Auth sign out](https://supabase.com/docs/guides/auth/signout)
   - [PostgreSQL Row Level Security (RLS)](https://supabase.com/docs/guides/database/postgres/row-level-security)
   - [Supabase Database Functions (RPC)](https://supabase.com/docs/guides/database/functions)
   - [Supabase Storageアクセス制御](https://supabase.com/docs/guides/storage/security/access-control)
   - [Supabase APIキーの扱い](https://supabase.com/docs/guides/getting-started/api-keys)
   - [Cloudflare Turnstileサーバーサイド検証](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
   - [Cloudflare Workers Secrets管理](https://developers.cloudflare.com/workers/configuration/secrets/)
+  - [Cloudflare Workers Vite pluginの環境選択](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/)
+  - [Cloudflare Workers Vite pluginのbuild成果物とdeploy](https://developers.cloudflare.com/workers/vite-plugin/reference/migrating-from-wrangler-dev/)
 - 利用枠・料金プラン
   - [Supabase Pricing](https://supabase.com/pricing)
   - [Cloudflare Workers Pricing](https://developers.cloudflare.com/workers/platform/pricing/)

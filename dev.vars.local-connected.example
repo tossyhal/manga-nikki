@@ -1,0 +1,11 @@
+# local-connected環境用。値を設定したうえで .dev.vars.local-connected へコピーする。
+# Cloudflare Vite pluginではCLOUDFLARE_ENV=local-connectedを指定する。
+APP_ENV="staging"
+DATA_MODE="live"
+AI_MODE="mock"
+GENERATION_ENABLED="false"
+SUPABASE_URL="https://project-ref.supabase.co"
+SUPABASE_PUBLISHABLE_KEY=""
+SUPABASE_SECRET_KEY=""
+TURNSTILE_SECRET_KEY=""
+TURNSTILE_ALLOWED_HOSTNAMES="localhost,127.0.0.1"
