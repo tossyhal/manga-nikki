@@ -61,6 +61,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const actionInFlightRef = useRef(false);
   const quotaRequestRef = useRef(0);
   const pointerInteractionRef = useRef(false);
+  const pointerCompletionFrameRef = useRef<number | null>(null);
   const restoreTypingAfterInteractionRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
@@ -114,6 +115,14 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
+
+  function beginPointerInteraction() {
+    if (pointerCompletionFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerCompletionFrameRef.current);
+      pointerCompletionFrameRef.current = null;
+    }
+    pointerInteractionRef.current = true;
+  }
 
   const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
     const requestId = ++quotaRequestRef.current;
@@ -170,6 +179,39 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
     return () => window.clearTimeout(refreshTimer);
   }, [online, refreshQuota]);
+
+  useEffect(() => {
+    const finishPointerInteraction = () => {
+      if (!pointerInteractionRef.current) return;
+      pointerCompletionFrameRef.current = window.requestAnimationFrame(() => {
+        pointerCompletionFrameRef.current = null;
+        pointerInteractionRef.current = false;
+        if (restoreTypingAfterInteractionRef.current) {
+          restoreTypingAfterInteractionRef.current = false;
+          setTyping(false);
+        }
+      });
+    };
+    const cancelPointerInteraction = () => {
+      if (pointerCompletionFrameRef.current !== null) {
+        window.cancelAnimationFrame(pointerCompletionFrameRef.current);
+        pointerCompletionFrameRef.current = null;
+      }
+      pointerInteractionRef.current = false;
+      if (restoreTypingAfterInteractionRef.current) {
+        restoreTypingAfterInteractionRef.current = false;
+        setTyping(false);
+      }
+    };
+    window.addEventListener('pointerup', finishPointerInteraction, true);
+    window.addEventListener('pointercancel', cancelPointerInteraction, true);
+    return () => {
+      window.removeEventListener('pointerup', finishPointerInteraction, true);
+      window.removeEventListener('pointercancel', cancelPointerInteraction, true);
+      if (pointerCompletionFrameRef.current !== null)
+        window.cancelAnimationFrame(pointerCompletionFrameRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!error) return;
@@ -427,23 +469,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       )}
       <form
         className="entry-form"
-        onPointerDownCapture={() => {
-          pointerInteractionRef.current = true;
-        }}
-        onPointerCancelCapture={() => {
-          pointerInteractionRef.current = false;
-          if (restoreTypingAfterInteractionRef.current) {
-            restoreTypingAfterInteractionRef.current = false;
-            setTyping(false);
-          }
-        }}
-        onClick={() => {
-          pointerInteractionRef.current = false;
-          if (restoreTypingAfterInteractionRef.current) {
-            restoreTypingAfterInteractionRef.current = false;
-            setTyping(false);
-          }
-        }}
         onSubmit={(event) => {
           event.preventDefault();
           void save(saveErrorIntent ?? canGenerate);
@@ -555,22 +580,29 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </button>
           </>
         )}
-        <label className="consent-card">
+        <label className="consent-card" onPointerDownCapture={beginPointerInteraction}>
           <input
             type="checkbox"
             checked={consent}
             disabled={busy || saved !== null}
             onChange={(event) => {
               setConsent(event.target.checked);
+              if (!pointerInteractionRef.current) {
+                restoreTypingAfterInteractionRef.current = false;
+                setTyping(false);
+              }
+              if (!event.target.checked) setPendingSave(null);
+            }}
+            onBlur={() => {
+              if (pointerInteractionRef.current) return;
               restoreTypingAfterInteractionRef.current = false;
               setTyping(false);
-              if (!event.target.checked) setPendingSave(null);
             }}
           />
           <span>
             {config.dataMode === 'mock'
               ? '記録は一時保存で、予告なく消えることがあります。漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。'
-              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名利用の記録はこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
+              : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名セッションはこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
           </span>
         </label>
         {pendingSave !== null && config.dataMode === 'live' && (
@@ -638,7 +670,12 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         )}
         {!online ? null : (
           <div className="primary-action-dock">
-            <button className="button button-primary" disabled={primaryDisabled} type="submit">
+            <button
+              className="button button-primary"
+              disabled={primaryDisabled}
+              type="submit"
+              onPointerDownCapture={beginPointerInteraction}
+            >
               {busy
                 ? '保存しています…'
                 : saveErrorIntent !== null

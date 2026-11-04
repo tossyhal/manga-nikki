@@ -63,7 +63,8 @@ function generationLabel(
   if (error)
     return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
   if (!generation || generation.entryRevision !== entry.revision) {
-    if (entry.latestGenerationId) return loading ? '状態を確認しています' : '状態を確認できません';
+    if (entry.latestGenerationId)
+      return loading ? '状態を確認しています' : '記録を開いて状態を確認';
     return '下書き';
   }
   switch (generation.status) {
@@ -91,7 +92,7 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
   if (preview.isLoading) placeholder = '漫画を読み込んでいます';
   else if (preview.error?.includes('画像')) placeholder = '漫画を表示できません';
   else if (preview.error) placeholder = '記録の状態を確認できません';
-  else if (entry.latestGenerationId && !generation) placeholder = '記録の状態を確認できません';
+  else if (entry.latestGenerationId && !generation) placeholder = '記録を開いて状態を確認';
   else if (generation?.status === 'queued' || generation?.status === 'running')
     placeholder = '漫画を作成中';
   else if (generation?.status === 'failed' || generation?.status === 'cancelled')
