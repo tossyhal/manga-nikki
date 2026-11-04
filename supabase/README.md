@@ -1,6 +1,8 @@
 # 日記DB基盤
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。local-connectedの受付API・Queue Consumerと期限削除Scheduled handlerはmock経路で実装済みです。共有DBへのmigration適用・実Supabase / Queue / Turnstile / Storage API結合確認は未実施です。実AI・private画像Storageは未接続で、初期policyは停止中です。
+本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[開発計画](../docs/PLAN.md)を参照してください。
+
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。local-connectedの受付API・固定mock Queue Consumerと期限削除Scheduled handlerを実装済みです。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。実AI・生成画像のprivate Storage保存と署名URLは未接続です。過去の隔離環境で一部のAuth / CRUD / 固定mock Queue / Storage削除service / bucket RLSを確認していますが、最新branchの全経路を確認したものではありません。
 
 ## 検証
 
@@ -71,7 +73,7 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - RPCの競合契約はPostgreSQLの`READ COMMITTED`と、1 RPC呼び出しを1トランザクションとして実行することを前提にします。呼び出し側で分割した複数RPCを1つの原子操作とみなさず、分離レベルも独断で変更しないでください。
 - 作成は所有者UUIDの64bitハッシュによるトランザクションadvisory lockで直列化します。下書きは「未削除・期限内・`latest_generation_id is null`」を数え、最大20件です。削除済み・期限切れの記録は枠を使いません。
 - 編集・削除は先に日記行を`FOR UPDATE`でロックします。削除は日記を非表示にしてからactiveジョブへ`cancel_requested`を付け、同じトランザクションで確定します。生成枠の解放やジョブの実行結果の確定は行いません。
-- **後続の生成予約RPCも、日記の有効性・revisionを再確認し、同じ日記行をロックしたままジョブ作成・`latest_generation_id`更新を行ってください。**これが編集・削除との競合防止の前提です。全体policy等のロック順は`docs/API.md`の順序を維持し、entry→jobの順にします。
+- 生成予約RPCは日記の有効性・revisionを再確認し、同じ日記行をロックしたままジョブ作成・`latest_generation_id`更新を行います。これが編集・削除との競合防止の前提です。全体policy等のロック順は`docs/API.md`の順序を維持し、entry→jobの順にします。
 - quota lockを取るreserve/claim/attempt/settlement RPCは、policy用advisory lock `(20261103, 10001)`→global total→global day→user day→entry→job→attemptの順で行ロックします。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。予約時に記録した`reserved_day`のカウンターを使い、entry/jobを保持したままquotaロックを取りに行かないでください。`reserve_mock_generation`もadvisory lockを保持したまま既存予約RPCへ渡し、mock profile確認と予約の間でpolicy変更を通しません。
 - `reserve_generation`は`p_generation_enabled`をWorkerの`GENERATION_ENABLED`環境設定から受け取るサーバー専用の信頼値として扱います。ブラウザから自由指定させず、環境設定がfalseまたはDB policyが無効なら新規予約を止めます。同じキー・同じcanonical requestの既存job照会は、停止後もquota/CAPTCHAなしで同じ`generationId`を返します。SQL JSONBの`generation_id` / `status` / `status_url`はAPIで`generationId` / `status` / `statusUrl`へmapします。
 - APIはCAPTCHA検証前に`find_generation_receipt`を呼び、receiptがなければTurnstile検証後にlocal-connected専用`reserve_mock_generation`を呼びます。lookupが未登録時に予約を作らないため、CAPTCHAを通らず新規予約されることはありません。wrapper内の既存予約RPCも並行要求に備えて既存keyを再確認します。

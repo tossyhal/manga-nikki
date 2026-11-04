@@ -1,5 +1,7 @@
 # 開発手順（CONTRIBUTING）
 
+本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+
 ## 1. 最初にやること（ツールの準備）
 
 初期基盤と固定版の設定は追加済みです。この節でツールとエディターを準備し、次の節で開発サーバーを起動します。
@@ -87,10 +89,12 @@ CLOUDFLARE_ENV=local-connected pnpm dev
 
 ## 3. 初期基盤の範囲
 
+以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueなどは後続のStack PRで実装済みですが、共有DB適用や実AI接続は未完了です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
+
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
 - 標準コマンド・lint/format・型確認・unit/E2E・CIを用意し、秘密情報なしの新規Windows環境で起動と検査が通ることを確認する。
-- モック表示、localhost制限、動作モードの起動時検証を入れる。DB・Queue・実AI・本番公開は後続PRで扱う。
+- モック表示、localhost制限、動作モードの起動時検証を入れる。初期基盤の対象外だったDB・Queue・実AI・本番公開は後続段階で扱い、実AIと外部公開には別途承認を要します。
 
 以下は基盤設定を更新するときだけの参考です。通常の参加者は作り直さず、前節の`--locked`で導入します。
 
@@ -210,8 +214,8 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 ## 開発モックの制限
 
-- 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
-- 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- liveモードの日記CRUD・quota・生成受付・`/generations/:id`はSupabase接続です。local-connectedは生成専用Turnstile、mock profile限定予約、固定fixture Queue処理、未配送再送・期限照合を実装しています。実Supabase / Queue / Turnstile / Storage API結合、共有DBへのmigration適用は未実施です。期限削除serviceは日次Scheduled handlerに接続済みで、`local-connected`と`live-demo`ではStorage上の画像を確認・削除してからDBのasset・job・entryを削除します（実Storage API接続は未確認）。live-demoの実AI生成、漫画画像のprivate Storage保存・署名URL発行は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
-- ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
+- `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
+- `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handlerを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、最新branchの全経路、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AIと生成画像のprivate Storage保存・署名URL発行は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

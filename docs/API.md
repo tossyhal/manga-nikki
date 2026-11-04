@@ -1,17 +1,19 @@
 # HTTP APIと共通契約v1（API）
 
 > エンドポイント共通プレフィックス：`/api/v1`
-> 以下はフロントエンド・バックエンド・DB・AIアダプター間の共通契約です。各機能の実装状況は「初期基盤の実装範囲」に記載します。
+> 以下はフロントエンド・バックエンド・DB・AIアダプター間の共通契約です。各機能の実装状況は「現在の実装範囲」に記載します。
 
-### 初期基盤の実装範囲
+### 現在の実装範囲
+
+本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[開発計画](PLAN.md)を参照してください。
 
 localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`/config.generationAvailable`はlocal-mockと、Queue・生成用Turnstileが設定済みのlocal-connectedだけtrueです。local-connectedでの最終的な受付可否は`GET /me/quota`の値も確認します。
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。`live-demo`は新しい実AI生成を停止し、実AI・private Storage/署名URL・画像保存は未接続です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
+liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。`live-demo`は新しい実AI生成を停止し、実AI・private Storage/署名URL・画像保存は未接続です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
 
-liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。新規登録は保存操作と同意の後に限り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。ブラウザの生成用CAPTCHA UIは未実装です。`local-connected` APIを呼ぶ場合は別の生成用tokenが必要で、`live-demo`の新規実AI生成はサーバーが停止します。DBにはclaim・provider attempt・失敗時の安全精算RPCを追加済みです。実Supabase結合と共有DBへの適用は未実施です。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
+liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。新規登録は保存操作と同意の後に限り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。生成用CAPTCHAと利用枠のUIは実装済みで、`local-connected` APIを呼ぶ場合は登録用とは別の生成用tokenが必要です。`live-demo`の新規実AI生成はサーバーが停止します。実Turnstile結合、共有DBへの適用、最新branchの全経路は未確認です。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
 
 ---
 
@@ -223,11 +225,11 @@ type ComicDocument = {
 ## 9. データベース・Storageの保存契約
 
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
-（※以下はSQL migrationの設計契約であり、現時点では未適用です。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
+（※以下はSQL migrationの設計契約です。共有DBには未適用で、隔離PostgreSQLによる一部RPC / RLS検証を行っています。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路も実装しましたが、共有DBへのmigration適用と実Supabase/Queue/Turnstile結合確認は未実施です。実AI・private画像保存と署名URLは後続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路も実装しましたが、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合確認は未実施です。実AI・private画像保存と署名URLは未接続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
-`generations.is_mock`は生成元metadataです。後続のjob writerは固定結果なら`true`、実生成なら`false`を必ず設定します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
+`generations.is_mock`は生成元metadataです。実装済みの固定mock job writerは`true`を設定し、将来実生成を接続するときは`false`を明示します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
 ### テーブル設計
 

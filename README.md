@@ -6,9 +6,13 @@
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
 > 現在の状態（2026-11-04時点）
-> localhost限定の開発用モック基盤とPWAの基本機能、liveモードの日記CRUD接続があります。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedには生成受付・quota・生成状態取得・Queue・期限照合の固定mock経路を実装し、成功時の画像URLは公開の架空サンプルを返します。期限削除は1分ごとの生成照合と別に日次Scheduled handlerへ接続し、`local-connected`と`live-demo`だけがStorage→DB cleanupを実行します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。実Supabase・Queue・Turnstile環境での結合確認と共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage・署名URL、画像保存は未接続で、新しい実AI生成は停止しています。PWAのキャッシュ範囲と更新時の入力保護を自動テストしていますが、Android Chrome・iPhone SafariのHTTPS実機でのインストールと更新は未確認です。
+> この状態はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+>
+> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、Storage先行の期限削除、環境別sample buildと公開設定guardを実装しています。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。実AI用adapter、画像検証・private保存・署名URLは未接続で、新しい実AI生成は停止しています。
 
-日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。JWT検証はSupabase SDKと偽JWKSを使ったローカルテストで確認していますが、Supabase実プロジェクトへの接続・共有DBへの適用は未実施です。接続契約と検証手順は[supabase/README.md](supabase/README.md)を参照してください。
+> 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
+
+日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。共有DBへのmigration適用と実クラウド環境での結合確認は未実施です。過去の隔離環境による部分検証の範囲は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 
@@ -83,7 +87,7 @@ pnpm test:e2e:pwa
 
 `pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
 
-手元で画面を確認する場合は、`pnpm build`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
+stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm build:staging`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。通常の`pnpm build`では開発用設定が混ざって`/config`が503になる場合があるため、sample previewには環境別buildを使います。日記保存の動作確認には`pnpm dev`を使ってください。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
 
 新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
 

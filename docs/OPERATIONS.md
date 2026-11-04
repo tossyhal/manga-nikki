@@ -1,6 +1,8 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> local-connectedの生成受付・quota / status API・Queue経由の固定mock処理と未配送/期限照合、期限切れentryのScheduled cleanup接続を追加しました。共有DBへの適用・実Supabase / Queue / Turnstile / Storage API結合確認、実AI・Storage画像保存は未実施です。隔離PostgreSQLテストは架空profileと仮想予算だけを使い、実AIは呼びません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> 本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
+>
+> 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
 
 ---
 
@@ -26,7 +28,7 @@
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・mock予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。real profileの受付とlive-demoの新しい実AI生成、private Storage保存は未接続です。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・mock予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。実Turnstile結合、real profileの受付、live-demoの新しい実AI生成、生成画像のprivate Storage保存・署名URLは未接続です。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -40,7 +42,7 @@
   - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
   - `supabase/storage/comics-bucket.sql`はStorage APIが有効な環境だけで、`storage.buckets` / `storage.objects`を管理できるroleから適用します。local Supabaseでは検証済みの`supabase_admin`を使います（table ownerは`supabase_storage_admin`、CLI3の`postgres`には権限不足）。cloudの適用roleは未検証です。`service_role`へDDL権限を足さず、プラットフォーム既定のRLSを維持します。
-  - local Supabaseではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを検証しました。広域authenticated permissive policy下でもcomicsは拒否され、別bucket操作は阻害されませんでした。cloudのStorage API接続は未検証です。
+  - 過去のlocal Supabase Storage API検証ではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを確認しました。広域authenticated permissive policy下でもcomicsは拒否され、別bucket操作は阻害されませんでした。これは生成画像保存serviceの接続確認ではありません。cloudの適用・Storage API結合は未検証です。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
   - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
