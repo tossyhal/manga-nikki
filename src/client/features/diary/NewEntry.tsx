@@ -502,7 +502,10 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               placeholder="今日のできごとを書いてみよう。"
               required
               aria-describedby="count summary-preview"
-              onFocus={() => setTyping(true)}
+              onFocus={() => {
+                restoreTypingAfterInteractionRef.current = false;
+                setTyping(true);
+              }}
               onBlur={(event) => {
                 const nextTarget = event.relatedTarget;
                 const movingToConsent =
@@ -585,7 +588,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             disabled={busy || saved !== null}
             onChange={(event) => {
               setConsent(event.target.checked);
-              if (!pointerInteractionRef.current) {
+              if (!pointerInteractionRef.current && document.activeElement?.id !== 'body') {
                 restoreTypingAfterInteractionRef.current = false;
                 setTyping(false);
               }
