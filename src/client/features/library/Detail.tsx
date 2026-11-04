@@ -129,6 +129,7 @@ function DetailContent({
   const [draftDate, setDraftDate] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [editErrorStatus, setEditErrorStatus] = useState<number | null>(null);
+  const [validationFailureCount, setValidationFailureCount] = useState(0);
   const [quota, setQuota] = useState<GenerationQuota | null>(null);
   const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
   const [quotaState, setQuotaState] = useState<QuotaState>('loading');
@@ -315,7 +316,7 @@ function DetailContent({
     const alert = editErrorRef.current;
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView({ block: 'center' });
-  }, [editFormVisible, error]);
+  }, [editFormVisible, error, validationFailureCount]);
 
   async function readLatestEntry(): Promise<EntryDetail> {
     let latest = await getEntry(id);
@@ -529,6 +530,7 @@ function DetailContent({
       body: draftBody,
     });
     if (!parsed.success) {
+      setValidationFailureCount((count) => count + 1);
       setError('日付は今日以前、本文は1〜1,000文字で入力してください。');
       setEditErrorStatus(null);
       return;
