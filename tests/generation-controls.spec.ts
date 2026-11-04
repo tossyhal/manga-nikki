@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
-import type { EntryDetail, Generation } from '../src/shared/schemas';
+import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import {
   draftEntryDetailFixture,
   liveClientConfigFixture,
@@ -222,6 +222,81 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   expect(generationRequests[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
   expect(quotaRequests).toBeGreaterThan(0);
 });
+
+for (const failure of [
+  {
+    status: 429,
+    code: 'USER_LIMIT_REACHED',
+    retryable: false,
+    message: '利用上限に達しています。保存済みの記録は引き続き見られます。',
+  },
+  {
+    status: 503,
+    code: 'DEPENDENCY_UNAVAILABLE',
+    retryable: true,
+    message: '一時的に利用できません。時間をおいて再操作してください。',
+  },
+]) {
+  test(`新規日記保存後の生成${failure.status}でも保存済み記録へ移動できる`, async ({ page }) => {
+    const body = `生成${failure.status}後も保存を保持する架空の日記`;
+    const savedEntry: Entry = {
+      id: entryId,
+      diaryDate: jstToday(),
+      body,
+      revision: 1,
+      latestGenerationId: null,
+      createdAt: `${jstToday()}T12:00:00.000Z`,
+      updatedAt: `${jstToday()}T12:00:00.000Z`,
+    };
+    let entryPosts = 0;
+    let generationPosts = 0;
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: mockClientConfigFixture }),
+    );
+    await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+    await page.route('**/api/v1/entries', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      entryPosts++;
+      return route.fulfill({ status: 201, json: savedEntry });
+    });
+    await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+      route.fulfill({ json: { ...savedEntry, latestGeneration: null } }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
+      generationPosts++;
+      await route.fulfill({
+        status: failure.status,
+        json: {
+          error: {
+            code: failure.code,
+            message: 'fixture backend detail is not shown',
+            requestId: `generation-${failure.status}-request`,
+            retryable: failure.retryable,
+          },
+        },
+      });
+    });
+
+    await page.goto('/new');
+    await page.getByLabel('日記', { exact: true }).fill(body);
+    await page.getByRole('checkbox').check();
+    await page.getByRole('button', { name: '4コマにする' }).click();
+
+    await expect(page).toHaveURL(/\/new$/);
+    await expect(page.getByRole('heading', { name: '日記を保存しました' })).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText(failure.message);
+    await expect(page.getByRole('link', { name: '保存した記録を見る' })).toHaveAttribute(
+      'href',
+      `/entries/${entryId}`,
+    );
+    expect(entryPosts).toBe(1);
+    expect(generationPosts).toBe(1);
+
+    await page.getByRole('link', { name: '保存した記録を見る' }).click();
+    await expect(page).toHaveURL(`/entries/${entryId}`);
+    await expect(page.locator('.entry-draft-card .diary')).toHaveText(body);
+  });
+}
 
 test('通信断の受付確認は同じキーで再送し、unknownを自動再送しない', async ({ page }) => {
   await installLiveSession(page);

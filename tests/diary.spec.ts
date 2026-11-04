@@ -217,6 +217,7 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
     latestGeneration: generation,
   };
   const apiAuthorization: string[] = [];
+  const personalApiRequests: string[] = [];
   const externalAuthRequests: string[] = [];
   let entryWrites = 0;
   let generationWrites = 0;
@@ -281,6 +282,9 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   });
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
   page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/v1/') && url.pathname !== '/api/v1/config')
+      personalApiRequests.push(`${request.method()} ${url.pathname}`);
     if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
       externalAuthRequests.push(request.url());
   });
@@ -304,6 +308,16 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   );
   expect(entryWrites).toBe(0);
   expect(generationWrites).toBe(0);
+  expect(externalAuthRequests).toEqual([]);
+
+  const readsBeforeOffline = personalApiRequests.length;
+  await page.context().setOffline(true);
+  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
+  await expect(page.getByText('本人の今日の架空記録')).toHaveCount(0);
+  await expect(page.getByText('本人の過去の架空記録')).toHaveCount(0);
+  expect(personalApiRequests).toHaveLength(readsBeforeOffline);
   expect(externalAuthRequests).toEqual([]);
 });
 
@@ -330,11 +344,12 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   });
 
   await page.goto('/new');
-  await expect(page.locator('.policy-note')).toContainText('匿名セッションはこのブラウザに保存');
-  await expect(page.locator('.policy-note')).toContainText(
-    '保存後30日を過ぎると閲覧できなくなります',
+  const consent = page.getByRole('checkbox');
+  await expect(consent).toHaveAccessibleName(
+    /匿名利用の記録はこのブラウザに保存され、別の端末へ引き継げません。/,
   );
-  await expect(page.locator('.policy-note')).toContainText('現在、漫画生成は利用できません。');
+  await expect(consent).toHaveAccessibleName(/保存後30日を過ぎると閲覧できなくなります/);
+  await expect(consent).toHaveAccessibleName(/現在、漫画生成は利用できません。/);
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
 
