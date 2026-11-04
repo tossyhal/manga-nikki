@@ -212,6 +212,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- liveモードの日記CRUD・quota・生成受付・`/generations/:id`はSupabase接続です。local-connectedは生成専用Turnstile、mock profile限定予約、固定fixture Queue処理、未配送再送・期限照合を実装しています。実Supabase / Queue / Turnstile結合、共有DBへのmigration適用は未実施です。live-demoの実AI、private Storage/署名URL、物理削除は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
+- liveモードの日記CRUD・quota・生成受付・`/generations/:id`はSupabase接続です。local-connectedは生成専用Turnstile、mock profile限定予約、固定fixture Queue処理、未配送再送・期限照合を実装しています。実Supabase / Queue / Turnstile / Storage API結合、共有DBへのmigration適用は未実施です。期限削除serviceは日次Scheduled handlerに接続済みで、`local-connected`と`live-demo`ではStorage上の画像を確認・削除してからDBのasset・job・entryを削除します（実Storage API接続は未確認）。live-demoの実AI生成、漫画画像のprivate Storage保存・署名URL発行は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みですが、Android Chrome・iPhone SafariのHTTPS実機では未確認です。サンプルモードは個人APIを認証せず拒否します。
 - ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
