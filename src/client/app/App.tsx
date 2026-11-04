@@ -52,7 +52,7 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
 
 function Home({ config, configError }: { config: ClientConfig | null; configError: boolean }) {
   const isMock = config?.dataMode === 'mock';
-  const showSample = config?.dataMode === 'sample' || config?.dataMode === 'live';
+  const showSample = configError || config?.dataMode === 'sample' || config?.dataMode === 'live';
   const { recent, historyError } = useRecentRecordsForHome(isMock);
   const todayEntries = recent?.filter((entry) => entry.diaryDate === jstToday()) ?? [];
   const [sampleOpen, setSampleOpen] = useState(false);
@@ -104,15 +104,8 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
         </time>
       )}
       <section className="today-section" aria-labelledby="today-heading">
-        <h1 id="today-heading">今日の記録</h1>
-        {configError ? (
-          <div className="today-unavailable-card" role="alert">
-            <Icon name="alert" size={24} />
-            <p>{configUnavailableMessage}</p>
-          </div>
-        ) : config === null ? (
-          <output className="today-card-loading">読み込んでいます…</output>
-        ) : showSample ? (
+        <h1 id="today-heading">{showSample ? 'サンプル' : '今日の記録'}</h1>
+        {showSample ? (
           <div className="today-sample-card">
             <img src="/sample-comic.svg" alt="架空の一日の4コマ漫画" loading="lazy" />
             <div className="today-sample-copy">
@@ -129,6 +122,8 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
               </button>
             </div>
           </div>
+        ) : config === null ? (
+          <output className="today-card-loading">読み込んでいます…</output>
         ) : isMock && recent === null ? (
           <output className="today-card-loading">読み込んでいます…</output>
         ) : isMock && historyError ? (
@@ -292,6 +287,11 @@ function App() {
             <Icon name="settings" />
           </span>
         </header>
+      )}
+      {configError && (
+        <aside className="notice" role="alert">
+          {configUnavailableMessage}
+        </aside>
       )}
       <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
       <main id="main" className={`app-main${location.pathname === '/' ? ' app-main-home' : ''}`}>
