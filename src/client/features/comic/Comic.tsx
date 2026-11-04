@@ -106,7 +106,7 @@ export function Comic({
                 ))}
               </ol>
               {pageImageFailed && (
-                <details className="comic-script comic-image-fallback" defaultOpen>
+                <details className="comic-script comic-image-fallback" open>
                   <summary>漫画の画像を表示できません。内容を読む</summary>
                   <ol>
                     {comic.panels.map((panel) => (
