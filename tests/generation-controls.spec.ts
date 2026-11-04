@@ -233,7 +233,7 @@ for (const failure of [
     status: 429,
     code: 'USER_LIMIT_REACHED',
     retryable: false,
-    message: '利用上限に達しています。保存済みの記録は引き続き見られます。',
+    message: '本日の生成上限に達しています。保存済みの記録は引き続き見られます。',
   },
   {
     status: 503,

@@ -84,5 +84,6 @@ test('オフライン時に架空サンプルと利用制限を案内する', as
   const offlineNotice = page.getByRole('status').filter({ hasText: 'オフラインです。' });
   await expect(offlineNotice).toContainText('オフラインです。');
   await expect(offlineNotice).toContainText('日記本文や生成画像はオフライン用に保存しません。');
-  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
 });

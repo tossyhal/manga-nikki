@@ -348,7 +348,9 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   await expect(consent).toHaveAccessibleName(
     /匿名セッションはこのブラウザに保存され、別の端末へ引き継げません/,
   );
-  await expect(consent).toHaveAccessibleName(/保存後30日を過ぎると閲覧できなくなります/);
+  await expect(consent).toHaveAccessibleName(
+    /保存後30日を過ぎると閲覧できなくなることに同意します/,
+  );
   await expect(consent).toHaveAccessibleName(/現在、漫画生成は利用できません。/);
   await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
