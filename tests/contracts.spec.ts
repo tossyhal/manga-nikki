@@ -121,9 +121,11 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
   });
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
   generation = fixtures.running;
   await page.clock.runFor(5000);
   await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
   await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
@@ -152,9 +154,16 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
       return route.abort();
     });
     await page.goto(`/entries/${entryId}`);
-    await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
-    await page.getByText('元の日記を読む', { exact: true }).click();
-    await expect(page.locator('.diary')).toHaveText('架空のテスト日記');
+    if (status === 'unknown') {
+      await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
+      await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
+      await expect(page.locator('.diary')).toHaveCount(0);
+    } else {
+      await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
+      await expect(page.locator('#original-diary')).not.toHaveAttribute('open');
+      await page.getByText('元の日記を読む', { exact: true }).click();
+      await expect(page.locator('.diary')).toHaveText('架空のテスト日記');
+    }
     await expect(page.locator('.comic')).toHaveCount(0);
     if (status === 'cancelled') {
       await expect(page.getByRole('heading', { name: '生成を終了しました' })).toBeVisible();
