@@ -146,6 +146,7 @@ function DetailContent({
   const activeRef = useRef(true);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const editErrorRef = useRef<HTMLParagraphElement>(null);
   const actionInFlightRef = useRef(false);
   const generationFlowRef = useRef(false);
   const generationCaptchaAttemptRef = useRef(0);
@@ -307,6 +308,14 @@ function DetailContent({
     !generationForCurrentRevision &&
     !hasUnresolvedRequest,
   );
+  const editFormVisible = Boolean(entry && editing && !pending);
+
+  useEffect(() => {
+    if (!error || !editFormVisible) return;
+    const alert = editErrorRef.current;
+    alert?.focus({ preventScroll: true });
+    alert?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [editFormVisible, error]);
 
   async function readLatestEntry(): Promise<EntryDetail> {
     let latest = await getEntry(id);
@@ -779,7 +788,7 @@ function DetailContent({
           </button>
         </header>
       )}
-      {!editing && error && (
+      {error && !editFormVisible && (
         <p role="alert" className="error">
           {error}
         </p>
@@ -896,7 +905,7 @@ function DetailContent({
                 </button>
               )}
               {error && (
-                <p role="alert" className="error">
+                <p ref={editErrorRef} role="alert" tabIndex={-1} className="error">
                   {error}
                 </p>
               )}

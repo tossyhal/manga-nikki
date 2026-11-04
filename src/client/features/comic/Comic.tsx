@@ -96,15 +96,17 @@ export function Comic({
           )}
           {comic.visual.kind === 'page' && comic.visual.textMode === 'embedded' && (
             <>
-              <ol className="sr-only">
-                {comic.panels.map((panel) => (
-                  <li key={panel.index}>
-                    <p>{panel.scene}</p>
-                    {panel.caption && <p>{panel.caption}</p>}
-                    {panel.dialogue && <p>「{panel.dialogue}」</p>}
-                  </li>
-                ))}
-              </ol>
+              {!pageImageFailed && (
+                <ol className="sr-only">
+                  {comic.panels.map((panel) => (
+                    <li key={panel.index}>
+                      <p>{panel.scene}</p>
+                      {panel.caption && <p>{panel.caption}</p>}
+                      {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                    </li>
+                  ))}
+                </ol>
+              )}
               {pageImageFailed && (
                 <details className="comic-script comic-image-fallback" open>
                   <summary>漫画の画像を表示できません。内容を読む</summary>
