@@ -578,7 +578,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
           <p ref={errorRef} role="alert" className="error" tabIndex={-1}>
             {error}
           </p>
-        )}
+        ) : null}
         {generationCheckEntry && (
           <button
             className="button button-secondary"
