@@ -1215,6 +1215,7 @@ p {
 
 .detail-page.is-saved .comic {
   margin-top: 0;
+  margin-bottom: 4px;
 }
 
 .detail-page.is-saved .original-diary {
