@@ -412,37 +412,14 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
           下書き保存
         </button>
       </header>
-      {online && quota && (
-        <div className={showQuotaStatus ? undefined : 'sr-only'}>
+      {online && quota && !showQuotaStatus && (
+        <div className="sr-only">
           <GenerationQuotaStatus
             quota={quota}
             activeGeneration={activeGeneration}
             currentGenerationId={null}
           />
         </div>
-      )}
-      {online && !config.generationAvailable && config.dataMode !== 'sample' && (
-        <section className="quota-limit-card" aria-label="漫画の利用状況">
-          <p>現在、漫画の受付を停止しています。日記は保存できます。</p>
-        </section>
-      )}
-      {quotaState === 'unavailable' && online && (
-        <section className="quota-limit-card" aria-label="漫画の利用状況">
-          <p role="alert">
-            利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
-          </p>
-          <button
-            className="button-text"
-            disabled={busy}
-            type="button"
-            onClick={() => {
-              setQuotaState('loading');
-              void refreshQuota();
-            }}
-          >
-            利用枠を再確認
-          </button>
-        </section>
       )}
       <form
         className="entry-form"
@@ -494,6 +471,42 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </div>
           </div>
         </fieldset>
+        {online && quota && showQuotaStatus && (
+          <div className="quota-limit-card">
+            <GenerationQuotaStatus
+              quota={quota}
+              activeGeneration={activeGeneration}
+              currentGenerationId={null}
+            />
+          </div>
+        )}
+        {online &&
+          !config.generationAvailable &&
+          config.dataMode !== 'sample' &&
+          quotaState !== 'unavailable' &&
+          quota?.generationAvailable !== false && (
+            <section className="quota-limit-card" aria-label="漫画の利用状況">
+              <p>現在、漫画の受付を停止しています。日記は保存できます。</p>
+            </section>
+          )}
+        {quotaState === 'unavailable' && online && (
+          <section className="quota-limit-card" aria-label="漫画の利用状況">
+            <p role="alert">
+              利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
+            </p>
+            <button
+              className="button-text"
+              disabled={busy}
+              type="button"
+              onClick={() => {
+                setQuotaState('loading');
+                void refreshQuota();
+              }}
+            >
+              利用枠を再確認
+            </button>
+          </section>
+        )}
         {!online && (
           <>
             <section className="offline-entry-card" aria-labelledby="offline-entry-title">
