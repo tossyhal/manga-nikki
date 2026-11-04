@@ -125,8 +125,12 @@ a {
   width: 100%;
   min-height: calc(100svh - 64px);
   margin: 0 auto;
-  padding: calc(16px + env(safe-area-inset-top, 0px)) 24px
+  padding: calc(24px + env(safe-area-inset-top, 0px)) 24px
     calc(76px + 54px + 14px + env(safe-area-inset-bottom, 0px) + 24px);
+}
+
+.app-main-home {
+  padding-top: 16px;
 }
 
 .skip {
@@ -198,7 +202,7 @@ p {
 
 .home-date {
   display: block;
-  margin: 8px 0 18px;
+  margin: 15px 0 23px;
   color: #252525;
   font-size: 20px;
   font-weight: 700;
@@ -206,7 +210,7 @@ p {
 }
 
 .today-section h1 {
-  margin: 0 0 16px;
+  margin: 0 0 8px;
   font-size: 17px;
 }
 
@@ -494,7 +498,7 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: -4px 0 14px;
+  margin: -4px 0 6px;
 }
 
 .form-page-header h1 {
@@ -530,7 +534,7 @@ p {
   min-height: 44px;
   align-items: center;
   justify-content: space-between;
-  margin: 0 0 12px;
+  margin: 0 0 4px;
 }
 
 .date-display {
@@ -562,7 +566,7 @@ p {
 
 .entry-editor-card {
   display: flex;
-  height: min(52svh, 430px);
+  height: min(56svh, 430px);
   min-height: 300px;
   flex-direction: column;
   padding: 18px 19px 10px;
@@ -736,6 +740,25 @@ p {
   gap: 8px;
 }
 
+.comic-panel-card {
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border-radius: 16px;
+  background: #f6f6f6;
+}
+
+.comic-image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  background: #f6f6f6;
+  cursor: zoom-in;
+}
+
 .comic img {
   width: 100%;
   height: auto;
@@ -745,12 +768,11 @@ p {
 }
 
 .comic figcaption {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .comic .comic-title {
-  margin: 0 0 10px;
-  font-size: 16px;
+  margin: 0;
 }
 
 .comic ol {
@@ -768,12 +790,385 @@ p {
   overflow-wrap: anywhere;
 }
 
+.comic-panel-caption {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  padding: 6px 2px 0;
+  color: #252525;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.comic-panel-caption p {
+  margin: 0 0 3px;
+  overflow-wrap: anywhere;
+}
+
+.comic-panel-caption p:last-child {
+  margin-bottom: 0;
+}
+
+.comic-panel-number {
+  padding-top: 1px;
+  text-align: center;
+}
+
+.comic-transcript {
+  display: block;
+  margin-top: 10px;
+}
+
+.comic-transcript:empty {
+  display: none;
+}
+
+.comic-script {
+  border-radius: 12px;
+  background: #f6f6f6;
+}
+
+.comic-script summary {
+  min-height: 48px;
+  padding: 13px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.comic-script ol {
+  padding: 0 20px 12px 38px;
+}
+
+.comic-script li {
+  padding: 4px 0;
+}
+
 .comic small {
   display: block;
   margin-top: 12px;
   color: #858585;
   font-size: 11px;
   line-height: 1.6;
+}
+
+.comic-zoom-dialog {
+  width: min(960px, calc(100vw - 24px));
+  max-width: 960px;
+  max-height: calc(100dvh - 24px);
+  padding: 44px 8px 8px;
+  overflow: auto;
+  border: 0;
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.comic-zoom-dialog::backdrop {
+  background: rgb(0 0 0 / 72%);
+}
+
+.comic-zoom-content {
+  position: relative;
+  display: grid;
+  min-height: 100px;
+  place-items: center;
+}
+
+.comic-zoom-content img {
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 88px);
+  object-fit: contain;
+}
+
+.comic-zoom-close {
+  position: absolute;
+  z-index: 1;
+  top: -40px;
+  right: 0;
+}
+
+.detail-page {
+  padding-bottom: 8px;
+}
+
+.detail-toolbar {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 4px;
+  margin: -4px -8px 2px;
+}
+
+.detail-title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.detail-menu-anchor {
+  position: relative;
+  justify-self: end;
+}
+
+.detail-menu {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 2px);
+  right: 0;
+  width: min(220px, calc(100vw - 64px));
+  padding: 4px 12px;
+  border: 1px solid #e4e4e4;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.detail-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px;
+  color: #252525;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.detail-menu-item + .detail-menu-item {
+  border-top: 1px solid #ebebeb;
+}
+
+.detail-edit-toolbar {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: -4px -8px 8px;
+}
+
+.detail-edit-toolbar h1 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.detail-edit-toolbar .button-text {
+  min-width: 44px;
+  white-space: nowrap;
+}
+
+.detail-date-row {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #858585;
+  font-size: 13px;
+}
+
+.detail-save-status {
+  display: block;
+  margin: 0 0 12px;
+  color: #858585;
+  font-size: 11px;
+}
+
+.detail-quota-card {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f6f6f6;
+}
+
+.detail-quota-card section,
+.detail-quota-card p {
+  margin: 0;
+}
+
+.detail-quota-card p + p {
+  margin-top: 6px;
+}
+
+.detail-revision-note {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f6f6f6;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.generation-card {
+  display: flex;
+  min-height: min(52svh, 420px);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 20px 0 18px;
+  padding: 28px 20px;
+  border-radius: 22px;
+  background: #f6f6f6;
+  text-align: center;
+}
+
+.generation-card > svg {
+  flex: 0 0 auto;
+}
+
+.generation-card h2 {
+  margin: 8px 0 0;
+  font-size: 19px;
+}
+
+.generation-card p {
+  max-width: 280px;
+  margin: 0;
+  color: #858585;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.generation-card .generation-card-note {
+  margin-top: 0;
+}
+
+.generation-steps {
+  display: grid;
+  width: min(100%, 240px);
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0;
+  color: #858585;
+  list-style: none;
+  text-align: left;
+}
+
+.generation-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.generation-steps li.is-current {
+  color: #252525;
+  font-weight: 700;
+}
+
+.generation-step-icon {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #e2e2e2;
+  color: #ffffff;
+}
+
+.generation-steps li.is-current .generation-step-icon {
+  background: #222222;
+}
+
+.generation-steps li.is-complete .generation-step-icon {
+  background: #555555;
+}
+
+.entry-draft-card {
+  margin: 30px 0 18px;
+  padding: 18px;
+  border-radius: 22px;
+  background: #f6f6f6;
+}
+
+.entry-draft-card .diary {
+  min-height: 170px;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.entry-draft-card .button {
+  min-height: 42px;
+  margin-top: 14px;
+  padding: 8px 14px;
+}
+
+.original-diary {
+  margin: 18px 0 4px;
+  border-radius: 16px;
+  background: #f6f6f6;
+}
+
+.original-diary summary {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.original-diary summary::-webkit-details-marker {
+  display: none;
+}
+
+.original-diary summary::after {
+  width: 9px;
+  height: 9px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.original-diary[open] summary::after {
+  transform: rotate(135deg);
+}
+
+.original-diary > p {
+  margin: 0;
+  padding: 0 18px 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detail-edit-form .entry-editor-card {
+  min-height: 330px;
+}
+
+.detail-edit-form .entry-editor-footer {
+  grid-template-columns: 1fr auto;
+}
+
+.latest-entry-action {
+  width: 100%;
+  margin: 12px 0 4px;
+}
+
+.edit-cancel-action {
+  display: flex;
+  width: 100%;
+  margin: 8px auto;
+}
+
+.detail-action-dock:empty {
+  display: none;
 }
 
 .confirm-dialog {

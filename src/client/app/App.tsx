@@ -50,13 +50,7 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
   );
 }
 
-function Home({
-  config,
-  configError,
-}: {
-  config: ClientConfig | null;
-  configError: boolean;
-}) {
+function Home({ config, configError }: { config: ClientConfig | null; configError: boolean }) {
   const isMock = config?.dataMode === 'mock';
   const showSample = config?.dataMode === 'sample' || config?.dataMode === 'live';
   const { recent, historyError } = useRecentRecordsForHome(isMock);
@@ -89,8 +83,7 @@ function Home({
         <Comic
           comic={pageComic}
           images={{
-            [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']:
-              '/sample-comic.svg',
+            [pageComic.visual.kind === 'page' ? pageComic.visual.assetId : '']: '/sample-comic.svg',
           }}
           mock
           titleAs="h2"
@@ -110,15 +103,14 @@ function Home({
           {today}
         </time>
       )}
-      {configError && (
-        <div className="today-unavailable-card" role="alert">
-          <Icon name="alert" size={24} />
-          <p>{configUnavailableMessage}</p>
-        </div>
-      )}
       <section className="today-section" aria-labelledby="today-heading">
         <h1 id="today-heading">今日の記録</h1>
-        {configError ? null : config === null ? (
+        {configError ? (
+          <div className="today-unavailable-card" role="alert">
+            <Icon name="alert" size={24} />
+            <p>{configUnavailableMessage}</p>
+          </div>
+        ) : config === null ? (
           <output className="today-card-loading">読み込んでいます…</output>
         ) : showSample ? (
           <div className="today-sample-card">
@@ -127,7 +119,11 @@ function Home({
               <span className="sample-tag">架空サンプル</span>
               <h2>{pageComic.title}</h2>
               <p>日記を漫画にしたサンプルです。</p>
-              <button className="today-write-link" type="button" onClick={() => setSampleOpen(true)}>
+              <button
+                className="today-write-link"
+                type="button"
+                onClick={() => setSampleOpen(true)}
+              >
                 <span>漫画を読む</span>
                 <Icon name="chevron-right" size={18} />
               </button>
@@ -158,7 +154,6 @@ function Home({
       </section>
 
       {isMock && recent !== null && !historyError && <RecentRecords entries={recent} />}
-
     </div>
   );
 }
@@ -298,13 +293,8 @@ function App() {
           </span>
         </header>
       )}
-      {configError && (
-        <aside className="notice" role="alert">
-          {configUnavailableMessage}
-        </aside>
-      )}
       <PwaNotice diaryDirty={diaryActivity.dirty} diaryBusy={diaryActivity.busy} />
-      <main id="main" className="app-main">
+      <main id="main" className={`app-main${location.pathname === '/' ? ' app-main-home' : ''}`}>
         <Outlet context={context} />
       </main>
       <BottomNav />

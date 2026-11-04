@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
+import { Icon } from '../../app/Icon';
 
 export function Comic({
   comic,
@@ -13,39 +15,109 @@ export function Comic({
   titleAs?: 'h2' | 'h3';
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
+  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
+  const zoomDialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = zoomDialogRef.current;
+    if (!dialog) return;
+    if (zoomed && !dialog.open) dialog.showModal();
+    if (!zoomed && dialog.open) dialog.close();
+  }, [zoomed]);
+
   return (
-    <figure className="comic">
-      <div className="comic-images">
-        {ids.map(
-          (id, index) =>
-            images[id] && (
-              <img
-                key={id}
-                src={images[id]}
-                loading="lazy"
-                decoding="async"
-                alt={
-                  comic.visual.kind === 'page'
-                    ? `${comic.title}の4コマ漫画`
-                    : `${index + 1}コマ目：${comic.panels[index]?.scene}`
-                }
-              />
-            ),
+    <>
+      <figure className={`comic is-${comic.visual.kind}`}>
+        <div className={`comic-images is-${comic.visual.kind}`}>
+          {ids.map((id, index) => {
+            const src = images[id];
+            if (!src) return null;
+            const panel = comic.panels[index];
+            const alt =
+              comic.visual.kind === 'page'
+                ? `${comic.title}の4コマ漫画`
+                : `${index + 1}コマ目：${panel?.scene ?? comic.title}`;
+            return (
+              <figure className="comic-panel-card" key={id}>
+                <button
+                  className="comic-image-button"
+                  type="button"
+                  aria-label={`${alt}を拡大`}
+                  onClick={() => setZoomed({ src, alt })}
+                >
+                  <img src={src} loading="lazy" decoding="async" alt={alt} />
+                </button>
+                {comic.visual.kind === 'panels' && panel && (
+                  <figcaption className="comic-panel-caption">
+                    <span className="comic-panel-number">{panel.index}</span>
+                    <div>
+                      <p>{panel.caption || panel.scene}</p>
+                      {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                      {panel.caption && <span className="sr-only">{panel.scene}</span>}
+                    </div>
+                  </figcaption>
+                )}
+              </figure>
+            );
+          })}
+        </div>
+        <figcaption className="comic-transcript">
+          <Title className="comic-title sr-only">{comic.title}</Title>
+          {comic.visual.kind === 'page' && comic.visual.textMode === 'external' && (
+            <details className="comic-script">
+              <summary>4コマの内容を読む</summary>
+              <ol>
+                {comic.panels.map((panel) => (
+                  <li key={panel.index}>
+                    <p>{panel.scene}</p>
+                    {panel.caption && <p>{panel.caption}</p>}
+                    {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+          {comic.visual.kind === 'page' && comic.visual.textMode === 'embedded' && (
+            <ol className="sr-only">
+              {comic.panels.map((panel) => (
+                <li key={panel.index}>
+                  <p>{panel.scene}</p>
+                  {panel.caption && <p>{panel.caption}</p>}
+                  {panel.dialogue && <p>「{panel.dialogue}」</p>}
+                </li>
+              ))}
+            </ol>
+          )}
+          {mock && <small>固定サンプルです。入力内容は反映されず、AIにも送信されません。</small>}
+        </figcaption>
+      </figure>
+      <dialog
+        ref={zoomDialogRef}
+        className="comic-zoom-dialog"
+        aria-label="漫画画像"
+        onCancel={(event) => {
+          event.preventDefault();
+          setZoomed(null);
+        }}
+        onClose={() => setZoomed(null)}
+        onClick={(event) => {
+          if (event.target === zoomDialogRef.current) setZoomed(null);
+        }}
+      >
+        {zoomed && (
+          <div className="comic-zoom-content">
+            <button
+              className="icon-button comic-zoom-close"
+              type="button"
+              aria-label="画像を閉じる"
+              onClick={() => setZoomed(null)}
+            >
+              <Icon name="close" />
+            </button>
+            <img src={zoomed.src} alt={zoomed.alt} />
+          </div>
         )}
-      </div>
-      <figcaption>
-        <Title className="comic-title">{comic.title}</Title>
-        <ol>
-          {comic.panels.map((panel) => (
-            <li key={panel.index}>
-              <p>{panel.scene}</p>
-              {panel.caption && <p>{panel.caption}</p>}
-              {panel.dialogue && <p>「{panel.dialogue}」</p>}
-            </li>
-          ))}
-        </ol>
-        {mock && <small>固定サンプルです。入力内容は反映されず、AIにも送信されません。</small>}
-      </figcaption>
-    </figure>
+      </dialog>
+    </>
   );
 }

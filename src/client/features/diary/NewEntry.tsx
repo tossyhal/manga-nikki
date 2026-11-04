@@ -36,7 +36,10 @@ function generationIsAvailable(quota: GenerationQuota | null): boolean {
 }
 
 function formatDiaryDate(date: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '日付を選択';
   const value = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(value.valueOf()) || value.toISOString().slice(0, 10) !== date)
+    return '日付を選択';
   const monthDay = new Intl.DateTimeFormat('ja-JP', {
     timeZone: 'UTC',
     month: 'long',
@@ -60,7 +63,10 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     const requestedDate = new URLSearchParams(location.search).get('date');
     if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) return today;
     const parsedDate = new Date(`${requestedDate}T00:00:00.000Z`);
-    if (Number.isNaN(parsedDate.valueOf()) || parsedDate.toISOString().slice(0, 10) !== requestedDate)
+    if (
+      Number.isNaN(parsedDate.valueOf()) ||
+      parsedDate.toISOString().slice(0, 10) !== requestedDate
+    )
       return today;
     return requestedDate <= today ? requestedDate : today;
   });
