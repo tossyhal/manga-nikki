@@ -38,12 +38,22 @@ function quotaAllowsGeneration(quota: GenerationQuota | null): boolean {
   );
 }
 
+function generationActionErrorMessage(failure: unknown, fallback: string): string {
+  if (
+    failure instanceof ApiClientError &&
+    (failure.status === 503 || failure.code === 'DEPENDENCY_UNAVAILABLE')
+  ) {
+    return '漫画の受付を利用できません。時間をおいて再操作してください。';
+  }
+  return failure instanceof Error ? failure.message : fallback;
+}
+
 function generationStateMessage(generation: Generation): string {
   if (generation.status === 'unknown') {
     return '結果の確認を待っています。自動では再生成せず、利用枠を保持しています。状態を再確認してください。';
   }
   if (generation.status === 'failed') {
-    return '漫画を作成できませんでした。日記は保存されています。再操作の前に最新の状態を確認してください。';
+    return '漫画を作成できませんでした。日記は保存されています。本文を編集して保存すると新しく受付できます。利用枠は上の残り回数を確認してください。';
   }
   return '生成は中止されました。日記は保存されています。';
 }
@@ -325,7 +335,7 @@ function DetailContent({
     } catch (failure) {
       if (!activeRef.current) return;
       const apiFailure = failure instanceof ApiClientError ? failure : null;
-      setError(failure instanceof Error ? failure.message : '漫画の受付を確認できませんでした。');
+      setError(generationActionErrorMessage(failure, '漫画の受付を確認できませんでした。'));
       if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
         setGenerationCaptchaRetry(true);
       } else if (apiFailure?.code === null) {
@@ -370,7 +380,7 @@ function DetailContent({
     } catch (failure) {
       if (!activeRef.current) return;
       const apiFailure = failure instanceof ApiClientError ? failure : null;
-      setError(failure instanceof Error ? failure.message : '受付結果を確認できませんでした。');
+      setError(generationActionErrorMessage(failure, '受付結果を確認できませんでした。'));
       if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
         setGenerationCaptchaRetry(true);
       } else if (apiFailure?.code === null) {

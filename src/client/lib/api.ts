@@ -49,8 +49,6 @@ const apiErrorMessages: Record<string, string> = {
   REVISION_CONFLICT: '記録が更新されています。最新の内容を読み込んでから操作してください。',
   TOO_MANY_ACTIVE: '別の漫画を作成しています。進行中の記録を開いて結果を確認してください。',
   USER_LIMIT_REACHED: '本日の生成上限に達しています。保存済みの記録は引き続き見られます。',
-  DEPENDENCY_UNAVAILABLE:
-    '必要な機能を確認できないため、漫画の受付を停止しています。保存済みの記録は引き続き見られます。',
 };
 
 function errorMessageFor(status: number, code: string): string {
@@ -62,7 +60,7 @@ function errorMessageFor(status: number, code: string): string {
   if (status === 409) return '記録の状態が変わりました。最新の状態を読み込んでください。';
   if (status === 413) return '入力が大きすぎます。本文を短くしてください。';
   if (status === 429) return '利用上限に達しています。保存済みの記録は引き続き見られます。';
-  if (status === 503) return '現在、一時的に利用できません。記録の保存と閲覧は続けられます。';
+  if (status === 503) return '一時的に利用できません。時間をおいて再操作してください。';
   return '操作を完了できませんでした。通信と入力内容を確認して再操作してください。';
 }
 
