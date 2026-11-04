@@ -6,6 +6,7 @@ import {
   liveClientConfigFixture,
   mockClientConfigFixture,
 } from './fixtures/client-config';
+import { clickAppDialogButton, clickEntryMenuItem, openEntryMenu } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -199,7 +200,7 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('入力内容を反映しない架空の日記');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '保存して固定サンプルを見る' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
   await expect(
     page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。').first(),
@@ -263,7 +264,7 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('通信に失敗しました');
   await page.reload();
   await expect(page.getByRole('button', { name: '受付結果を確認' })).toBeVisible();
@@ -316,7 +317,7 @@ test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り�
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('保存済みの日記はそのままです');
   await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   await page.getByRole('button', { name: '新しい確認を取得' }).click();
@@ -421,7 +422,7 @@ test('生成APIの認証切れでは別の匿名登録を行わず、記録を�
   });
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('匿名セッションを確認できません');
   await expect(page.getByText('SECRET_ENV_NAME')).toHaveCount(0);
   await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
@@ -469,16 +470,14 @@ test('生成処理中の連打と離脱を確認し、遅れた応答では画�
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await requestReceived;
   await expect(page.getByRole('button', { name: '受付しています…' })).toBeDisabled();
   expect(generationRequests).toBe(1);
 
-  const dialogPromise = page.waitForEvent('dialog');
-  const navigation = page.getByRole('link', { name: '← 記録の一覧' }).click();
-  const dialog = await dialogPromise;
-  expect(dialog.message()).toContain('処理中');
-  await dialog.accept();
+  const navigation = page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  await clickAppDialogButton(page, '処理中です', '移動する');
   await navigation;
   await expect(page).toHaveURL(/\/library$/);
 
@@ -548,12 +547,12 @@ for (const delayedCallback of ['token', 'error'] as const) {
     await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
     await page.goto(`/entries/${entryId}`);
-    await page.getByRole('button', { name: '漫画を作成する' }).click();
+    await page.getByRole('button', { name: '4コマにする' }).click();
     await expect
       .poll(() => page.evaluate(() => Boolean(window.__releaseE2eGenerationCaptcha)))
       .toBe(true);
 
-    await page.getByRole('button', { name: '日記を編集' }).click();
+    await clickEntryMenuItem(page, '日記を編集');
     await page.getByLabel('日記', { exact: true }).fill('保存処理を確認する架空の日記');
     await page.getByRole('button', { name: '変更を保存' }).click();
     await patchReceived;
@@ -565,7 +564,7 @@ for (const delayedCallback of ['token', 'error'] as const) {
     await expect(page.locator('.diary')).toHaveText('保存処理を確認する架空の日記');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '新しい確認を取得' })).toHaveCount(0);
-    const createButton = page.getByRole('button', { name: '漫画を作成する' });
+    const createButton = page.getByRole('button', { name: '4コマにする' });
     await expect(createButton).toBeEnabled();
     await createButton.click();
     await expect.poll(() => generationRequests).toBe(1);
@@ -591,7 +590,8 @@ test('生成失敗後に編集・再保存で新しい受付へ進め、残り�
     '本文を編集して保存すると新しく受付できます。利用枠は上の残り回数を確認してください。',
   );
   await expect(page.getByText('本日の残り生成枠は3回です。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '日記を編集' })).toBeVisible();
+  await openEntryMenu(page);
+  await expect(page.getByRole('menuitem', { name: '日記を編集' })).toBeVisible();
 });
 
 test('生成APIと受付再確認の503には生成向けの再操作案内を表示する', async ({ page }) => {
@@ -622,7 +622,7 @@ test('生成APIと受付再確認の503には生成向けの再操作案内を�
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   const message = '漫画の受付を利用できません。時間をおいて再操作してください。';
   await expect(page.getByRole('alert')).toContainText(message);
   await page.getByRole('button', { name: '受付結果を確認' }).click();
@@ -661,7 +661,7 @@ test('受付停止後の再確認は停止理由を保ち、同じ受付キー�
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   const stoppedMessage = '現在、漫画の受付を停止しています。保存済みの記録は引き続き見られます。';
   await expect(page.getByRole('alert')).toContainText(stoppedMessage);
   await expect(page.getByRole('button', { name: '受付結果を確認' })).toBeVisible();
@@ -692,21 +692,22 @@ test('受付結果の確認後は処理中blockerを出さず詳細へ遷移す�
       },
     });
   });
-  let dialogMessage = '';
+  let nativeDialogCount = 0;
   page.on('dialog', async (dialog) => {
-    dialogMessage = dialog.message();
-    await dialog.accept();
+    nativeDialogCount++;
+    await dialog.dismiss();
   });
 
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('再確認後の遷移を調べる架空の日記');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '保存して固定サンプルを見る' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持したまま再操作');
   await page.getByRole('button', { name: '受付結果を確認' }).click();
 
   await expect(page).toHaveURL(/\/entries\/[0-9a-f-]{36}$/);
-  expect(dialogMessage).toBe('');
+  expect(nativeDialogCount).toBe(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(generationRequests).toBe(2);
 });
 
@@ -748,7 +749,7 @@ test('quota待ち中に編集を始めたら遅延した自動生成要求を破
 
   await page.goto(`/entries/${entryId}`);
   await quotaRequested;
-  await page.getByRole('button', { name: '日記を編集' }).click();
+  await clickEntryMenuItem(page, '日記を編集');
   await page.getByLabel('日記', { exact: true }).fill('編集途中の日記を保護する架空の追記');
   releaseQuota();
 
@@ -815,18 +816,19 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
     }),
   );
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
-  page.on('dialog', async (dialog) => dialog.accept());
-
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '漫画を作成する' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect
     .poll(() => page.evaluate(() => Boolean(window.__releaseE2eGenerationCaptcha)))
     .toBe(true);
-  await page.getByRole('button', { name: '記録を削除' }).click();
+  await clickEntryMenuItem(page, '日記を削除');
+  const deleteDialogTitle = 'この日記を削除しますか？';
+  const confirmDelete = clickAppDialogButton(page, deleteDialogTitle, '削除する');
   await deleteRequested;
   await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
   expect(generationRequests).toBe(0);
   releaseDelete();
+  await confirmDelete;
 
   await expect(page.getByRole('alert')).toBeVisible();
   const retryButton = page.getByRole('button', { name: '新しい確認を取得' });

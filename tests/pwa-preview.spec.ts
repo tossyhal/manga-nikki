@@ -5,7 +5,7 @@ test('production previewは公開用静的ファイルだけをcacheし、offlin
   context,
 }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
@@ -42,7 +42,7 @@ test('production previewは公開用静的ファイルだけをcacheし、offlin
 
   await context.setOffline(true);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
-  await expect(page.locator('.sample img')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
+  await expect(page.getByRole('img', { name: '架空の一日の4コマ漫画' })).toBeVisible();
   await expect(page.getByRole('status')).toContainText('オフラインです。');
 });

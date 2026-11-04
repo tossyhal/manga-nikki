@@ -96,7 +96,9 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
       return route.abort();
     });
     await page.goto(`/entries/${entryId}`);
-    await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
+    await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
+    await page.getByText('元の日記を読む', { exact: true }).click();
+    await expect(page.locator('.diary')).toHaveText('架空のテスト日記');
     await expect(page.locator('.comic')).toHaveCount(0);
     if (status === 'cancelled')
       await expect(page.getByText('生成は中止されました。')).toBeVisible();
@@ -140,14 +142,16 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
     }
   }
   await page.goto('/library');
-  await expect(page.locator('.entries > li')).toHaveCount(20);
+  await expect(page.getByRole('heading', { name: '記録', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await expect(page.locator('.entry-history-card')).toHaveCount(20);
   await expect(page.getByText('架空の履歴1件目', { exact: true })).not.toBeVisible();
-  await page.getByRole('button', { name: 'もっと見る' }).click();
-  await expect(page.locator('.entries > li')).toHaveCount(21);
-  await expect(page.getByRole('button', { name: 'もっと見る' })).not.toBeVisible();
-  await page.getByText('架空の履歴1件目', { exact: true }).click();
+  await page.getByRole('button', { name: '続きを読み込む' }).click();
+  await expect(page.locator('.entry-history-card')).toHaveCount(21);
+  await expect(page.getByRole('button', { name: '続きを読み込む' })).not.toBeVisible();
+  await page.getByRole('link', { name: /架空の履歴1件目/ }).click();
   await expect(page).toHaveURL(`/entries/${oldestId}`);
-  await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
 });
 
 test('保存完了後にレスポンスだけ失っても再送で重複作成しない', async ({ page }) => {
@@ -171,9 +175,10 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   await expect(page).toHaveURL(`/entries/${savedId}`);
   expect(requestIds).toHaveLength(2);
   expect(requestIds[0]).toBe(requestIds[1]);
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
-  await expect(page.locator('.entries > li')).toHaveCount(1);
-  await expect(page.getByText('保存だけ成功した架空の日記', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await expect(page.locator('.entry-history-card')).toHaveCount(1);
+  await expect(page.getByRole('link', { name: /保存だけ成功した架空の日記/ })).toBeVisible();
 });
 
 test('390px幅の履歴では200文字の日記を40文字の要約で表示する', async ({ page }) => {
@@ -185,8 +190,9 @@ test('390px幅の履歴では200文字の日記を40文字の要約で表示す�
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
-  await expect(page.locator('.entries strong')).toHaveText(summary);
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await expect(page.locator('.entry-history-summary')).toHaveText(summary);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

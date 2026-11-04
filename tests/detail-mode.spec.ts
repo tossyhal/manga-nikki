@@ -60,8 +60,8 @@ test('mock設定では固定漫画を生成でき、端末の一時保存状態�
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByText('一時保存しました。', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '固定サンプルを見る' })).toBeEnabled();
-  await page.getByRole('button', { name: '固定サンプルを見る' }).click();
+  await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
 });

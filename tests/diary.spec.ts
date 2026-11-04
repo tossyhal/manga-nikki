@@ -1,41 +1,45 @@
 import { expect, test } from '@playwright/test';
 import { liveClientConfigFixture } from './fixtures/client-config';
-test('入力からモック漫画と履歴を再読込して削除できる', async ({ page }) => {
+import { clickAppDialogButton, clickEntryMenuItem } from './fixtures/ui';
+test('入力からモック漫画を再読込し、最近の記録から削除できる', async ({ page }) => {
   const externalAuthRequests: string[] = [];
   page.on('request', (request) => {
     if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
       externalAuthRequests.push(request.url());
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '保存して固定サンプルを見る' }).click();
+  await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(page.getByRole('heading', { name: '図書館で本を読んだ。' })).toBeVisible();
+  await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
   await expect(
     page.getByText('固定サンプルです。入力内容は反映されず、AIにも送信されません。'),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
-  await page
-    .getByRole('link', { name: /漫画日記/ })
-    .first()
-    .click();
-  await expect(page.getByRole('heading', { name: '過去の記録' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /図書館で本を読んだ。/ }).first()).toBeVisible();
-  await page.getByRole('link', { name: '記録', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '保存した記録', exact: true })).toBeVisible();
-  await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toBeVisible();
-  await page.getByText('図書館で本を読んだ。', { exact: true }).click();
-  const deleteDialogPromise = page.waitForEvent('dialog');
-  const deleteAction = page.getByRole('button', { name: '記録を削除' }).click();
-  const deleteDialog = await deleteDialogPromise;
-  await deleteDialog.accept();
-  await deleteAction;
-  await expect(page.getByRole('heading', { name: '最初の一日を残しましょう。' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
+  await page.getByText('元の日記を読む', { exact: true }).click();
+  await expect(page.getByText('図書館で本を読んだ。', { exact: true }).last()).toBeVisible();
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '最近の記録' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /図書館で本を読んだ。/ })).toBeVisible();
+  await page.getByRole('link', { name: /図書館で本を読んだ。/ }).click();
+
+  await clickEntryMenuItem(page, '日記を削除');
+  const deleteDialogTitle = 'この日記を削除しますか？';
+  await expect(page.getByRole('dialog', { name: deleteDialogTitle })).toBeVisible();
+  await clickAppDialogButton(page, deleteDialogTitle, 'キャンセル');
+  await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.getByRole('heading', { name: '図書館で本を読んだ。' })).toBeVisible();
+
+  await clickEntryMenuItem(page, '日記を削除');
+  await clickAppDialogButton(page, deleteDialogTitle, '削除する');
+  await expect(page).toHaveURL(/\/library$/);
+  await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toHaveCount(0);
   expect(externalAuthRequests).toEqual([]);
 });
 test('狭い画面で下書き保存とHTML風の文字を安全に表示できる', async ({ page }) => {
@@ -110,10 +114,18 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
 
   await page.goto('/');
   await expect(page.locator('.notice')).toHaveText(
-    'サンプルを表示しています。保存・生成は利用できません。',
+    '架空サンプルを表示しています。保存・生成は利用できません。',
   );
-  await expect(page.getByText('サンプルの一日')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
+  await page.getByRole('button', { name: '漫画を読む' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+  await expect(
+    page.getByText('朝はトーストを食べた。図書館で本を読んだ。帰り道で猫を見かけた。'),
+  ).toBeVisible();
+  await page.getByRole('button', { name: '戻る' }).click();
+  await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await expect(page.getByText('保存機能は利用できません。')).toBeVisible();
@@ -136,8 +148,9 @@ test('liveホームは履歴取得と匿名登録を始めない', async ({ page
 
   await page.goto('/');
   await expect(page.locator('.notice')).toHaveText('記録を保存する前に利用条件をご確認ください。');
-  await expect(page.getByText('サンプルの一日')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '過去の記録' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '日記を書く' }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
   await page.waitForLoadState('networkidle');
 
   expect(personalEntryReads).toBe(0);
@@ -238,7 +251,8 @@ test('別の日記の通信失敗後に元の日記を再送しても重複作�
   expect(requestIds).toHaveLength(3);
   expect(requestIds[0]).toBe(requestIds[2]);
   expect(requestIds[0]).not.toBe(requestIds[1]);
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
-  await expect(page.locator('.entries > li')).toHaveCount(1);
-  await expect(page.locator('.entries')).toContainText(firstBody);
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await expect(page.locator('.entry-history-card')).toHaveCount(1);
+  await expect(page.locator('.entry-history-card')).toContainText(firstBody);
 });

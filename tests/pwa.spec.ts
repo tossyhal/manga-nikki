@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+import { clickEntryMenuItem } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 
@@ -66,7 +67,7 @@ test('詳細の日記編集が未保存の間は手動PWA更新を保留する',
   );
 
   await page.goto(`/entries/${entryId}`);
-  await page.getByRole('button', { name: '日記を編集' }).click();
+  await clickEntryMenuItem(page, '日記を編集');
   const diary = page.getByLabel('日記', { exact: true });
   await diary.fill('更新中に保護する詳細編集の架空日記');
 
@@ -77,11 +78,11 @@ test('詳細の日記編集が未保存の間は手動PWA更新を保留する',
 
 test('オフライン時に架空サンプルと利用制限を案内する', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /今日のことを/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
   await page.context().setOffline(true);
 
   const offlineNotice = page.getByRole('status').filter({ hasText: 'オフラインです。' });
   await expect(offlineNotice).toContainText('オフラインです。');
   await expect(offlineNotice).toContainText('日記本文や生成画像はオフライン用に保存しません。');
-  await expect(page.locator('.sample img')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
 });
