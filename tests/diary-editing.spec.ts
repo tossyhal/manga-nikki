@@ -167,6 +167,7 @@ for (const failure of [
   { status: 503, code: 'DEPENDENCY_UNAVAILABLE', mode: 'mock' as const },
 ]) {
   test(`${failure.status}保存失敗後も編集中の入力を保持する`, async ({ page }) => {
+    await page.setViewportSize({ width: 393, height: 852 });
     if (failure.mode === 'live') {
       await setLiveSession(page);
       await page.route('**/api/v1/config', (route) =>
@@ -199,13 +200,23 @@ for (const failure of [
     await page.getByLabel('日記', { exact: true }).fill(draft);
     await page.getByRole('button', { name: '保存', exact: true }).click();
 
-    await expect(page.getByRole('alert')).toContainText(
+    const errorAlert = page.getByRole('alert');
+    await expect(errorAlert).toContainText(
       failure.status === 401
         ? '匿名セッションを確認できません。'
         : failure.code === 'REVISION_CONFLICT'
           ? '記録が更新されています。最新の内容を読み込んでから操作してください。'
           : '一時的に利用できません。時間をおいて再操作してください。',
     );
+    await expect(errorAlert).toBeFocused();
+    await expect(errorAlert).toBeInViewport();
+    const alertBottom = await errorAlert.evaluate(
+      (element) => element.getBoundingClientRect().bottom,
+    );
+    const navigationTop = await page
+      .getByRole('navigation', { name: 'メインナビゲーション' })
+      .evaluate((element) => element.getBoundingClientRect().top);
+    expect(alertBottom).toBeLessThanOrEqual(navigationTop);
     await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
   });
 }
@@ -306,6 +317,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
     .click();
   await clickAppDialogButton(page, '最新の記録を読み込みますか？', '最新の記録を読み込む');
   await expect(page.getByRole('heading', { name: '生成を受け付けました' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('この記録は生成中のため編集できません。');
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();

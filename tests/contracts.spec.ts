@@ -87,6 +87,30 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   await expect.poll(() => requestedAssetIds.size).toBe(4);
 });
 
+test('埋め込み文字の漫画で画像取得に失敗したら脚本を一度だけ表示する', async ({ page }) => {
+  const comic = structuredClone(pageComic);
+  if (comic.visual.kind !== 'page') throw new Error('page comic fixture is required');
+  comic.visual.textMode = 'embedded';
+  comic.panels[0].caption = '代替表示でも一度だけ読める説明';
+  comic.panels[0].dialogue = '一度だけ読み上げる会話';
+  const generation = { ...fixtures.succeeded, comic };
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: detail(generation) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('**/api/v1/assets/*/url', (route) => route.abort('failed'));
+
+  await page.goto(`/entries/${entryId}`);
+  const fallback = page.locator('.comic-image-fallback');
+  await expect(fallback).toBeVisible();
+  await expect(fallback.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
+  await expect(fallback.getByText('「一度だけ読み上げる会話」', { exact: true })).toBeVisible();
+  await expect(page.locator('.comic-transcript ol.sr-only')).toHaveCount(0);
+  await expect(page.getByText(comic.panels[0].caption, { exact: true })).toHaveCount(1);
+});
+
 test('queuedからrunning、succeededへ進み、完了後はポーリングを止める', async ({ page }) => {
   await page.clock.install();
   let generation: Generation = fixtures.queued;
