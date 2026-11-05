@@ -159,6 +159,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     if (!navigator.onLine) {
       refreshOnlineStatus();
       setError('日記は保存しました。オフラインのため漫画の受付はしていません。');
+      setGenerationFailureEntry(entry);
       onActivityChange({ dirty: false, busy: false, failed: true });
       if (!hasBlockedNavigation())
         navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
@@ -175,6 +176,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
               ? '本日の生成上限に達しています。日記は保存しました。'
               : '利用枠を確認できないため、漫画の受付を停止しています。日記は保存しました。',
         );
+        setGenerationFailureEntry(entry);
         onActivityChange({ dirty: false, busy: false, failed: true });
         if (!hasBlockedNavigation())
           navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
