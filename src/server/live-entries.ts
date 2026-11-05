@@ -44,6 +44,10 @@ const rpcFailures: Record<string, { status: LiveEntryError['status']; code: stri
   REVISION_CONFLICT: { status: 409, code: 'REVISION_CONFLICT' },
   ENTRY_BUSY: { status: 409, code: 'ENTRY_BUSY' },
   DRAFT_LIMIT_REACHED: { status: 429, code: 'DRAFT_LIMIT_REACHED' },
+  ENTRY_OWNER_CREATE_LIMIT_REACHED: { status: 429, code: 'ENTRY_CREATE_RATE_LIMIT_REACHED' },
+  ENTRY_GLOBAL_CREATE_LIMIT_REACHED: { status: 429, code: 'ENTRY_CREATE_RATE_LIMIT_REACHED' },
+  ENTRY_OWNER_RETAINED_LIMIT_REACHED: { status: 429, code: 'ENTRY_RETAINED_LIMIT_REACHED' },
+  ENTRY_GLOBAL_RETAINED_LIMIT_REACHED: { status: 429, code: 'ENTRY_RETAINED_LIMIT_REACHED' },
 };
 
 function unavailable(): LiveEntryError {

@@ -23,6 +23,9 @@ const apiErrorMessages: Record<string, string> = {
   CAPTCHA_REQUIRED: '生成用の新しい確認が必要です。新しい確認を取得してからお試しください。',
   CONSENT_REQUIRED: '利用条件の確認が必要です。内容を確認してから再操作してください。',
   DRAFT_LIMIT_REACHED: '未生成の記録が上限に達しています。不要な下書きを整理してください。',
+  ENTRY_CREATE_RATE_LIMIT_REACHED: '本日の記録作成上限に達しています。明日以降にお試しください。',
+  ENTRY_RETAINED_LIMIT_REACHED:
+    '未回収の記録が上限に達しています。削除済みの記録が回収された後にお試しください。',
   ENTRY_BUSY: 'この記録の漫画を作成中です。最新の状態を確認してください。',
   GENERATION_DISABLED: '現在、漫画の受付を停止しています。保存済みの記録は引き続き見られます。',
   NO_GENERATION_REQUEST: '確認できる受付記録がありません。新しい確認を取得して再操作してください。',

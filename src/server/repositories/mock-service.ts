@@ -20,11 +20,16 @@ export function createMockEntry(
   owner: string,
   input: z.infer<typeof createEntrySchema>,
 ) {
+  const requestKey = `${owner}:${input.createRequestId}`;
+  if (repository.entryTombstones.has(requestKey)) throw new ApiError(404, 'NOT_FOUND');
   const existing = [...repository.entries.values()].find(
     (x) => x.owner === owner && x.requestId === input.createRequestId,
   );
   if (existing) {
-    if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
+    if (
+      existing.createFingerprint !==
+      JSON.stringify([input.diaryDate, input.body, input.consentVersion])
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     return existing.entry;
   }
@@ -43,7 +48,12 @@ export function createMockEntry(
     createdAt: now,
     updatedAt: now,
   };
-  repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
+  repository.entries.set(entry.id, {
+    owner,
+    requestId: input.createRequestId,
+    createFingerprint: JSON.stringify([input.diaryDate, input.body, input.consentVersion]),
+    entry,
+  });
   return entry;
 }
 

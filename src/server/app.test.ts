@@ -82,6 +82,69 @@ describe('local mock API', () => {
     expect(detail.revision).toBe(2);
     expect(detail.latestGeneration.entryRevision).toBe(1);
   });
+  it('uses the original create fingerprint after edits and retains a deleted key tombstone per owner', async () => {
+    const createRequestId = crypto.randomUUID();
+    const firstOwnerPayload = {
+      createRequestId,
+      diaryDate: jstToday(),
+      body: '作成時の架空日記',
+      consentVersion: 'v1',
+    };
+    const created = await request('/entries', 'POST', firstOwnerPayload);
+    const firstEntry = (await created.json()) as { id: string; body: string; revision: number };
+    expect(created.status).toBe(201);
+
+    const edited = await request(`/entries/${firstEntry.id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: jstToday(),
+      body: '編集後の架空日記',
+    });
+    expect((await edited.json()).revision).toBe(2);
+
+    const replayed = await request('/entries', 'POST', firstOwnerPayload);
+    expect(replayed.status).toBe(201);
+    expect(await replayed.json()).toMatchObject({
+      id: firstEntry.id,
+      body: '編集後の架空日記',
+      revision: 2,
+    });
+    expect(
+      (await request('/entries', 'POST', { ...firstOwnerPayload, body: '別の作成内容' })).status,
+    ).toBe(409);
+
+    const secondOwner = crypto.randomUUID();
+    const secondEntryResponse = await request(
+      '/entries',
+      'POST',
+      { ...firstOwnerPayload, body: '別所有者の架空日記' },
+      {},
+      secondOwner,
+    );
+    const secondEntry = (await secondEntryResponse.json()) as { id: string; body: string };
+    expect(secondEntryResponse.status).toBe(201);
+    expect(secondEntry.id).not.toBe(firstEntry.id);
+
+    expect((await request(`/entries/${firstEntry.id}`, 'DELETE')).status).toBe(202);
+    expect((await request('/entries', 'POST', firstOwnerPayload)).status).toBe(404);
+    expect(
+      (await request('/entries', 'POST', { ...firstOwnerPayload, body: '再利用を試す別内容' }))
+        .status,
+    ).toBe(404);
+    expect(
+      await (
+        await request(
+          '/entries',
+          'POST',
+          { ...firstOwnerPayload, body: '別所有者の架空日記' },
+          {},
+          secondOwner,
+        )
+      ).json(),
+    ).toMatchObject({
+      id: secondEntry.id,
+      body: '別所有者の架空日記',
+    });
+  });
   it('isolates entry, generation and asset by mock session', async () => {
     const entry = await create();
     await request(
