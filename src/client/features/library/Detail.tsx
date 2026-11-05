@@ -403,6 +403,8 @@ function DetailContent({
         setEntrySafely(latest);
         const status = latest.latestGeneration?.status;
         if (status === 'queued' || status === 'running') {
+          setReceiptUncertain(false);
+          setGenerationCaptchaRetry(false);
           setError('');
           setForegroundActionFailed(false);
         }
