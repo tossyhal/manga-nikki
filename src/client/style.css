@@ -2012,3 +2012,158 @@ output {
     transition: background-color 120ms ease;
   }
 }
+
+@media (min-width: 960px) {
+  .app-shell {
+    max-width: 1120px;
+  }
+
+  .app-shell.primary-shell {
+    max-width: 1120px;
+  }
+
+  .primary-shell .app-notices {
+    width: min(960px, calc(100% - 80px));
+    margin-inline: auto;
+  }
+
+  .primary-shell .notice {
+    margin-inline: 0;
+  }
+
+  .primary-shell .app-main {
+    padding: 24px 40px 18px;
+  }
+
+  .app-main:not(.primary-content) {
+    padding: 24px 40px calc(68px + 54px + 14px + 12px + 24px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .home-page,
+  .new-entry-page {
+    width: 100%;
+    max-width: 960px;
+    margin-inline: auto;
+  }
+
+  .home-page {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto 1fr;
+    align-content: start;
+    align-items: start;
+    gap: 20px 32px;
+    min-height: 100%;
+    padding-bottom: 0;
+  }
+
+  .home-date {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    margin-bottom: 0;
+  }
+
+  .today-section {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .today-section h1:not(.sr-only) {
+    margin-bottom: 12px;
+  }
+
+  .recent-records {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    margin-top: 0;
+  }
+
+  .home-today-hero {
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 20px;
+    padding: 22px;
+  }
+
+  .home-today-image {
+    width: 150px;
+    height: 168px;
+  }
+
+  .home-today-content h2 {
+    font-size: 18px;
+  }
+
+  .home-today-actions {
+    max-width: 240px;
+    gap: 8px;
+  }
+
+  .today-sample-card {
+    grid-template-columns: 116px minmax(0, 1fr);
+    gap: 20px;
+    padding: 22px;
+  }
+
+  .today-sample-card > img {
+    width: 116px;
+    height: 180px;
+  }
+
+  .recent-records .entry-history-card {
+    min-height: 88px;
+    margin-inline: 0;
+  }
+
+  .new-entry-page {
+    min-height: 100%;
+  }
+
+  .new-entry-form {
+    min-height: 0;
+  }
+
+  .new-entry-page .entry-editor-card {
+    min-height: 260px;
+  }
+
+  .primary-shell .primary-action-dock {
+    width: min(520px, 100%);
+    margin-top: 16px;
+  }
+
+  .bottom-nav,
+  .primary-shell .bottom-nav {
+    width: min(360px, calc(100vw - 40px));
+  }
+
+  .detail-page {
+    width: 100%;
+    max-width: 960px;
+    margin-inline: auto;
+    padding-bottom: 8px;
+  }
+
+  .detail-page.is-saved .comic {
+    width: 100%;
+    margin-inline: auto;
+  }
+
+  .comic.is-panels .comic-images {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .comic.is-panels .comic-panel-caption {
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 4px 2px;
+    font-size: 13px;
+  }
+
+  .detail-page .original-diary > p {
+    max-width: 68ch;
+    margin-inline: auto;
+  }
+}
