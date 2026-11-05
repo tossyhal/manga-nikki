@@ -936,6 +936,7 @@ test('アプリ内リンクと戻る/進むの確認を取り消した場合は�
   await page.goForward();
   await expect(page).toHaveURL(/\/new$/);
   await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expectDefaultLibraryLocation(page);
   await page.goBack();
   await expect(page).toHaveURL(/\/new$/);
   const forwardDraft = '進む操作でも確認する架空の日記';
