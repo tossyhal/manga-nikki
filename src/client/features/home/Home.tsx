@@ -1,7 +1,8 @@
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { jstToday, type Entry, type Generation } from '../../../shared/schemas';
+import { type Entry, type Generation } from '../../../shared/schemas';
+import { jstToday } from '../../../shared/date';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
 import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
@@ -118,7 +119,8 @@ export function Home({
   const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
-  const todayEntries = entries.filter((entry) => entry.diaryDate === jstToday());
+  const currentDay = jstToday();
+  const todayEntries = entries.filter((entry) => entry.diaryDate === currentDay);
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
   const [sampleOpen, setSampleOpen] = useState(false);

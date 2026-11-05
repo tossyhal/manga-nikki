@@ -1,4 +1,4 @@
-import { jstToday } from '../../../shared/schemas';
+import { jstToday } from '../../../shared/date';
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { Icon } from '../../app/Icon';
 

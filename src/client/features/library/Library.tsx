@@ -11,7 +11,7 @@ import { PageControls } from './LibraryPageControls';
 import { LibraryViewTabs } from './LibraryViewTabs';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { jstToday } from '../../../shared/schemas';
+import { jstToday } from '../../../shared/date';
 import { Icon } from '../../app/Icon';
 import { EntryHistory } from './EntryHistory';
 import {
