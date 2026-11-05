@@ -10,8 +10,9 @@ import {
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-test('mock設定では固定漫画を生成でき、端末の一時保存状態を表示する', async ({ page }) => {
+test('mock設定では生成API経由で固定漫画を表示する', async ({ page }) => {
   let generation: Generation | null = null;
+  const generationMockFlags: boolean[] = [];
   let generationRequests = 0;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', (route) =>
@@ -34,7 +35,9 @@ test('mock設定では固定漫画を生成でき、端末の一時保存状態�
   });
   await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
     generationRequests++;
-    generation = generationFixtures(entryId, generationId).succeeded;
+    const succeededGeneration = generationFixtures(entryId, generationId).succeeded;
+    generation = succeededGeneration;
+    generationMockFlags.push(succeededGeneration.mock);
     return route.fulfill({
       status: 202,
       json: {
@@ -59,14 +62,15 @@ test('mock設定では固定漫画を生成でき、端末の一時保存状態�
   );
 
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByText('一時保存しました。', { exact: true })).toBeVisible();
+  await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
+  expect(generationMockFlags).toEqual([true]);
 });
 
-test('live設定では匿名保存の案内を出し、未接続の生成操作を無効にする', async ({ page }) => {
+test('live設定では認証済み記録を表示し、生成利用不可を保つ', async ({ page }) => {
   const apiAuthorization: string[] = [];
   const externalAuthRequests: string[] = [];
   let generationRequests = 0;
@@ -121,9 +125,7 @@ test('live設定では匿名保存の案内を出し、未接続の生成操作�
   });
 
   await page.goto(`/entries/${entryId}`);
-  await expect(
-    page.getByText('この匿名アカウントに保存しました。保存後30日を過ぎると閲覧できなくなります。'),
-  ).toBeVisible();
+  await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
   await expect(page.getByRole('button', { name: '漫画の受付を停止しています' })).toBeDisabled();
   expect(apiAuthorization.length).toBeGreaterThan(0);
   expect(apiAuthorization.every((value) => value === 'Bearer fixture-live-access-token')).toBe(

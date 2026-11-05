@@ -69,7 +69,10 @@ test('同じ日の21件目まで取得して、正確な件数と記録を表示
   await page.goto('/library');
 
   const { month, day } = parts(today);
-  await expect(page.getByRole('heading', { name: `${month}月${day}日・21件` })).toBeVisible();
+  const selectedDayHeading = page.locator('.library-day-heading');
+  await expect(selectedDayHeading).toBeVisible();
+  await expect(selectedDayHeading).toContainText(`${month}月${day}日`);
+  await expect(selectedDayHeading).toContainText('21件');
   const dayControls = page.getByRole('navigation', { name: '選択日の記録のページ送り' });
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 11; index++) {
@@ -126,12 +129,12 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
 
   await page.goto('/library');
   await expect(page.getByRole('link', { name: /今月に書いた架空日記/ })).toBeVisible();
-  expect(requestedCursors.filter(Boolean)).toEqual([]);
-
-  await page.getByRole('button', { name: '一覧で見る' }).click();
   await expect(
     page.getByRole('heading', { name: `${parts(today).year}年${parts(today).month}月` }),
   ).toBeVisible();
+  expect(requestedCursors.filter(Boolean)).toEqual([]);
+
+  await page.getByRole('button', { name: '一覧で見る' }).click();
   const listControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
   for (let index = 0; index < 6; index++) {
     await listControls.getByRole('button', { name: '次へ' }).click();
@@ -269,12 +272,9 @@ test('記録全体が空なら新規作成への導線を表示する', async ({
 
   await page.goto('/library');
 
-  await expect(page.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
-  await expect(
-    page
-      .getByRole('region', { name: 'まだ記録がありません' })
-      .getByRole('link', { name: '日記を書く' }),
-  ).toHaveAttribute('href', '/new');
+  const library = page.getByRole('region', { name: '記録' });
+  await expect(library.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
+  await expect(library.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
 });
 
 test('セッションを失った記録一覧は以前の記録にアクセスできない状態を説明する', async ({ page }) => {
