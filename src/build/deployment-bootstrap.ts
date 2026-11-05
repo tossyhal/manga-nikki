@@ -123,7 +123,11 @@ export function renderBootstrapSummary(
     'INTERNAL_ERROR',
     'SUMMARY_WRITE_FAILED',
   ];
-  const safeErrorCode = errorCode && errorCodes.includes(errorCode) ? errorCode : undefined;
+  const safeErrorCode = errorCode
+    ? errorCodes.includes(errorCode)
+      ? errorCode
+      : 'INTERNAL_ERROR'
+    : undefined;
   const result = safeErrorCode ? `失敗（${safeErrorCode}）` : '成功';
   const creation = {
     'not-requested': '未実行',

@@ -7,6 +7,7 @@ import {
   renderBootstrapSummary,
   runDeploymentBootstrap,
   type BootstrapContext,
+  type BootstrapDisplayErrorCode,
   type BootstrapErrorCode,
   type BootstrapProgress,
 } from './deployment-bootstrap';
@@ -410,5 +411,22 @@ describe('staging Worker bootstrap', () => {
     expect(summary).toContain(STAGING_ACCOUNT_ID);
     expect(summary).toContain(STAGING_WORKER_NAME);
     expect(summary).toContain('route/custom domain');
+  });
+
+  it('未知error codeでも成功にせず、INTERNAL_ERRORへ置換して入力値を隠す', () => {
+    const errorSentinel = 'unknown-error-code-secret-sentinel';
+    const summary = renderBootstrapSummary(
+      {
+        operation: 'check',
+        existence: 'unknown',
+        creation: 'not-requested',
+        publicUrlCheck: 'not-run',
+      },
+      undefined,
+      errorSentinel as BootstrapDisplayErrorCode,
+    );
+
+    expect(summary).toContain('失敗（INTERNAL_ERROR）');
+    expect(summary).not.toContain(errorSentinel);
   });
 });

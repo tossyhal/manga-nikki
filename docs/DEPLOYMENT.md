@@ -22,6 +22,8 @@ GitHubの[staging環境](https://github.com/tossyhal/manga-nikki/settings/enviro
 
 初期作成用トークンを登録している間、**Deployment branches and tags**は**Selected branches and tags**を選び、Branchの`main`だけを許可します。タグや他ブランチは許可しません。workflow内のmain判定だけでは、別ブランチに追加したworkflowからEnvironment Secretを読むことを防げないため、最初の`check`より前にEnvironment側の制限を確認します。developを許可するのは、初期作成用トークンの失効・通常CD用資格情報への移行とdevelop保護を済ませた後です。
 
+最初の`check`より前に[Rulesets](https://github.com/tossyhal/manga-nikki/settings/rules)も確認し、mainに適用する有効なルールでPR経由の変更を必須にし、直接push・force pushを禁止します。初期設定用workflowを含む変更は本人がレビューし、権限を持つ担当者を限定します。
+
 | 種類 | 名前 | 設定内容 |
 | --- | --- | --- |
 | Environment Secret | `BWS_ACCESS_TOKEN` | `manga-nikki-dev-cd`のBitwardenアクセストークン |
