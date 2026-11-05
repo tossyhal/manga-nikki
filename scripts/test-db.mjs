@@ -368,9 +368,11 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
   console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
+  console.log('成功: OpenAI profile allowlist・予算quota・saving開始・claim/削除期限ゲート');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -1014,6 +1016,55 @@ try {
     `0:${generationRaceCountersBefore}`,
   );
   console.log('成功: policy lock下のpurge/生成予約競合と退避済みkey再利用を拒否');
+
+  const openAiRaceActor = '94949494-9494-4949-8494-949494949494';
+  const openAiRaceKey = '95959595-9595-4959-8595-959595959595';
+  const openAiRaceEntry = succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${openAiRaceActor}');
+      update private.generation_policy set enabled = true, user_daily_limit = 20,
+        global_daily_limit = 1000, global_total_limit = 1000, budget_micro_usd = 1000000,
+        model_profile_json = '{"profile_id":"openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1","is_mock":false,"max_cost_micro_usd":19,"max_image_calls":4,"provider":"openai","script_model":"gpt-4.1-mini-2025-04-14","image_model":"gpt-image-2.5-flare","color_mode":"monochrome"}'::jsonb;
+      set role service_role;
+      select (public.create_entry('${openAiRaceActor}',gen_random_uuid(),
+        (statement_timestamp() at time zone 'Asia/Tokyo')::date,'OpenAI予約競合の架空日記','v1')).id;
+    `),
+  );
+  const openAiQuotaBefore = succeeded(
+    await sql(`select count || ':' || committed_micro_usd from private.quota_counters
+      where scope = 'global_total';`),
+  )
+    .split(':')
+    .map(Number);
+  const openAiDuplicateReservations = await runBehindLock({
+    holderName: 'mn-db-openai-reserve-duplicate-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-openai-reserve-duplicate-',
+    queries: Array.from(
+      { length: 6 },
+      () =>
+        `set role service_role; select public.reserve_openai_generation('${openAiRaceActor}','${openAiRaceEntry}',1,'${openAiRaceKey}',true);`,
+    ),
+  });
+  const openAiReceipts = openAiDuplicateReservations.map((result) => JSON.parse(succeeded(result)));
+  assert.equal(new Set(openAiReceipts.map((receipt) => receipt.generation_id)).size, 1);
+  assert.equal(
+    succeeded(
+      await sql(`select (select count(*) from public.generations where owner_id = '${openAiRaceActor}') || ':' ||
+        (select count(*) from private.reservations where owner_id = '${openAiRaceActor}');`),
+    ),
+    '1:1',
+  );
+  assert.deepEqual(
+    succeeded(
+      await sql(`select count || ':' || committed_micro_usd from private.quota_counters
+        where scope = 'global_total';`),
+    )
+      .split(':')
+      .map(Number),
+    [openAiQuotaBefore[0] + 1, openAiQuotaBefore[1] + 19],
+  );
+  console.log('成功: OpenAI wrapperの同一キー6並列予約はjob・reservation・予算計上が各1件');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);
