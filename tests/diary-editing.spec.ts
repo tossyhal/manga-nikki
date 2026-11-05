@@ -6,7 +6,12 @@ import {
   liveClientConfigFixture,
   mockClientConfigFixture,
 } from './fixtures/client-config';
-import { clickAppDialogButton, clickEntryMenuItem, openEntryMenu } from './fixtures/ui';
+import {
+  clickAppDialogButton,
+  clickEntryMenuItem,
+  expectDefaultLibraryLocation,
+  openEntryMenu,
+} from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -128,7 +133,7 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   const updatedBody = '😀'.repeat(1000);
   await page.getByLabel('日付', { exact: true }).fill('2026-01-02');
   await diary.fill(updatedBody);
-  await expect(page.getByText('1000 / 1,000文字')).toBeVisible();
+  await expect(page.getByText('1000 / 1,000', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '保存', exact: true }).click();
 
   await expect(page.locator('.detail-date-row time')).toHaveAttribute('datetime', '2026-01-02');
@@ -474,7 +479,7 @@ test('変更がない入力画面では離脱確認を表示しない', async ({
 
   await page.goto('/new');
   await page.getByRole('link', { name: '記録', exact: true }).click();
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
 
   await configureDetail(page);
   await page.goto(`/entries/${entryId}`);
@@ -483,7 +488,7 @@ test('変更がない入力画面では離脱確認を表示しない', async ({
   await diary.fill('いったん変えて元に戻す');
   await diary.fill(draftEntryDetailFixture.body);
   await page.getByRole('link', { name: '記録', exact: true }).click();
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
   expect(dialogCount).toBe(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
@@ -517,7 +522,7 @@ test('未保存確認はモーダルとして背景のフォーカスを止め�
 
   await recordLink.click();
   await clickAppDialogButton(page, title, '保存せずに離れる');
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
 });
 
 test('アプリ内リンクと戻る/進むの確認を取り消した場合は入力が残る', async ({ page }) => {
@@ -577,7 +582,7 @@ test('アプリ内リンクと戻る/進むの確認を取り消した場合は�
     '入力内容が保存されていません',
     '保存せずに離れる',
   );
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
 });
 
 test('詳細編集の未保存入力はアプリ内移動とhard reload前に確認する', async ({ page }) => {
@@ -648,14 +653,14 @@ for (const accept of [false, true]) {
       '処理中です',
       accept ? '移動する' : '入力に戻る',
     );
-    if (accept) await expect(page).toHaveURL(/\/library$/);
+    if (accept) await expectDefaultLibraryLocation(page);
     else {
       await expect(page).toHaveURL(/\/new$/);
       await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
     }
 
     releaseRequest();
-    if (accept) await expect(page).toHaveURL(/\/library$/);
+    if (accept) await expectDefaultLibraryLocation(page);
     else await expect(page).toHaveURL(/\/entries\//);
   });
 }
@@ -707,7 +712,7 @@ test('削除応答後に別記録を編集中なら新しい画面の状態を�
     '処理中です',
     '移動する',
   );
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
   await page.getByText('編集中に保護するBの記録', { exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
   await clickEntryMenuItem(page, '日記を編集');

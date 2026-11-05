@@ -421,6 +421,64 @@ test('入力カードはviewportが高くなると利用可能な高さに合わ
   expect(tallCardHeight).toBeGreaterThan(shortCardHeight + 40);
 });
 
+test('横長の短い入力画面では日付・本文・保存CTAを重ねず本文領域をスクロールできる', async ({
+  page,
+}) => {
+  await installMockUiRoutes(page);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.goto('/new');
+
+  const dateControl = page.locator('.date-control');
+  const card = page.locator('.entry-editor-card');
+  const primaryAction = page.locator('.primary-action-dock > .button');
+  await expect(dateControl).toBeVisible();
+  await expect(card).toBeVisible();
+  await expect(primaryAction).toBeEnabled();
+
+  const initialLayout = await page.evaluate(() => {
+    const bounds = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`要素がありません: ${selector}`);
+      const { top, bottom } = element.getBoundingClientRect();
+      return { top, bottom };
+    };
+    const main = document.querySelector('#main');
+    if (!(main instanceof HTMLElement)) throw new Error('本文領域がありません');
+    const mainBounds = main.getBoundingClientRect();
+    return {
+      date: bounds('.date-control'),
+      card: bounds('.entry-editor-card'),
+      action: bounds('.primary-action-dock > .button'),
+      mainBottom: mainBounds.bottom,
+    };
+  });
+  expect(initialLayout.date.bottom).toBeLessThanOrEqual(initialLayout.card.top);
+  expect(initialLayout.card.bottom).toBeLessThanOrEqual(initialLayout.action.top);
+
+  await primaryAction.scrollIntoViewIfNeeded();
+  await expect(primaryAction).toBeInViewport();
+  const scrolledLayout = await page.evaluate(() => {
+    const main = document.querySelector('#main');
+    const action = document.querySelector('.primary-action-dock > .button');
+    if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement))
+      throw new Error('本文領域または保存操作がありません');
+    const mainBounds = main.getBoundingClientRect();
+    const actionBounds = action.getBoundingClientRect();
+    return {
+      mainTop: mainBounds.top,
+      mainBottom: mainBounds.bottom,
+      mainScrollTop: main.scrollTop,
+      actionTop: actionBounds.top,
+      actionBottom: actionBounds.bottom,
+    };
+  });
+  expect(scrolledLayout.actionTop).toBeGreaterThanOrEqual(scrolledLayout.mainTop);
+  expect(scrolledLayout.actionBottom).toBeLessThanOrEqual(scrolledLayout.mainBottom);
+  if (initialLayout.action.bottom > initialLayout.mainBottom) {
+    expect(scrolledLayout.mainScrollTop).toBeGreaterThan(0);
+  }
+});
+
 test('オフライン通知と拡大表示がある短い画面でも記録ページ送りへ到達する', async ({ page }) => {
   await installMockUiRoutes(page, makeEntries(20));
   await page.setViewportSize({ width: 390, height: 480 });

@@ -165,6 +165,73 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
   ]);
 });
 
+test('一覧のカーソル取得中にカレンダーへ切り替えても表示とURLを保つ', async ({ page }) => {
+  const today = jstToday();
+  const previousMonth = shiftMonth(monthKey(today), -1);
+  const firstPage = Array.from({ length: 20 }, (_, index) =>
+    makeEntry(
+      100 - index,
+      index === 19 ? `${previousMonth}-01` : today,
+      `切替確認用の架空日記${index + 1}`,
+    ),
+  );
+  let releaseCursor!: () => void;
+  let signalCursorRequest!: () => void;
+  const cursorGate = new Promise<void>((resolve) => {
+    releaseCursor = resolve;
+  });
+  const cursorRequested = new Promise<void>((resolve) => {
+    signalCursorRequest = resolve;
+  });
+  const cursorRequests: string[] = [];
+
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    if (!cursor)
+      return route.fulfill({
+        json: { items: firstPage, nextCursor: 'fixture-cursor-20' },
+      });
+
+    cursorRequests.push(cursor);
+    signalCursorRequest();
+    await cursorGate;
+    return route.fulfill({
+      json: {
+        items: [makeEntry(80, `${previousMonth}-01`, 'カーソル取得後の架空日記')],
+        nextCursor: null,
+      },
+    });
+  });
+
+  await page.goto(`/library?view=list&month=${monthKey(today)}&day=${today}&listPage=6&dayPage=1`);
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  const listControls = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
+  await expect(listControls).toContainText('6ページ目');
+  const nextPage = listControls.getByRole('button', { name: '次へ' });
+  await expect(nextPage).toBeEnabled();
+
+  const cursorResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/v1/entries' && url.searchParams.has('cursor');
+  });
+  const calendarTab = page.getByRole('tab', { name: 'カレンダー' });
+  try {
+    await nextPage.click();
+    await cursorRequested;
+    await calendarTab.click();
+    await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('calendar');
+  } finally {
+    releaseCursor();
+  }
+  await cursorResponse;
+  await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('calendar');
+  await expect(listPanel).toBeHidden();
+  expect(cursorRequests).toEqual(['fixture-cursor-20']);
+});
+
 test('記録表示タブはtabとtabpanelを結び、矢印・Home・Endで操作できる', async ({ page }) => {
   const today = jstToday();
   await useMockConfig(page);
@@ -203,6 +270,47 @@ test('記録表示タブはtabとtabpanelを結び、矢印・Home・Endで操�
   await page.keyboard.press('Home');
   await expect(calendarTab).toBeFocused();
   await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+});
+
+test('320px幅でもカレンダー日付ボタンの左右端を操作できる', async ({ page }) => {
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({ json: { items: [], nextCursor: null } }),
+  );
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto('/library');
+
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  const dateButtons = calendarPanel.locator('.library-calendar .library-day-button');
+  await expect(calendarPanel.getByRole('table')).toBeVisible();
+  await expect(dateButtons.first()).toBeEnabled();
+
+  const buttonEdges = await dateButtons.evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const bounds = button.getBoundingClientRect();
+      const y = bounds.top + bounds.height / 2;
+      const leftTarget = document.elementFromPoint(bounds.left + 2, y);
+      const rightTarget = document.elementFromPoint(bounds.right - 2, y);
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        width: bounds.width,
+        height: bounds.height,
+        leftIsHitTarget: leftTarget === button || button.contains(leftTarget),
+        rightIsHitTarget: rightTarget === button || button.contains(rightTarget),
+      };
+    }),
+  );
+
+  expect(buttonEdges.length).toBeGreaterThan(0);
+  for (const bounds of buttonEdges) {
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(320);
+    expect(bounds.width).toBeGreaterThanOrEqual(44);
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.leftIsHitTarget).toBe(true);
+    expect(bounds.rightIsHitTarget).toBe(true);
+  }
 });
 
 test('詳細から戻る・下部ナビ・ブラウザ戻るで記録のURL状態を復元する', async ({ page }) => {

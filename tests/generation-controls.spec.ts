@@ -6,7 +6,12 @@ import {
   liveClientConfigFixture,
   mockClientConfigFixture,
 } from './fixtures/client-config';
-import { clickAppDialogButton, clickEntryMenuItem, openEntryMenu } from './fixtures/ui';
+import {
+  clickAppDialogButton,
+  clickEntryMenuItem,
+  expectDefaultLibraryLocation,
+  openEntryMenu,
+} from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -627,11 +632,11 @@ test('生成処理中の連打と離脱を確認し、遅れた応答では画�
   await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
   await clickAppDialogButton(page, '処理中です', '移動する');
   await navigation;
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
 
   releaseRequest();
   await page.waitForTimeout(200);
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
   expect(generationReads).toBe(0);
   expect(generationRequests).toBe(1);
 });

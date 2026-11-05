@@ -1,4 +1,16 @@
 import { expect, type Page } from '@playwright/test';
+import { jstToday } from '../../src/shared/schemas';
+
+export async function expectDefaultLibraryLocation(page: Page) {
+  const today = jstToday();
+  const expected = `/library?view=calendar&month=${today.slice(0, 7)}&day=${today}&listPage=1&dayPage=1`;
+  await expect
+    .poll(() => {
+      const url = new URL(page.url());
+      return `${url.pathname}${url.search}`;
+    })
+    .toBe(expected);
+}
 
 export async function openEntryMenu(page: Page) {
   const trigger = page.getByRole('button', { name: 'その他の操作' });

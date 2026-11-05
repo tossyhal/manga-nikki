@@ -81,7 +81,10 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
   await expect(page.locator('.comic-panel-card')).toHaveCount(4);
   for (const panel of comic.panels) {
-    await expect(page.getByText(panel.caption, { exact: true })).toBeVisible();
+    await expect(page.getByText(panel.caption, { exact: true })).toHaveCount(1);
+    if (panel.dialogue) {
+      await expect(page.getByText(`「${panel.dialogue}」`, { exact: true })).toHaveCount(1);
+    }
   }
   await expect(page.getByText('「絵がなくても残る会話」', { exact: true })).toBeVisible();
   await expect.poll(() => requestedAssetIds.size).toBe(4);
@@ -230,6 +233,7 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
   await expect(listSummaries).toHaveCount(3);
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 7; index++) {
+    await expect(pageControls).toContainText(`${index + 1}ページ目`);
     const summaries = await listSummaries.allTextContents();
     expect(summaries).toHaveLength(3);
     summaries.forEach((summary) => visibleSummaries.add(summary));

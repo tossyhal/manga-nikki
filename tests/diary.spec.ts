@@ -2,7 +2,11 @@ import { expect, test } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { liveClientConfigFixture, mockClientConfigFixture } from './fixtures/client-config';
-import { clickAppDialogButton, clickEntryMenuItem } from './fixtures/ui';
+import {
+  clickAppDialogButton,
+  clickEntryMenuItem,
+  expectDefaultLibraryLocation,
+} from './fixtures/ui';
 test('入力からモック漫画を再読込し、最近の記録から削除できる', async ({ page }) => {
   const externalAuthRequests: string[] = [];
   const entryPosts: Array<{ body: string; consentVersion: string }> = [];
@@ -49,7 +53,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
 
   await clickEntryMenuItem(page, '日記を削除');
   await clickAppDialogButton(page, deleteDialogTitle, '削除する');
-  await expect(page).toHaveURL(/\/library$/);
+  await expectDefaultLibraryLocation(page);
   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toHaveCount(0);
   expect(entryPosts).toMatchObject([{ body: '図書館で本を読んだ。', consentVersion: 'v1' }]);
   expect(externalAuthRequests).toEqual([]);
@@ -96,7 +100,9 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
     await route.continue();
   });
   await page.goto('/new');
-  await expect(page.getByText('読み込んでいます…')).toBeVisible();
+  const loadingCard = page.locator('.app-state-card');
+  await expect(loadingCard.getByRole('heading', { name: '準備しています' })).toBeVisible();
+  await expect(loadingCard).toContainText('入力画面を読み込んでいます。');
   await expect(page.getByText('保存機能は利用できません。')).not.toBeVisible();
   release();
   await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
@@ -115,7 +121,8 @@ test('設定取得失敗時は案内と公開サンプルだけを表示する',
 
   for (const path of ['/', '/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
     await page.goto(path);
-    await expect(page.locator('.notice')).toHaveText(message);
+    const stateCard = page.locator('.app-state-card[role="alert"]');
+    await expect(stateCard.locator('p')).toHaveText(message);
     if (path === '/') {
       await expect(page.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'サンプルを見る' })).toBeVisible();
