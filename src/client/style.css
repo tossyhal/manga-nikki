@@ -110,6 +110,7 @@ a {
 }
 
 .primary-shell .app-header {
+  grid-row: 1;
   min-height: 56px;
   padding-inline: 20px;
 }
@@ -141,6 +142,10 @@ a {
   display: none;
 }
 
+.primary-shell .app-notices {
+  grid-row: 2;
+}
+
 .notice {
   margin: 0 24px 12px;
   color: #6f6f6f;
@@ -164,6 +169,7 @@ a {
 }
 
 .primary-shell .app-main {
+  grid-row: 3;
   width: 100%;
   min-width: 0;
   min-height: 0;
@@ -1779,6 +1785,7 @@ p {
 }
 
 .primary-shell .bottom-nav {
+  grid-row: 4;
   position: static;
   bottom: auto;
   left: auto;
