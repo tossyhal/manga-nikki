@@ -32,7 +32,7 @@ vi.mock('openai', () => ({
     new File([data.slice().buffer], name, options),
 }));
 const png =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=';
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12P4DwQACfsD/WMmxY8AAAAASUVORK5CYII=';
 const imageResponse = () => ({
   request_id: 'request-test',
   data: {

@@ -27,6 +27,22 @@ create table private.comic_save_tasks (
 alter table private.comic_save_tasks enable row level security;
 revoke all on private.comic_save_tasks from public, anon, authenticated, service_role;
 
+create table private.storage_deletion_outbox (
+  object_path text primary key
+    check (object_path ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp)$'),
+  next_check_at timestamptz not null,
+  claim_token uuid,
+  lease_expires_at timestamptz,
+  attempt_count bigint not null default 0 check (attempt_count >= 0),
+  created_at timestamptz not null default pg_catalog.clock_timestamp(),
+  last_checked_at timestamptz,
+  check ((claim_token is null) = (lease_expires_at is null))
+);
+create index storage_deletion_outbox_due_idx
+  on private.storage_deletion_outbox (next_check_at, object_path);
+alter table private.storage_deletion_outbox enable row level security;
+revoke all on private.storage_deletion_outbox from public, anon, authenticated, service_role;
+
 drop policy assets_read_own_live_entry on public.assets;
 create policy assets_read_own_live_entry on public.assets for select to authenticated
   using (owner_id = (select auth.uid()) and exists (
@@ -847,6 +863,11 @@ begin
   ) paths;
   if v_object_paths is distinct from v_lease.object_paths then return false; end if;
 
+  insert into private.storage_deletion_outbox (object_path, next_check_at)
+  select path.object_path, v_now + interval '1 hour'
+  from pg_catalog.unnest(v_object_paths) path(object_path)
+  on conflict (object_path) do nothing;
+
   insert into private.entry_tombstones (owner_id, create_request_id, entry_id, purged_at)
     values (v_entry.owner_id, v_entry.create_request_id, v_entry.id, v_now)
     on conflict (owner_id, create_request_id) do nothing;
@@ -908,5 +929,89 @@ revoke all on function public.finalize_retention_cleanup(uuid, uuid, boolean)
   from public, anon, authenticated;
 grant execute on function public.claim_retention_cleanup(integer) to service_role;
 grant execute on function public.finalize_retention_cleanup(uuid, uuid, boolean) to service_role;
+
+create function public.claim_storage_deletion_cleanup(p_limit integer default 40)
+returns jsonb language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_now timestamptz := pg_catalog.clock_timestamp();
+  v_tasks jsonb;
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 40 then
+    raise exception using message = 'INVALID_LIMIT';
+  end if;
+
+  with candidates as materialized (
+    select outbox.object_path
+    from private.storage_deletion_outbox outbox
+    where outbox.next_check_at <= v_now
+      and (outbox.claim_token is null or outbox.lease_expires_at <= v_now)
+    order by outbox.next_check_at, outbox.object_path
+    limit p_limit
+    for update of outbox skip locked
+  ), claimed as (
+    update private.storage_deletion_outbox outbox
+    set claim_token = pg_catalog.gen_random_uuid(),
+        lease_expires_at = v_now + interval '15 minutes',
+        attempt_count = outbox.attempt_count + 1
+    from candidates
+    where outbox.object_path = candidates.object_path
+    returning outbox.object_path, outbox.claim_token, outbox.lease_expires_at
+  )
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+      'object_path', claimed.object_path,
+      'claim_token', claimed.claim_token,
+      'lease_expires_at', claimed.lease_expires_at
+    ) order by claimed.object_path), '[]'::jsonb)
+    into v_tasks
+  from claimed;
+
+  return v_tasks;
+end;
+$$;
+
+create function public.finalize_storage_deletion_cleanup(
+  p_object_path text,
+  p_claim_token uuid,
+  p_storage_absent boolean
+)
+returns boolean language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_outbox private.storage_deletion_outbox;
+  v_now timestamptz;
+begin
+  if p_object_path is null or p_claim_token is null or p_storage_absent is distinct from true then
+    return false;
+  end if;
+
+  select * into v_outbox
+  from private.storage_deletion_outbox outbox
+  where outbox.object_path = p_object_path
+  for update;
+  if not found then return false; end if;
+
+  v_now := pg_catalog.clock_timestamp();
+  if v_outbox.claim_token <> p_claim_token or v_outbox.lease_expires_at <= v_now then
+    return false;
+  end if;
+
+  update private.storage_deletion_outbox
+  set next_check_at = v_now + interval '1 day',
+      claim_token = null,
+      lease_expires_at = null,
+      last_checked_at = v_now
+  where object_path = p_object_path;
+  return true;
+end;
+$$;
+
+revoke all on function public.claim_storage_deletion_cleanup(integer)
+  from public, anon, authenticated;
+revoke all on function public.finalize_storage_deletion_cleanup(text, uuid, boolean)
+  from public, anon, authenticated;
+grant execute on function public.claim_storage_deletion_cleanup(integer) to service_role;
+grant execute on function public.finalize_storage_deletion_cleanup(text, uuid, boolean)
+  to service_role;
 
 commit;
