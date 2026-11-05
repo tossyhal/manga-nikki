@@ -1,5 +1,5 @@
-import { jstToday } from './date';
-export { jstToday } from './date';
+import { jstToday } from './date.ts';
+export { jstToday } from './date.ts';
 import { z } from 'zod';
 
 const text = (min: number, max: number) =>
