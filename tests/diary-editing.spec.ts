@@ -713,7 +713,10 @@ test('削除応答後に別記録を編集中なら新しい画面の状態を�
     '移動する',
   );
   await expectDefaultLibraryLocation(page);
-  await page.getByText('編集中に保護するBの記録', { exact: true }).click();
+  await page
+    .getByRole('tabpanel', { name: 'カレンダー' })
+    .getByRole('link', { name: /編集中に保護するBの記録/ })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
   await clickEntryMenuItem(page, '日記を編集');
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });

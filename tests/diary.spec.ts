@@ -122,8 +122,8 @@ test('設定取得失敗時は案内と公開サンプルだけを表示する',
   for (const path of ['/', '/new', '/library', '/entries/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']) {
     await page.goto(path);
     const stateCard = page.locator('.app-state-card[role="alert"]');
-    await expect(stateCard.locator('p')).toHaveText(message);
     if (path === '/') {
+      await expect(stateCard.locator('p')).toHaveText(message);
       await expect(page.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'サンプルを見る' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
@@ -137,7 +137,7 @@ test('設定取得失敗時は案内と公開サンプルだけを表示する',
       await expect(page.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'サンプルを見る' })).toBeVisible();
     } else {
-      await expect(page.locator('#main').getByRole('alert')).toHaveText(message);
+      await expect(stateCard.locator('p')).toHaveText(message);
     }
   }
   expect(personalApiRequests).toEqual([]);
@@ -179,7 +179,14 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
   await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
   await page.waitForLoadState('networkidle');
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
-  await expect(page.getByText('保存機能は利用できません。')).toBeVisible();
+  const sampleEntryState = page.locator('.app-state-card');
+  await expect(
+    sampleEntryState.getByRole('heading', { name: '日記を保存できません' }),
+  ).toBeVisible();
+  await expect(sampleEntryState.locator('p')).toHaveText(
+    'この環境では個人の記録を保存できません。ホームから架空サンプルを確認できます。',
+  );
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveCount(0);
   expect(personalEntryReads).toBe(0);
   expect(externalAuthRequests).toEqual([]);
 });
@@ -321,8 +328,17 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   const recentRecords = page.locator('.recent-records');
   await expect(recentRecords.getByRole('link', { name: /本人の過去の架空記録/ })).toBeVisible();
   await expect(recentRecords.getByText('本人の今日の架空記録')).toHaveCount(0);
-  const preview = page.getByRole('img', { name: 'いつもの一日の4コマ漫画' });
+  const previewLink = todaySection.getByRole('link', {
+    name: 'いつもの一日の記録を読む',
+    exact: true,
+  });
+  const preview = previewLink.locator('img.entry-thumbnail-image');
+  await expect(previewLink).toBeVisible();
   await expect(preview).toBeVisible();
+  await expect(preview).toHaveAttribute('src', '/sample-comic.svg');
+  await expect
+    .poll(() => preview.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(0);
   await expect.poll(() => assetUrlReads).toBeGreaterThan(0);
 
   expect(apiAuthorization.length).toBeGreaterThan(0);
