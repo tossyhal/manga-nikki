@@ -143,7 +143,6 @@ function DetailContent({
   const [generationCaptchaAttempt, setGenerationCaptchaAttempt] = useState(0);
   const [generationRequestSending, setGenerationRequestSending] = useState(false);
   const [receiptUncertain, setReceiptUncertain] = useState(false);
-  const [editTyping, setEditTyping] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [discardEditConfirmOpen, setDiscardEditConfirmOpen] = useState(false);
@@ -242,13 +241,6 @@ function DetailContent({
   useLayoutEffect(() => {
     if (activeRef.current) onActivityChange({ dirty: draftDirty, busy });
   }, [busy, draftDirty, onActivityChange]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const useInlineActions = editTyping && window.matchMedia('(max-width: 700px)').matches;
-    root.classList.toggle('entry-keyboard-active', useInlineActions);
-    return () => root.classList.remove('entry-keyboard-active');
-  }, [editTyping]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -917,8 +909,6 @@ function DetailContent({
                     placeholder="今日はどんな日だった？"
                     required
                     aria-describedby="edit-count"
-                    onFocus={() => setEditTyping(true)}
-                    onBlur={() => setEditTyping(false)}
                   />
                   <div className="entry-editor-footer">
                     <span />
