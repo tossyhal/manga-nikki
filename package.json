@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:connected": "node scripts/dev-local-connected.mjs",
     "lint": "oxlint --deny-warnings && oxfmt --check .",
     "format": "oxfmt .",
     "typecheck": "tsc --noEmit",
