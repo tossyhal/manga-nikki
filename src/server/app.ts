@@ -309,7 +309,7 @@ export function createApp(
   });
   app.get('/api/v1/assets/:id/url', async (c) => {
     const current = mode(c.env);
-    if (current === 'local-connected') {
+    if (current === 'local-connected' || current === 'live-demo') {
       const asset = await getLiveMockAssetUrl(liveContext(c), c.req.param('id'));
       if (!asset) throw new ApiError(404, 'NOT_FOUND');
       return c.json(asset);

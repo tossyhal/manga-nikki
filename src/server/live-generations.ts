@@ -2,7 +2,13 @@ import { generationRowSchema, parseGenerationRow } from './generation-row';
 import { z } from 'zod';
 import { comicSchema, type Entry, type Generation } from '../shared/schemas';
 import type { Environment } from './mode';
-import { createServerRpcClient, createUserSupabaseClient } from './supabase-clients';
+import {
+  createServerAssetMetadataClient,
+  createServerRpcClient,
+  createUserSupabaseClient,
+} from './supabase-clients';
+import { createServerAssetSigningClient } from './supabase-storage';
+import { supabaseUrl } from './supabase-config';
 
 const generationStatusSchema = z.enum([
   'queued',
@@ -33,6 +39,7 @@ const entryRowSchema = z.object({
   created_at: z.iso.datetime({ offset: true }),
   updated_at: z.iso.datetime({ offset: true }),
 });
+const mediaTypeSchema = z.enum(['image/png', 'image/jpeg', 'image/webp']);
 const turnstileResponseSchema = z.object({
   success: z.boolean(),
   hostname: z.string().optional(),
@@ -432,7 +439,7 @@ export async function getLiveGeneration(
 export async function getLiveMockAssetUrl(
   context: GenerationContext,
   assetId: string,
-): Promise<{ url: '/sample-comic.svg'; expiresAt: string } | null> {
+): Promise<{ url: string; expiresAt: string } | null> {
   if (!z.uuid().safeParse(assetId).success) throw new LiveGenerationError(400, 'INVALID_INPUT');
   const client = createUserSupabaseClient(
     context.environment,
@@ -450,7 +457,7 @@ export async function getLiveMockAssetUrl(
       throw new LiveGenerationError(401, 'AUTH_REQUIRED');
     throw unavailable();
   }
-  if (!generation) return null;
+  if (!generation) return getLiveComicAssetUrl(context, assetId);
   const parsed = generationRowSchema.safeParse(generation);
   if (!parsed.success) throw unavailable();
   if (
@@ -482,4 +489,151 @@ export async function getLiveMockAssetUrl(
   }
   if (!entry) return null;
   return { url: '/sample-comic.svg', expiresAt: new Date(Date.now() + 60000).toISOString() };
+}
+
+const privateAssetSchema = z.strictObject({
+  id: z.uuid(),
+  generation_id: z.uuid(),
+  owner_id: z.uuid(),
+  object_path: z.string().min(1).max(160),
+  media_type: mediaTypeSchema,
+});
+
+function expectedPrivateAssetPath(
+  ownerId: string,
+  generationId: string,
+  assetId: string,
+  mediaType: string,
+): string {
+  const extension = mediaType === 'image/jpeg' ? 'jpg' : mediaType.slice('image/'.length);
+  return `${ownerId.toLowerCase()}/${generationId.toLowerCase()}/${assetId.toLowerCase()}.${extension}`;
+}
+
+function comicContainsAsset(value: unknown, assetId: string): boolean {
+  const parsed = comicSchema.safeParse(value);
+  if (!parsed.success) return false;
+  return parsed.data.visual.kind === 'page'
+    ? parsed.data.visual.assetId === assetId
+    : parsed.data.visual.assetIds.includes(assetId);
+}
+
+async function getLiveComicAssetMetadata(
+  context: GenerationContext,
+  assetId: string,
+): Promise<z.infer<typeof privateAssetSchema> | null> {
+  const userClient = createUserSupabaseClient(
+    context.environment,
+    context.accessToken,
+    context.fetcher,
+  );
+  const { data: assetReference, error: referenceError } = await userClient
+    .from('assets')
+    .select('id,generation_id')
+    .eq('id', assetId)
+    .maybeSingle();
+  if (referenceError) {
+    if ('status' in referenceError && referenceError.status === 401)
+      throw new LiveGenerationError(401, 'AUTH_REQUIRED');
+    throw unavailable();
+  }
+  if (!assetReference) return null;
+  const reference = z
+    .strictObject({ id: z.uuid(), generation_id: z.uuid() })
+    .safeParse(assetReference);
+  if (!reference.success || reference.data.id !== assetId) throw unavailable();
+
+  const { data: generation, error: generationError } = await userClient
+    .from('generations')
+    .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
+    .eq('id', reference.data.generation_id)
+    .eq('owner_id', context.owner)
+    .maybeSingle();
+  if (generationError) {
+    if ('status' in generationError && generationError.status === 401)
+      throw new LiveGenerationError(401, 'AUTH_REQUIRED');
+    throw unavailable();
+  }
+  if (!generation) return null;
+  const parsedGeneration = generationRowSchema.safeParse(generation);
+  if (
+    !parsedGeneration.success ||
+    parsedGeneration.data.id !== reference.data.generation_id ||
+    parsedGeneration.data.status !== 'succeeded' ||
+    parsedGeneration.data.stage !== null ||
+    parsedGeneration.data.is_mock !== false ||
+    !comicContainsAsset(parsedGeneration.data.comic_json, assetId)
+  )
+    return null;
+
+  const { data: entry, error: entryError } = await userClient
+    .from('entries')
+    .select('id')
+    .eq('id', parsedGeneration.data.entry_id)
+    .eq('owner_id', context.owner)
+    .is('deleted_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+  if (entryError) {
+    if ('status' in entryError && entryError.status === 401)
+      throw new LiveGenerationError(401, 'AUTH_REQUIRED');
+    throw unavailable();
+  }
+  if (!entry) return null;
+
+  const serverAssets = createServerAssetMetadataClient(context.environment, context.fetcher);
+  const { data: storedAsset, error: storedAssetError } = await serverAssets.getAsset(assetId);
+  if (storedAssetError) throw unavailable();
+  const parsedAsset = privateAssetSchema.safeParse(storedAsset);
+  if (
+    !parsedAsset.success ||
+    parsedAsset.data.id !== assetId ||
+    parsedAsset.data.generation_id !== parsedGeneration.data.id ||
+    parsedAsset.data.owner_id !== context.owner ||
+    parsedAsset.data.object_path !==
+      expectedPrivateAssetPath(
+        context.owner,
+        parsedGeneration.data.id,
+        assetId,
+        parsedAsset.data.media_type,
+      )
+  )
+    return null;
+  return parsedAsset.data;
+}
+
+async function getLiveComicAssetUrl(
+  context: GenerationContext,
+  assetId: string,
+): Promise<{ url: string; expiresAt: string } | null> {
+  const asset = await getLiveComicAssetMetadata(context, assetId);
+  if (!asset) return null;
+
+  const signingStartedAt = Date.now();
+  const storage = createServerAssetSigningClient(context.environment, context.fetcher);
+  const { data, error } = await storage.createSignedUrl(asset.object_path, 60);
+  if (error || !data || typeof data.signedUrl !== 'string') throw unavailable();
+
+  let signedUrl: URL;
+  let expectedOrigin: string;
+  try {
+    signedUrl = new URL(data.signedUrl);
+    expectedOrigin = new URL(supabaseUrl(context.environment)).origin;
+  } catch {
+    throw unavailable();
+  }
+  if (
+    signedUrl.origin !== expectedOrigin ||
+    signedUrl.username ||
+    signedUrl.password ||
+    signedUrl.hash ||
+    !signedUrl.pathname.startsWith('/storage/v1/object/sign/comics/')
+  )
+    throw unavailable();
+
+  const currentAsset = await getLiveComicAssetMetadata(context, assetId);
+  if (!currentAsset || currentAsset.object_path !== asset.object_path) return null;
+  return {
+    url: signedUrl.toString(),
+    expiresAt: new Date(signingStartedAt + 60_000).toISOString(),
+  };
 }

@@ -1,6 +1,6 @@
 # 開発手順（CONTRIBUTING）
 
-PR#29までの変更は`main`へ統合済みです。PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約を追加していますが、private画像保存・assets登録・成功確定RPCは未実装です。新規実AI生成には保存handlerと復旧callbackの両方が必要です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。現在のbranchではOpenAI白黒生成のQueue経路にprivate画像保存・assets登録・成功確定RPC・保存復旧を接続しています。実AI生成を受付可能にするには環境・予算・認証・Queue等の追加設定が必要で、共有DBへのmigration適用と実AI検証は未実施です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 
 ## 1. 最初にやること（ツールの準備）
 
@@ -91,7 +91,7 @@ pnpm dev:connected
 
 ## 3. 初期基盤の範囲
 
-以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueに加え、PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約まで実装しています。共有DB適用、private画像保存handler、実生成完了RPC、実環境検証は未完了です。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackがdurableな保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存系handlerが不足すれば新規受付を止めますが、既存queued jobと`reserved`枠はreleaseせず、ready復帰後に再配送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
+以下は初期基盤を作った時点の担当範囲です。現在のbranchにはOpenAI白黒生成のQueue経路、private画像保存・assets登録・完了確定RPC・保存復旧runtimeがあります。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackが保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。共有DB適用、実AI課金・品質、実環境のTurnstile / Queue / Cronは未確認です。現在の状態と別承認が必要なdemo準備は[PLAN](docs/PLAN.md)と[OPERATIONS](docs/OPERATIONS.md)を参照してください。
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
@@ -221,6 +221,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、保存復旧callback契約を実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、保存handler、実生成の成功確定RPC、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実生成画像のprivate Storage保存・署名URL発行は未接続です。保存handlerまたは復旧callbackのどちらか一方でも未設定のWorkerでは実AI生成を503で停止します。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存handlerの一時障害はjobを`saving`のまま保持し、Cronは復旧callbackがあればGENERATION_ENABLEDやOpenAI API keyがなくても保存を再開します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、private画像保存・署名URL・保存復旧runtimeを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境のStorage API、実AI課金と品質、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AI受付は保存handlerと復旧callbackをdefault Workerへ注入済みですが、staging/productionの`sample` / `mock` / `GENERATION_ENABLED=false`とQueue未設定は維持しています。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
 - `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
