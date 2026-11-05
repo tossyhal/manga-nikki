@@ -436,7 +436,7 @@ export async function getLiveGeneration(
   return mapGeneration(generation, toEntry(entry), true);
 }
 
-export async function getLiveMockAssetUrl(
+export async function getLiveAssetUrl(
   context: GenerationContext,
   assetId: string,
 ): Promise<{ url: string; expiresAt: string } | null> {
@@ -637,3 +637,5 @@ async function getLiveComicAssetUrl(
     expiresAt: new Date(signingStartedAt + 60_000).toISOString(),
   };
 }
+
+export { getLiveAssetUrl as getLiveMockAssetUrl };
