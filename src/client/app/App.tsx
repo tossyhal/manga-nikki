@@ -83,7 +83,7 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
       {entries.length === 0 ? (
         <p className="muted-copy">書いた記録がここに並びます。</p>
       ) : (
-        <EntryHistory entries={entries.slice(0, 2)} />
+        <EntryHistory entries={entries.slice(0, 2)} showStatus />
       )}
     </section>
   );

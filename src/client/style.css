@@ -98,6 +98,7 @@ a {
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .app-notices:empty {
@@ -106,7 +107,6 @@ a {
 
 .primary-shell .app-notices {
   grid-row: 1;
-  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .notice {
@@ -132,10 +132,14 @@ a {
   width: 100%;
   min-width: 0;
   min-height: 0;
-  padding: calc(16px + env(safe-area-inset-top, 0px)) 20px 14px;
+  padding: 16px 20px 14px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
+}
+
+#main:focus {
+  outline: none;
 }
 
 .app-state-card {
@@ -682,14 +686,14 @@ p {
 .new-entry-form {
   display: flex;
   flex: 1 1 0;
-  min-height: 0;
+  min-height: min-content;
   flex-direction: column;
 }
 
 .entry-form-fields {
   display: flex;
   flex: 1 1 0;
-  min-height: 0;
+  min-height: min-content;
   flex-direction: column;
   min-width: 0;
   margin: 0;
