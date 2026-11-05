@@ -4,6 +4,7 @@ import {
   createMockEntry,
   listMockEntries,
   getMockEntry,
+  getMockEntryDetail,
   reserveMockGeneration,
 } from './repositories/mock-service';
 import { Hono } from 'hono';
@@ -239,13 +240,7 @@ export function createApp(
       if (!detail) throw new ApiError(404, 'NOT_FOUND');
       return c.json(detail);
     }
-    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
-    return c.json({
-      ...entry,
-      latestGeneration: entry.latestGenerationId
-        ? (getRepository().generations.get(entry.latestGenerationId)?.generation ?? null)
-        : null,
-    });
+    return c.json(getMockEntryDetail(getRepository(), c.req.param('id'), c.get('owner')));
   });
   app.patch('/api/v1/entries/:id', async (c) => {
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));

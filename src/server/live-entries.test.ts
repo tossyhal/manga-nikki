@@ -189,11 +189,33 @@ function createSupabaseBoundary() {
     }
     if (url.pathname.endsWith('/rest/v1/generations')) {
       let rows = [...generations];
-      for (const key of ['id', 'entry_id', 'owner_id'] as const) {
+      for (const key of ['id', 'entry_id', 'owner_id', 'status'] as const) {
         const filter = url.searchParams.get(key);
         if (filter?.startsWith('eq.')) rows = rows.filter((row) => row[key] === filter.slice(3));
       }
-      return Response.json(rows);
+      const revisionFilter = url.searchParams.get('entry_revision');
+      if (revisionFilter?.startsWith('lte.')) {
+        const revision = Number(revisionFilter.slice(4));
+        rows = rows.filter((row) => Number(row.entry_revision) <= revision);
+      }
+      const order = url.searchParams.get('order');
+      if (order) {
+        const clauses = order.split(',').map((clause) => {
+          const [column, direction] = clause.split('.');
+          return { column: column ?? '', direction };
+        });
+        rows.sort((left, right) => {
+          for (const { column, direction } of clauses) {
+            const leftValue = String(left[column] ?? '');
+            const rightValue = String(right[column] ?? '');
+            const orderValue = leftValue.localeCompare(rightValue);
+            if (orderValue !== 0) return direction === 'desc' ? -orderValue : orderValue;
+          }
+          return 0;
+        });
+      }
+      const limit = Number(url.searchParams.get('limit') ?? rows.length);
+      return Response.json(rows.slice(0, limit));
     }
     return new Response(null, { status: 404 });
   };
@@ -445,6 +467,18 @@ describe('live diary HTTP API', () => {
       comic_json: pageComic,
       error_code: null,
       is_mock: true,
+      created_at: '2026-11-01T00:00:00+00:00',
+    });
+    boundary.generations.push({
+      id: crypto.randomUUID(),
+      entry_id: entry.id,
+      owner_id: owner,
+      entry_revision: 1,
+      status: 'succeeded',
+      stage: null,
+      comic_json: pageComic,
+      is_mock: true,
+      created_at: '2026-11-03T00:00:00+00:00',
     });
     const app = appWith(boundary);
     boundary.rpcOverrides.set('update_entry', {
@@ -481,6 +515,7 @@ describe('live diary HTTP API', () => {
       stage: null,
       comic: pageComic,
     });
+    expect(detail.lastSuccessfulGeneration).toEqual(detail.latestGeneration);
     expect(JSON.stringify(detail)).not.toContain('internal-diary-snapshot');
     expect(JSON.stringify(detail)).not.toContain('internal-request-hash');
     const generationRead = itemAt(boundary.readCalls, 1);
@@ -488,6 +523,13 @@ describe('live diary HTTP API', () => {
       'id,entry_id,entry_revision,status,stage,comic_json,is_mock',
     );
     expect(generationRead.url.searchParams.get('owner_id')).toBe(`eq.${owner}`);
+    const successfulRead = itemAt(boundary.readCalls, 2);
+    expect(successfulRead.url.searchParams.get('entry_id')).toBe(`eq.${entry.id}`);
+    expect(successfulRead.url.searchParams.get('owner_id')).toBe(`eq.${owner}`);
+    expect(successfulRead.url.searchParams.get('status')).toBe('eq.succeeded');
+    expect(successfulRead.url.searchParams.get('entry_revision')).toBe('lte.2');
+    expect(successfulRead.url.searchParams.get('order')).toBe('created_at.desc,id.desc');
+    expect(successfulRead.url.searchParams.get('limit')).toBe('1');
 
     itemAt(boundary.generations, 0).is_mock = null;
     const unknownOrigin = await apiRequest(app, environment, token, `/entries/${entry.id}`);
@@ -539,6 +581,85 @@ describe('live diary HTTP API', () => {
     itemAt(boundary.generations, 0).is_mock = false;
     const storedLiveSource = await apiRequest(app, environment, token, `/entries/${entry.id}`);
     expect((await storedLiveSource.json()).latestGeneration.mock).toBe(false);
+  });
+
+  it('keeps the latest job separate from the newest eligible saved success', async () => {
+    const environment = liveEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const entryId = crypto.randomUUID();
+    const failedId = crypto.randomUUID();
+    const desiredSuccessId = crypto.randomUUID();
+    boundary.entries.push(
+      entryRow(owner, entryId, { revision: 2, latest_generation_id: failedId }),
+    );
+    boundary.generations.push(
+      {
+        id: failedId,
+        entry_id: entryId,
+        owner_id: owner,
+        entry_revision: 2,
+        status: 'failed',
+        stage: null,
+        comic_json: null,
+        is_mock: true,
+        created_at: '2026-11-04T00:00:00+00:00',
+      },
+      {
+        id: desiredSuccessId,
+        entry_id: entryId,
+        owner_id: owner,
+        entry_revision: 2,
+        status: 'succeeded',
+        stage: null,
+        comic_json: pageComic,
+        is_mock: true,
+        created_at: '2026-11-02T00:00:00+00:00',
+      },
+      {
+        id: crypto.randomUUID(),
+        entry_id: entryId,
+        owner_id: owner,
+        entry_revision: 3,
+        status: 'succeeded',
+        stage: null,
+        comic_json: pageComic,
+        is_mock: true,
+        created_at: '2026-11-06T00:00:00+00:00',
+      },
+      {
+        id: crypto.randomUUID(),
+        entry_id: crypto.randomUUID(),
+        owner_id: owner,
+        entry_revision: 2,
+        status: 'succeeded',
+        stage: null,
+        comic_json: pageComic,
+        is_mock: true,
+        created_at: '2026-11-07T00:00:00+00:00',
+      },
+      {
+        id: crypto.randomUUID(),
+        entry_id: entryId,
+        owner_id: crypto.randomUUID(),
+        entry_revision: 2,
+        status: 'succeeded',
+        stage: null,
+        comic_json: pageComic,
+        is_mock: true,
+        created_at: '2026-11-08T00:00:00+00:00',
+      },
+    );
+    const response = await apiRequest(appWith(boundary), environment, token, `/entries/${entryId}`);
+    const detail = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(detail.latestGenerationId).toBe(failedId);
+    expect(detail.latestGeneration.status).toBe('failed');
+    expect(detail.lastSuccessfulGeneration.id).toBe(desiredSuccessId);
+    expect(detail.lastSuccessfulGeneration.status).toBe('succeeded');
+    expect(detail.lastSuccessfulGeneration.entryRevision).toBe(2);
   });
 
   it('hides another owner’s and expired entries and maps generation dependencies safely', async () => {
