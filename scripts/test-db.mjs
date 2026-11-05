@@ -125,6 +125,7 @@ function startSqlSession(applicationName) {
       if (result.code !== 0 && !receivedSignal) {
         throw new Error(`PostgreSQL同期接続に失敗しました: ${result.stderr}`);
       }
+      return result;
     },
   };
 }
@@ -478,6 +479,94 @@ select :'race_generation' || '|' || :'race_claim';`;
     ),
   );
   assert.equal(failedComicRecovery.status, 'failed');
+  const deletionFixtureOwner = 'fa100000-0000-4000-8000-000000000001';
+  succeeded(
+    await sql(`insert into private.storage_deletion_outbox(object_path,next_check_at)
+      select '${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/' ||
+        'fa300000-0000-4000-8000-' || lpad(index::text,12,'0') || '.png',
+        '2026-11-05 00:00:00+00'::timestamptz
+      from generate_series(1,45) as fixture(index);`),
+  );
+  const deletionHolderName = 'mn-db-storage-gc-lock-holder';
+  const deletionLockMarker = `${deletionHolderName}:lock-acquired`;
+  const deletionHolder = startSqlSession(deletionHolderName);
+  let deletionClaimant;
+  let deletionClaimReachedMarker;
+  let deletionMarkerWait;
+  try {
+    deletionHolder.write(`begin;
+      select object_path from private.storage_deletion_outbox
+      where object_path like '${deletionFixtureOwner}/%'
+      order by next_check_at,object_path limit 40 for update;
+      \\echo ${deletionLockMarker}\n`);
+    await deletionHolder.waitForOutput(deletionLockMarker);
+    deletionClaimant = startSqlSession('mn-db-storage-gc-skip-locked-claim');
+    const deletionClaimMarker = 'mn-db-storage-gc-skip-locked-claim:returned';
+    deletionClaimant.write(`set role service_role;
+      select public.claim_storage_deletion_cleanup(40);
+      \\echo ${deletionClaimMarker}\n`);
+    deletionMarkerWait = deletionClaimant.waitForOutput(deletionClaimMarker);
+    let timeout;
+    deletionClaimReachedMarker = await Promise.race([
+      deletionMarkerWait.then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    clearTimeout(timeout);
+  } finally {
+    await deletionHolder.finish('commit');
+  }
+  assert.ok(deletionClaimant);
+  await deletionMarkerWait;
+  const deletionClaimResult = await deletionClaimant.finish('select 1');
+  const firstDeletionBatch = JSON.parse(
+    deletionClaimResult.stdout.split('\n').find((line) => line.startsWith('[')),
+  );
+  assert.equal(
+    deletionClaimReachedMarker,
+    true,
+    'Storage GCはロック済みrowで待たずにSKIP LOCKEDする',
+  );
+  assert.equal(firstDeletionBatch.length, 5);
+  assert.deepEqual(
+    firstDeletionBatch.map((item) => item.object_path),
+    Array.from(
+      { length: 5 },
+      (_, index) =>
+        `${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/` +
+        `fa300000-0000-4000-8000-${String(index + 41).padStart(12, '0')}.png`,
+    ),
+  );
+  const secondDeletionBatch = JSON.parse(
+    succeeded(
+      await sql(
+        'set role service_role; select public.claim_storage_deletion_cleanup(40);',
+        'mn-db-storage-gc-next-batch',
+      ),
+    ),
+  );
+  assert.equal(secondDeletionBatch.length, 40);
+  assert.deepEqual(
+    secondDeletionBatch.map((item) => item.object_path),
+    Array.from(
+      { length: 40 },
+      (_, index) =>
+        `${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/` +
+        `fa300000-0000-4000-8000-${String(index + 1).padStart(12, '0')}.png`,
+    ),
+  );
+  assert.equal(
+    new Set([...firstDeletionBatch, ...secondDeletionBatch].map((item) => item.object_path)).size,
+    45,
+  );
+  const oversizedDeletionBatch = await sql(
+    'set role service_role; select public.claim_storage_deletion_cleanup(41);',
+    'mn-db-storage-gc-max-limit',
+  );
+  assert.notEqual(oversizedDeletionBatch.code, 0);
+  assert.match(oversizedDeletionBatch.stderr, /INVALID_LIMIT/);
+  console.log('成功: Storage GCは40件上限・公平順・SKIP LOCKEDで残pathを拾う');
   succeeded(
     await sql(`begin;
       update private.quota_counters set count = count - 1,

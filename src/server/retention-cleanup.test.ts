@@ -121,9 +121,15 @@ describe('scheduled retention cleanup mode gate', () => {
           stale: 0,
         },
       );
-      expect(summaryLog).toHaveBeenCalledExactlyOnceWith('retention_cleanup_summary', {
+      expect(summaryLog).toHaveBeenCalledWith('retention_cleanup_summary', {
         claimed: 0,
         deleted: 0,
+        retrying: 0,
+        stale: 0,
+      });
+      expect(summaryLog).toHaveBeenCalledWith('storage_deletion_cleanup_summary', {
+        claimed: 0,
+        rechecked: 0,
         retrying: 0,
         stale: 0,
       });
@@ -132,6 +138,40 @@ describe('scheduled retention cleanup mode gate', () => {
     }
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       '/rest/v1/rpc/claim_retention_cleanup',
+      '/rest/v1/rpc/claim_storage_deletion_cleanup',
+    ]);
+  });
+
+  it('keeps retention results when the independent deletion outbox claim fails', async () => {
+    const requests: Request[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      requests.push(new Request(input, init));
+      return requests.length === 1
+        ? Response.json([])
+        : Response.json({ message: 'private dependency detail' }, { status: 503 });
+    };
+    const liveDemo: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'production',
+      DATA_MODE: 'live',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'false',
+      SUPABASE_URL: 'https://retention-test.supabase.co',
+      SUPABASE_SECRET_KEY: 'sb_secret_test_only',
+    };
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(cleanRetainedEntriesForScheduledEnvironment(liveDemo, fetcher)).resolves.toEqual(
+        { claimed: 0, deleted: 0, retrying: 0, stale: 0 },
+      );
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith('storage_deletion_cleanup_unavailable');
+    } finally {
+      errorLog.mockRestore();
+    }
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      '/rest/v1/rpc/claim_retention_cleanup',
+      '/rest/v1/rpc/claim_storage_deletion_cleanup',
     ]);
   });
 
