@@ -43,6 +43,7 @@ export function Comic({
   imageErrors = [],
   imageLoading = false,
   imageRetrying = false,
+  imageResetVersion = 0,
   onRetryImages,
   onImageError,
   titleAs: Title = 'h2',
@@ -55,6 +56,7 @@ export function Comic({
   imageErrors?: string[];
   imageLoading?: boolean;
   imageRetrying?: boolean;
+  imageResetVersion?: number;
   onRetryImages?: () => void;
   onImageError?: (assetId: string) => boolean;
   /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
@@ -64,12 +66,18 @@ export function Comic({
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
   const [zoomed, setZoomed] = useState<{ assetId: string; alt: string } | null>(null);
-  const [failedImageUrls, setFailedImageUrls] = useState<Record<string, string>>({});
+  const [failedImageUrls, setFailedImageUrls] = useState<
+    Record<string, { src: string; resetVersion: number }>
+  >({});
   const zoomDialogRef = useRef<HTMLDialogElement>(null);
   const imageFailed = (id: string) =>
     imageError ||
     imageErrors.includes(id) ||
-    Boolean(images[id] && failedImageUrls[id] === images[id]) ||
+    Boolean(
+      images[id] &&
+      failedImageUrls[id]?.src === images[id] &&
+      failedImageUrls[id]?.resetVersion === imageResetVersion,
+    ) ||
     (!images[id] && !imageLoading);
   const pageImageFailed = comic.visual.kind === 'page' && imageFailed(comic.visual.assetId);
   const anyImageFailed = ids.some(imageFailed);
@@ -109,7 +117,11 @@ export function Comic({
                     onError={() => {
                       if (onImageError?.(id)) return;
                       const src = images[id];
-                      if (src) setFailedImageUrls((current) => ({ ...current, [id]: src }));
+                      if (src)
+                        setFailedImageUrls((current) => ({
+                          ...current,
+                          [id]: { src, resetVersion: imageResetVersion },
+                        }));
                     }}
                   />
                 </button>
@@ -237,7 +249,11 @@ export function Comic({
                 onError={() => {
                   if (onImageError?.(zoomed.assetId)) return;
                   const src = images[zoomed.assetId];
-                  if (src) setFailedImageUrls((current) => ({ ...current, [zoomed.assetId]: src }));
+                  if (src)
+                    setFailedImageUrls((current) => ({
+                      ...current,
+                      [zoomed.assetId]: { src, resetVersion: imageResetVersion },
+                    }));
                 }}
               />
             ) : (

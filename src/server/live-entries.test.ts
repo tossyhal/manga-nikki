@@ -548,18 +548,15 @@ describe('live diary HTTP API', () => {
     expect(detail.lastSuccessfulGeneration).toEqual(detail.latestGeneration);
     expect(JSON.stringify(detail)).not.toContain('internal-diary-snapshot');
     expect(JSON.stringify(detail)).not.toContain('internal-request-hash');
+    expect(boundary.readCalls).toHaveLength(2);
     const generationRead = itemAt(boundary.readCalls, 1);
     expect(generationRead.url.searchParams.get('select')).toBe(
       'id,entry_id,entry_revision,status,stage,comic_json,is_mock',
     );
     expect(generationRead.url.searchParams.get('owner_id')).toBe(`eq.${owner}`);
-    const successfulRead = itemAt(boundary.readCalls, 2);
-    expect(successfulRead.url.searchParams.get('entry_id')).toBe(`eq.${entry.id}`);
-    expect(successfulRead.url.searchParams.get('owner_id')).toBe(`eq.${owner}`);
-    expect(successfulRead.url.searchParams.get('status')).toBe('eq.succeeded');
-    expect(successfulRead.url.searchParams.get('entry_revision')).toBe('lte.2');
-    expect(successfulRead.url.searchParams.get('order')).toBe('created_at.desc,id.desc');
-    expect(successfulRead.url.searchParams.get('limit')).toBe('1');
+    expect(
+      boundary.readCalls.some((call) => call.url.searchParams.get('status') === 'eq.succeeded'),
+    ).toBe(false);
 
     itemAt(boundary.generations, 0).is_mock = null;
     const unknownOrigin = await apiRequest(app, environment, token, `/entries/${entry.id}`);
@@ -690,6 +687,49 @@ describe('live diary HTTP API', () => {
     expect(detail.lastSuccessfulGeneration.id).toBe(desiredSuccessId);
     expect(detail.lastSuccessfulGeneration.status).toBe('succeeded');
     expect(detail.lastSuccessfulGeneration.entryRevision).toBe(2);
+  });
+
+  it('keeps entry detail available when its supplemental saved success row is malformed', async () => {
+    const environment = liveEnvironment();
+    const owner = crypto.randomUUID();
+    const token = await accessToken(environment, owner);
+    const boundary = createSupabaseBoundary();
+    const entryId = crypto.randomUUID();
+    const failedId = crypto.randomUUID();
+    boundary.entries.push(
+      entryRow(owner, entryId, { revision: 2, latest_generation_id: failedId }),
+    );
+    boundary.generations.push(
+      {
+        id: failedId,
+        entry_id: entryId,
+        owner_id: owner,
+        entry_revision: 2,
+        status: 'failed',
+        stage: null,
+        comic_json: null,
+        is_mock: true,
+      },
+      {
+        id: crypto.randomUUID(),
+        entry_id: entryId,
+        owner_id: owner,
+        entry_revision: 1,
+        status: 'succeeded',
+        stage: null,
+        comic_json: { oldSchema: true },
+        is_mock: true,
+        created_at: '2026-11-05T00:00:00+00:00',
+      },
+    );
+
+    const response = await apiRequest(appWith(boundary), environment, token, `/entries/${entryId}`);
+    const detail = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(detail.body).toBe('架空のテスト日記');
+    expect(detail.latestGeneration.status).toBe('failed');
+    expect(detail.lastSuccessfulGeneration).toBeNull();
   });
 
   it('hides another owner’s and expired entries and maps generation dependencies safely', async () => {
