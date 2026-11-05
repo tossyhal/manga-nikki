@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { useOnlineStatus } from '../lib/useOnlineStatus';
 
 type PwaNoticeProps = {
   diaryDirty: boolean;
   diaryBusy: boolean;
+  hideOfflineNotice?: boolean;
 };
 
-export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
+export function PwaNotice({ diaryDirty, diaryBusy, hideOfflineNotice = false }: PwaNoticeProps) {
   const updateBlocked = diaryDirty || diaryBusy;
   const updateBlockedRef = useRef(updateBlocked);
   useLayoutEffect(() => {
@@ -28,17 +30,7 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
     offlineReady: [offlineReady, setOfflineReady],
     updateServiceWorker,
   } = useRegisterSW({ onNeedReload });
-  const [online, setOnline] = useState(() => navigator.onLine);
-
-  useEffect(() => {
-    const updateOnlineStatus = () => setOnline(navigator.onLine);
-    window.addEventListener('online', updateOnlineStatus);
-    window.addEventListener('offline', updateOnlineStatus);
-    return () => {
-      window.removeEventListener('online', updateOnlineStatus);
-      window.removeEventListener('offline', updateOnlineStatus);
-    };
-  }, []);
+  const { online } = useOnlineStatus();
 
   function requestUpdate() {
     if (updateBlockedRef.current) return;
@@ -58,17 +50,21 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
 
   return (
     <>
-      {!online && (
+      {!online && !hideOfflineNotice && (
         <output className="pwa-notice" aria-live="polite">
           <p>
-            オフラインです。架空サンプルは見られますが、日記の保存・履歴の取得・漫画の生成には通信が必要です。日記本文や生成画像はオフライン用に保存しません。
+            オフラインです。保存・履歴の取得・漫画の生成には通信が必要です。日記本文と生成画像はオフライン用に保存していません。
           </p>
         </output>
       )}
       {offlineReady && (
         <output className="pwa-notice" aria-live="polite">
-          <p>架空サンプルを含む画面をオフラインで表示できます。日記本文や生成画像は対象外です。</p>
-          <button className="secondary" type="button" onClick={() => setOfflineReady(false)}>
+          <p>サンプルはオフラインで表示できます。日記本文と生成画像は対象外です。</p>
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => setOfflineReady(false)}
+          >
             閉じる
           </button>
         </output>
@@ -88,10 +84,15 @@ export function PwaNotice({ diaryDirty, diaryBusy }: PwaNoticeProps) {
             </p>
           )}
           <div className="pwa-notice-actions">
-            <button type="button" disabled={updateBlocked} onClick={requestUpdate}>
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={updateBlocked}
+              onClick={requestUpdate}
+            >
               {reloadPending ? 'この画面を再読み込み' : '更新する'}
             </button>
-            <button className="secondary" type="button" onClick={dismissUpdate}>
+            <button className="button button-secondary" type="button" onClick={dismissUpdate}>
               あとで
             </button>
           </div>

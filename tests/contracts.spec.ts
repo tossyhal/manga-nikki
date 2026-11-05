@@ -42,7 +42,10 @@ for (const [kind, template] of [
     comic.panels[0].dialogue = '波がきれい';
     await intercept(page, () => ({ ...fixtures.succeeded, comic }));
     await page.goto(`/entries/${entryId}`);
-    await expect(page.getByRole('heading', { name: comic.title })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
+    if (comic.visual.kind === 'page') {
+      await page.getByText('4コマの内容を読む', { exact: true }).click();
+    }
     await expect(page.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
     await expect(page.getByText('「波がきれい」')).toBeVisible();
     const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
@@ -55,6 +58,62 @@ for (const [kind, template] of [
     }
   });
 }
+
+test('panels漫画の画像URLを取得できなくても脚本を表示する', async ({ page }) => {
+  const comic = structuredClone(panelsComic);
+  comic.panels[0].caption = '画像URLがなくても読める架空の説明';
+  comic.panels[0].dialogue = '絵がなくても残る会話';
+  const generation = { ...fixtures.succeeded, comic };
+  const requestedAssetIds = new Set<string>();
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: detail(generation) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('**/api/v1/assets/*/url', async (route) => {
+    const assetId = new URL(route.request().url()).pathname.split('/').at(-2);
+    if (assetId) requestedAssetIds.add(assetId);
+    await route.abort('failed');
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
+  await expect(page.locator('.comic-panel-card')).toHaveCount(4);
+  for (const panel of comic.panels) {
+    await expect(page.getByText(panel.caption, { exact: true })).toHaveCount(1);
+    if (panel.dialogue) {
+      await expect(page.getByText(`「${panel.dialogue}」`, { exact: true })).toHaveCount(1);
+    }
+  }
+  await expect(page.getByText('「絵がなくても残る会話」', { exact: true })).toBeVisible();
+  await expect.poll(() => requestedAssetIds.size).toBe(4);
+});
+
+test('埋め込み文字の漫画で画像取得に失敗したら脚本を一度だけ表示する', async ({ page }) => {
+  const comic = structuredClone(pageComic);
+  if (comic.visual.kind !== 'page') throw new Error('page comic fixture is required');
+  comic.visual.textMode = 'embedded';
+  comic.panels[0].caption = '代替表示でも一度だけ読める説明';
+  comic.panels[0].dialogue = '一度だけ読み上げる会話';
+  const generation = { ...fixtures.succeeded, comic };
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: detail(generation) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('**/api/v1/assets/*/url', (route) => route.abort('failed'));
+
+  await page.goto(`/entries/${entryId}`);
+  const fallback = page.locator('.comic-image-fallback');
+  await expect(fallback).toBeVisible();
+  await expect(fallback.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
+  await expect(fallback.getByText('「一度だけ読み上げる会話」', { exact: true })).toBeVisible();
+  await expect(page.locator('.comic-transcript ol.sr-only')).toHaveCount(0);
+  await expect(page.getByText(comic.panels[0].caption, { exact: true })).toHaveCount(1);
+});
+
 test('queuedからrunning、succeededへ進み、完了後はポーリングを止める', async ({ page }) => {
   await page.clock.install();
   let generation: Generation = fixtures.queued;
@@ -64,13 +123,15 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
     return generation;
   });
   await page.goto(`/entries/${entryId}`);
-  await expect(page.getByText('受付済みです。生成を待っています。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
   generation = fixtures.running;
   await page.clock.runFor(5000);
-  await expect(page.getByText('画像を描いています。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
   generation = fixtures.succeeded;
   await page.clock.runFor(5000);
-  await expect(page.getByRole('heading', { name: pageComic.title })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: pageComic.title })).toBeVisible();
   const completedReads = reads;
   await page.clock.runFor(15000);
   expect(reads).toBe(completedReads);
@@ -96,13 +157,26 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
       return route.abort();
     });
     await page.goto(`/entries/${entryId}`);
-    await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
+    if (status === 'unknown') {
+      await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
+      await expect(page.getByText('元の日記を読む', { exact: true })).toHaveCount(0);
+      await expect(page.locator('.diary')).toHaveCount(0);
+    } else {
+      await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
+      await expect(page.locator('#original-diary')).not.toHaveAttribute('open');
+      await page.getByText('元の日記を読む', { exact: true }).click();
+      await expect(page.locator('.diary')).toHaveText('架空のテスト日記');
+    }
     await expect(page.locator('.comic')).toHaveCount(0);
-    if (status === 'cancelled')
+    if (status === 'cancelled') {
+      await expect(page.getByRole('heading', { name: '生成を終了しました' })).toBeVisible();
       await expect(page.getByText('生成は中止されました。')).toBeVisible();
-    else if (status === 'unknown')
-      await expect(page.getByRole('alert')).toContainText('自動では再生成せず');
-    else await expect(page.getByRole('alert')).toContainText('漫画を作成できませんでした。');
+    } else if (status === 'unknown')
+      await expect(page.getByRole('heading', { name: '生成結果を確認中' })).toBeVisible();
+    else
+      await expect(page.getByRole('heading', { name: '漫画を生成できませんでした' })).toBeVisible();
+    if (status === 'unknown')
+      await expect(page.locator('.generation-card')).toContainText('自動では再生成せず');
     const terminalReads = reads;
     await page.clock.runFor(15000);
     expect(reads).toBe(terminalReads);
@@ -137,17 +211,57 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
         data: { expectedRevision: 1, captchaToken: '' },
       });
       expect(generated.status()).toBe(202);
+      const detailResponse = await request.get(`/api/v1/entries/${entry.id}`, { headers });
+      const detail = await detailResponse.json();
+      expect(detail.body).toBe('架空の履歴1件目');
+      expect(detail.latestGeneration).toMatchObject({ mock: true, status: 'succeeded' });
     }
   }
+  const requestedCursors: string[] = [];
+  await page.route('**/api/v1/entries**', (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    if (cursor) requestedCursors.push(cursor);
+    return route.continue();
+  });
   await page.goto('/library');
-  await expect(page.locator('.entries > li')).toHaveCount(20);
-  await expect(page.getByText('架空の履歴1件目', { exact: true })).not.toBeVisible();
-  await page.getByRole('button', { name: 'もっと見る' }).click();
-  await expect(page.locator('.entries > li')).toHaveCount(21);
-  await expect(page.getByRole('button', { name: 'もっと見る' })).not.toBeVisible();
-  await page.getByText('架空の履歴1件目', { exact: true }).click();
+  await expect(page.getByRole('heading', { name: '記録', exact: true })).toHaveClass(/sr-only/);
+  await expect(page.getByRole('table')).toBeVisible();
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  const pageControls = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
+  const listSummaries = listPanel.locator('.entry-history-summary');
+  await expect(listSummaries).toHaveCount(3);
+  const visibleSummaries = new Set<string>();
+  for (let index = 0; index < 7; index++) {
+    await expect(pageControls).toContainText(`${index + 1}ページ目`);
+    const summaries = await listSummaries.allTextContents();
+    expect(summaries).toHaveLength(3);
+    summaries.forEach((summary) => visibleSummaries.add(summary));
+    if (index < 6) await pageControls.getByRole('button', { name: '次へ' }).click();
+  }
+  await expect(pageControls).toContainText('7ページ目');
+  await expect(listSummaries).toHaveCount(3);
+  await expect(pageControls.getByRole('button', { name: '次へ' })).toBeDisabled();
+  expect(visibleSummaries.size).toBe(21);
+  for (let index = 1; index <= 21; index++) {
+    expect(visibleSummaries).toContain(`架空の履歴${index}件目`);
+  }
+  expect(requestedCursors).toHaveLength(1);
+
+  await pageControls.getByRole('button', { name: '前へ' }).click();
+  await expect(pageControls).toContainText('6ページ目');
+  await expect(page.getByRole('link', { name: /架空の履歴6件目/ })).toBeVisible();
+  for (let index = 0; index < 5; index++) {
+    await pageControls.getByRole('button', { name: '前へ' }).click();
+  }
+  await expect(pageControls).toContainText('1ページ目');
+  await expect(page.getByRole('link', { name: /架空の履歴21件目/ })).toBeVisible();
+  for (let index = 0; index < 6; index++) {
+    await pageControls.getByRole('button', { name: '次へ' }).click();
+  }
+  await page.getByRole('link', { name: /架空の履歴1件目/ }).click();
   await expect(page).toHaveURL(`/entries/${oldestId}`);
-  await expect(page.getByRole('heading', { name: '元の日記' })).toBeVisible();
+  await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
 });
 
 test('保存完了後にレスポンスだけ失っても再送で重複作成しない', async ({ page }) => {
@@ -163,17 +277,29 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
     await route.abort('failed');
   });
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('保存だけ成功した架空の日記');
-  await page.getByRole('checkbox').check();
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('保存だけ成功した架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(`/entries/${savedId}`);
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(page.locator('.detail-toolbar h1')).toHaveText('保存だけ成功した架空の日記');
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toHaveCount(0);
+  await expect(page.locator('.draft-saved-card')).toBeVisible();
+  await expect(page.getByRole('button', { name: '4コマにする' })).toBeVisible();
   expect(requestIds).toHaveLength(2);
   expect(requestIds[0]).toBe(requestIds[1]);
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
-  await expect(page.locator('.entries > li')).toHaveCount(1);
-  await expect(page.getByText('保存だけ成功した架空の日記', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.entry-draft-card .diary')).toHaveText('保存だけ成功した架空の日記');
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.locator('.entry-history-card')).toHaveCount(1);
+  await expect(listPanel.getByRole('link', { name: /保存だけ成功した架空の日記/ })).toBeVisible();
 });
 
 test('390px幅の履歴では200文字の日記を40文字の要約で表示する', async ({ page }) => {
@@ -181,12 +307,19 @@ test('390px幅の履歴では200文字の日記を40文字の要約で表示す�
   const body = 'A'.repeat(200);
   const summary = `${'A'.repeat(39)}…`;
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill(body);
-  await page.getByRole('checkbox').check();
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(body);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await page.getByRole('link', { name: '← 記録の一覧' }).click();
-  await expect(page.locator('.entries strong')).toHaveText(summary);
+  await expect(page.locator('.draft-saved-card > .diary')).toHaveText(`${'A'.repeat(120)}…`);
+  const originalDiarySummary = page.locator('.draft-saved-original > summary');
+  await expect(originalDiarySummary).toHaveText('日記の全文を読む');
+  await originalDiarySummary.click();
+  await expect(page.locator('.draft-saved-original .diary')).toHaveText(body);
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  await expect(
+    page.getByRole('tabpanel', { name: 'リスト' }).locator('.entry-history-summary'),
+  ).toHaveText(summary);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

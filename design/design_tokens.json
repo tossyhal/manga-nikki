@@ -1,0 +1,33 @@
+{
+  "colors": {
+    "background": "#FFFFFF",
+    "surface": "#F6F6F6",
+    "surface_alt": "#EFEFEF",
+    "nav_active": "#EBEBEB",
+    "ink": "#252525",
+    "ink_2": "#505050",
+    "muted": "#858585",
+    "border": "#E4E4E4",
+    "dividers": "#EBEBEB",
+    "black": "#222222",
+    "white": "#FFFFFF"
+  },
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "primaryCta": {
+    "x": 24,
+    "y": 680,
+    "width": 342,
+    "height": 54
+  },
+  "bottomNav": {
+    "x": 16,
+    "y": 748,
+    "width": 358,
+    "height": 76
+  },
+  "navSelection": "segmented; straight inward boundaries; rounded by outer bar clipping",
+  "typography": "Noto Sans JP / Noto Sans CJK JP"
+}
