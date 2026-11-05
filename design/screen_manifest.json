@@ -1,0 +1,464 @@
+[
+  {
+    "number": 1,
+    "title": "ホーム / 今日の記録なし",
+    "file": "01_home_empty.svg",
+    "nav": "home",
+    "cta": [],
+    "route_or_state": "/ [empty]",
+    "reference_png": "reference/browser_content/01.png",
+    "reference_full_png": "reference/screens/01.png",
+    "reference_svg": "reference/svgs/01_home_empty.svg"
+  },
+  {
+    "number": 2,
+    "title": "ホーム / 今日の記録あり",
+    "file": "02_home_exists.svg",
+    "nav": "home",
+    "cta": [],
+    "route_or_state": "/ [entries exist]",
+    "reference_png": "reference/browser_content/02.png",
+    "reference_full_png": "reference/screens/02.png",
+    "reference_svg": "reference/svgs/02_home_exists.svg"
+  },
+  {
+    "number": 3,
+    "title": "日記を書く / 空フォーム",
+    "file": "03_write_empty.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/new [empty]",
+    "reference_png": "reference/browser_content/03.png",
+    "reference_full_png": "reference/screens/03.png",
+    "reference_svg": "reference/svgs/03_write_empty.svg"
+  },
+  {
+    "number": 4,
+    "title": "日記を書く / 入力済み",
+    "file": "04_write_filled.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/new [filled]",
+    "reference_png": "reference/browser_content/04.png",
+    "reference_full_png": "reference/screens/04.png",
+    "reference_svg": "reference/svgs/04_write_filled.svg"
+  },
+  {
+    "number": 5,
+    "title": "記録 / カレンダー",
+    "file": "05_records_calendar.svg",
+    "nav": "records",
+    "cta": [],
+    "route_or_state": "/library [calendar]",
+    "reference_png": "reference/browser_content/05.png",
+    "reference_full_png": "reference/screens/05.png",
+    "reference_svg": "reference/svgs/05_records_calendar.svg"
+  },
+  {
+    "number": 6,
+    "title": "記録 / 一覧",
+    "file": "06_records_list.svg",
+    "nav": "records",
+    "cta": [],
+    "route_or_state": "/library [list]",
+    "reference_png": "reference/browser_content/06.png",
+    "reference_full_png": "reference/screens/06.png",
+    "reference_svg": "reference/svgs/06_records_list.svg"
+  },
+  {
+    "number": 7,
+    "title": "漫画詳細 / 完成",
+    "file": "07_detail_completed.svg",
+    "nav": "records",
+    "cta": [],
+    "route_or_state": "/entries/:id [succeeded/panels]",
+    "reference_png": "reference/browser_content/07.png",
+    "reference_full_png": "reference/screens/07.png",
+    "reference_svg": "reference/svgs/07_detail_completed.svg"
+  },
+  {
+    "number": 8,
+    "title": "漫画詳細 / 下書き",
+    "file": "08_detail_draft.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [draft]",
+    "reference_png": "reference/browser_content/08.png",
+    "reference_full_png": "reference/screens/08.png",
+    "reference_svg": "reference/svgs/08_detail_draft.svg"
+  },
+  {
+    "number": 9,
+    "title": "漫画生成 / 受付・待機中",
+    "file": "09_generation_0.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [queued]",
+    "reference_png": "reference/browser_content/09.png",
+    "reference_full_png": "reference/screens/09.png",
+    "reference_svg": "reference/svgs/09_generation_0.svg"
+  },
+  {
+    "number": 10,
+    "title": "漫画生成 / 構成を考える",
+    "file": "10_generation_1.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [running/script]",
+    "reference_png": "reference/browser_content/10.png",
+    "reference_full_png": "reference/screens/10.png",
+    "reference_svg": "reference/svgs/10_generation_1.svg"
+  },
+  {
+    "number": 11,
+    "title": "漫画生成 / 絵を描く",
+    "file": "11_generation_2.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [running/images]",
+    "reference_png": "reference/browser_content/11.png",
+    "reference_full_png": "reference/screens/11.png",
+    "reference_svg": "reference/svgs/11_generation_2.svg"
+  },
+  {
+    "number": 12,
+    "title": "漫画生成 / 保存中",
+    "file": "12_generation_3.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "記録を見る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [running/saving]",
+    "reference_png": "reference/browser_content/12.png",
+    "reference_full_png": "reference/screens/12.png",
+    "reference_svg": "reference/svgs/12_generation_3.svg"
+  },
+  {
+    "number": 13,
+    "title": "生成結果 / 確認中",
+    "file": "13_generation_unknown.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "状態を確認する",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [unknown]",
+    "reference_png": "reference/browser_content/13.png",
+    "reference_full_png": "reference/screens/13.png",
+    "reference_svg": "reference/svgs/13_generation_unknown.svg"
+  },
+  {
+    "number": 14,
+    "title": "生成 / 失敗",
+    "file": "14_generation_failed.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "保存した日記を見る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [failed]",
+    "reference_png": "reference/browser_content/14.png",
+    "reference_full_png": "reference/screens/14.png",
+    "reference_svg": "reference/svgs/14_generation_failed.svg"
+  },
+  {
+    "number": 15,
+    "title": "生成 / キャンセル済み",
+    "file": "15_generation_cancelled.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "日記に戻る",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [cancelled]",
+    "reference_png": "reference/browser_content/15.png",
+    "reference_full_png": "reference/screens/15.png",
+    "reference_svg": "reference/svgs/15_generation_cancelled.svg"
+  },
+  {
+    "number": 16,
+    "title": "生成不可 / 上限到達",
+    "file": "16_generation_limit.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "下書きとして保存",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/new [quota limit]",
+    "reference_png": "reference/browser_content/16.png",
+    "reference_full_png": "reference/screens/16.png",
+    "reference_svg": "reference/svgs/16_generation_limit.svg"
+  },
+  {
+    "number": 17,
+    "title": "オフライン / 通信不可",
+    "file": "17_offline.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "接続を再確認する",
+        680,
+        "secondary"
+      ]
+    ],
+    "route_or_state": "/new [offline]",
+    "reference_png": "reference/browser_content/17.png",
+    "reference_full_png": "reference/screens/17.png",
+    "reference_svg": "reference/svgs/17_offline.svg"
+  },
+  {
+    "number": 18,
+    "title": "記録 / まだ記録がない",
+    "file": "18_records_empty.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "日記を書く",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/library [empty]",
+    "reference_png": "reference/browser_content/18.png",
+    "reference_full_png": "reference/screens/18.png",
+    "reference_svg": "reference/svgs/18_records_empty.svg"
+  },
+  {
+    "number": 19,
+    "title": "下書き / 保存済み",
+    "file": "19_draft_saved.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [draft save confirmation]",
+    "reference_png": "reference/browser_content/19.png",
+    "reference_full_png": "reference/screens/19.png",
+    "reference_svg": "reference/svgs/19_draft_saved.svg"
+  },
+  {
+    "number": 20,
+    "title": "日記編集 / 下書き再開",
+    "file": "20_draft_edit.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [draft edit]",
+    "reference_png": "reference/browser_content/20.png",
+    "reference_full_png": "reference/screens/20.png",
+    "reference_svg": "reference/svgs/20_draft_edit.svg"
+  },
+  {
+    "number": 21,
+    "title": "漫画詳細 / 元の日記を展開",
+    "file": "21_detail_journal_expanded.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を閉じる",
+        680,
+        "secondary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [journal expanded]",
+    "reference_png": "reference/browser_content/21.png",
+    "reference_full_png": "reference/screens/21.png",
+    "reference_svg": "reference/svgs/21_detail_journal_expanded.svg"
+  },
+  {
+    "number": 22,
+    "title": "日記削除 / 確認ダイアログ",
+    "file": "22_delete_confirm.svg",
+    "nav": "records",
+    "cta": [],
+    "route_or_state": "/entries/:id [delete modal]",
+    "reference_png": "reference/browser_content/22.png",
+    "reference_full_png": "reference/screens/22.png",
+    "reference_svg": "reference/svgs/22_delete_confirm.svg"
+  },
+  {
+    "number": 23,
+    "title": "セッション / 記録を表示できない",
+    "file": "23_session_lost.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "新しい日記を書く",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/library [session unavailable]",
+    "reference_png": "reference/browser_content/23.png",
+    "reference_full_png": "reference/screens/23.png",
+    "reference_svg": "reference/svgs/23_session_lost.svg"
+  },
+  {
+    "number": 24,
+    "title": "漫画詳細 / 編集前の漫画",
+    "file": "24_detail_outdated.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を読む",
+        680,
+        "secondary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [outdated comic]",
+    "reference_png": "reference/browser_content/24.png",
+    "reference_full_png": "reference/screens/24.png",
+    "reference_svg": "reference/svgs/24_detail_outdated.svg"
+  },
+  {
+    "number": 25,
+    "title": "漫画詳細 / 1枚画像方式",
+    "file": "25_detail_singlepage.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "元の日記を読む",
+        680,
+        "secondary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [succeeded/page]",
+    "reference_png": "reference/browser_content/25.png",
+    "reference_full_png": "reference/screens/25.png",
+    "reference_svg": "reference/svgs/25_detail_singlepage.svg"
+  },
+  {
+    "number": 26,
+    "title": "記録 / 同日に複数件",
+    "file": "26_records_multi.svg",
+    "nav": "records",
+    "cta": [],
+    "route_or_state": "/library [multiple same date]",
+    "reference_png": "reference/browser_content/26.png",
+    "reference_full_png": "reference/screens/26.png",
+    "reference_svg": "reference/svgs/26_records_multi.svg"
+  },
+  {
+    "number": 27,
+    "title": "記録 / 選択した日に記録なし",
+    "file": "27_records_day_empty.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "この日の日記を書く",
+        680,
+        "secondary"
+      ]
+    ],
+    "route_or_state": "/library [empty selected date]",
+    "reference_png": "reference/browser_content/27.png",
+    "reference_full_png": "reference/screens/27.png",
+    "reference_svg": "reference/svgs/27_records_day_empty.svg"
+  },
+  {
+    "number": 28,
+    "title": "保存失敗 / 入力を保持",
+    "file": "28_save_failed.svg",
+    "nav": "write",
+    "cta": [
+      [
+        "もう一度保存",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/new or edit [save failed]",
+    "reference_png": "reference/browser_content/28.png",
+    "reference_full_png": "reference/screens/28.png",
+    "reference_svg": "reference/svgs/28_save_failed.svg"
+  },
+  {
+    "number": 29,
+    "title": "漫画詳細 / その他の操作メニュー",
+    "file": "29_detail_overflow.svg",
+    "nav": "records",
+    "cta": [
+      [
+        "4コマにする",
+        680,
+        "primary"
+      ]
+    ],
+    "route_or_state": "/entries/:id [more menu]",
+    "reference_png": "reference/browser_content/29.png",
+    "reference_full_png": "reference/screens/29.png",
+    "reference_svg": "reference/svgs/29_detail_overflow.svg"
+  },
+  {
+    "number": 30,
+    "title": "日記入力 / 未保存で戻る",
+    "file": "30_unsaved_confirmation.svg",
+    "nav": "write",
+    "cta": [],
+    "route_or_state": "/new [unsaved exit modal]",
+    "reference_png": "reference/browser_content/30.png",
+    "reference_full_png": "reference/screens/30.png",
+    "reference_svg": "reference/svgs/30_unsaved_confirmation.svg"
+  }
+]

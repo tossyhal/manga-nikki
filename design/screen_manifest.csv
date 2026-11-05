@@ -1,0 +1,31 @@
+﻿番号,画面名,実装ルート・状態,ブラウザ基準PNG,全体PNG,SVG
+1,ホーム / 今日の記録なし,/ [empty],reference/browser_content/01.png,reference/screens/01.png,reference/svgs/01_home_empty.svg
+2,ホーム / 今日の記録あり,/ [entries exist],reference/browser_content/02.png,reference/screens/02.png,reference/svgs/02_home_exists.svg
+3,日記を書く / 空フォーム,/new [empty],reference/browser_content/03.png,reference/screens/03.png,reference/svgs/03_write_empty.svg
+4,日記を書く / 入力済み,/new [filled],reference/browser_content/04.png,reference/screens/04.png,reference/svgs/04_write_filled.svg
+5,記録 / カレンダー,/library [calendar],reference/browser_content/05.png,reference/screens/05.png,reference/svgs/05_records_calendar.svg
+6,記録 / 一覧,/library [list],reference/browser_content/06.png,reference/screens/06.png,reference/svgs/06_records_list.svg
+7,漫画詳細 / 完成,/entries/:id [succeeded/panels],reference/browser_content/07.png,reference/screens/07.png,reference/svgs/07_detail_completed.svg
+8,漫画詳細 / 下書き,/entries/:id [draft],reference/browser_content/08.png,reference/screens/08.png,reference/svgs/08_detail_draft.svg
+9,漫画生成 / 受付・待機中,/entries/:id [queued],reference/browser_content/09.png,reference/screens/09.png,reference/svgs/09_generation_0.svg
+10,漫画生成 / 構成を考える,/entries/:id [running/script],reference/browser_content/10.png,reference/screens/10.png,reference/svgs/10_generation_1.svg
+11,漫画生成 / 絵を描く,/entries/:id [running/images],reference/browser_content/11.png,reference/screens/11.png,reference/svgs/11_generation_2.svg
+12,漫画生成 / 保存中,/entries/:id [running/saving],reference/browser_content/12.png,reference/screens/12.png,reference/svgs/12_generation_3.svg
+13,生成結果 / 確認中,/entries/:id [unknown],reference/browser_content/13.png,reference/screens/13.png,reference/svgs/13_generation_unknown.svg
+14,生成 / 失敗,/entries/:id [failed],reference/browser_content/14.png,reference/screens/14.png,reference/svgs/14_generation_failed.svg
+15,生成 / キャンセル済み,/entries/:id [cancelled],reference/browser_content/15.png,reference/screens/15.png,reference/svgs/15_generation_cancelled.svg
+16,生成不可 / 上限到達,/new [quota limit],reference/browser_content/16.png,reference/screens/16.png,reference/svgs/16_generation_limit.svg
+17,オフライン / 通信不可,/new [offline],reference/browser_content/17.png,reference/screens/17.png,reference/svgs/17_offline.svg
+18,記録 / まだ記録がない,/library [empty],reference/browser_content/18.png,reference/screens/18.png,reference/svgs/18_records_empty.svg
+19,下書き / 保存済み,/entries/:id [draft save confirmation],reference/browser_content/19.png,reference/screens/19.png,reference/svgs/19_draft_saved.svg
+20,日記編集 / 下書き再開,/entries/:id [draft edit],reference/browser_content/20.png,reference/screens/20.png,reference/svgs/20_draft_edit.svg
+21,漫画詳細 / 元の日記を展開,/entries/:id [journal expanded],reference/browser_content/21.png,reference/screens/21.png,reference/svgs/21_detail_journal_expanded.svg
+22,日記削除 / 確認ダイアログ,/entries/:id [delete modal],reference/browser_content/22.png,reference/screens/22.png,reference/svgs/22_delete_confirm.svg
+23,セッション / 記録を表示できない,/library [session unavailable],reference/browser_content/23.png,reference/screens/23.png,reference/svgs/23_session_lost.svg
+24,漫画詳細 / 編集前の漫画,/entries/:id [outdated comic],reference/browser_content/24.png,reference/screens/24.png,reference/svgs/24_detail_outdated.svg
+25,漫画詳細 / 1枚画像方式,/entries/:id [succeeded/page],reference/browser_content/25.png,reference/screens/25.png,reference/svgs/25_detail_singlepage.svg
+26,記録 / 同日に複数件,/library [multiple same date],reference/browser_content/26.png,reference/screens/26.png,reference/svgs/26_records_multi.svg
+27,記録 / 選択した日に記録なし,/library [empty selected date],reference/browser_content/27.png,reference/screens/27.png,reference/svgs/27_records_day_empty.svg
+28,保存失敗 / 入力を保持,/new or edit [save failed],reference/browser_content/28.png,reference/screens/28.png,reference/svgs/28_save_failed.svg
+29,漫画詳細 / その他の操作メニュー,/entries/:id [more menu],reference/browser_content/29.png,reference/screens/29.png,reference/svgs/29_detail_overflow.svg
+30,日記入力 / 未保存で戻る,/new [unsaved exit modal],reference/browser_content/30.png,reference/screens/30.png,reference/svgs/30_unsaved_confirmation.svg

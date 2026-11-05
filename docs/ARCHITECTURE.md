@@ -2,6 +2,8 @@
 
 > 2026-10-27に採用した実装方針です。全体の構成・共通型・公開条件を先に揃え、通常の開発はモックで進めます。
 
+以下の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。詳細は[PLAN](PLAN.md)を参照してください。
+
 ---
 
 ## 1. システム構成と各層の役割
@@ -44,6 +46,24 @@ supabase/
  └─ { migrations, tests }                                # DBスキーマ定義とRLS/RPCテスト
 ```
 
+### 実装コードの責務境界
+
+- `client/app/App.tsx`はアプリ共通枠・設定取得・画面離脱保護、`app/routes.tsx`はルートと利用可否の表示を担当します。ホーム固有の取得・表示は`features/home/`に置きます。
+- 日記の新規作成と編集では`DiaryDateField`・`DiaryBodyField`と日付書式を共有します。利用枠は`useGenerationQuota`で取得し、新規画面だけ再取得時にloadingへ戻す差を明示します。
+- 記録のURL状態は`librarySearch.ts`、日付計算は`libraryCalendar.ts`、取得範囲の走査は`libraryCoverage.ts`、取得中の状態とキャンセルは`useLibraryEntries.ts`が担当します。表示のページ数とAPIのcursorは別に扱います。
+- 詳細の編集は`useEntryEditor`、生成中の状態取得は`useGenerationPolling`、操作メニューは`DetailToolbar`、状態カードは`GenerationStatusCard`へ分離します。編集・生成・削除の排他用refは詳細画面内で共有し、別々の操作ロックを作りません。
+- `client/lib/api/`は通信基盤、日記操作、生成受付・再確認、画像URL取得で分けます。既存の`lib/api.ts`からのexportは維持し、作成・生成の冪等性キーと保存形式も変更しません。
+- サーバーの`http.ts`はHTTPエラーとサイズ制限付き本文読取、`repositories/mock-service.ts`はモックの日記作成・一覧・枠確認・生成を担当します。実接続との振り分けと認証の順序は`server/app.ts`に残します。
+- SupabaseのURL・キー検証は`supabase-config.ts`、生成行の状態変換は`generation-row.ts`へ集約します。利用者用・RPC専用・Storage削除専用のクライアントは分け、所有者と最新／履歴生成の関連確認は呼出元で行います。
+
+### 初期読み込みと認証SDK
+
+認証SDKはliveモードと公開設定を確認した後、セッション確認・明示的な登録が必要になった時点で読み込みます。初期化Promiseを共有し、読み込み・初期化失敗をセッションなしとして扱わず、匿名アカウントの自動作成や保存済み認証情報の削除は行いません。
+
+画面のコードと全静的JS/CSSのPWA事前キャッシュは維持します。SDKの分離は初期の解析・実行量を減らすもので、PWAの取得総量を大きく減らすものではありません。liveの初回セッション確認時にはSDKチャンクの取得が1回必要です。PWA成果物の入口JSは`index.html`から特定します。
+
+共有の日付関数は`shared/date.ts`に置き、既存の`shared/schemas.ts`からのexportも維持します。フォーマッターは再利用し、呼出時の現在時刻からJSTの日付を求めます。
+
 ---
 
 ## 2. 非同期生成の処理フローと境界
@@ -59,7 +79,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 3. ジョブの取得と重複防止（Queue Consumer）
    - Consumerは`queued`状態のジョブを原子的（アトミック）に取得（claim）し、発行された`claimToken`を使って外部AI呼び出しの開始・完了を管理します。
    - Queueの仕様で同じメッセージが重複配信されても、AIを二重に実行しません。
-4. AI呼び出しと保存（Consumer → AI / Storage / DB）
+4. AI呼び出しと保存（Consumer → AI / Storage / DB、実AI経路は未接続）
    - 外部AIを呼ぶ直前に、全体停止や日記の削除要求がないか再確認し、試行状態を`dispatched`として記録します。
    - AIから返った脚本と画像を検証した後、StorageとDBへ保存します。
 5. 中断・障害時の扱い
@@ -70,7 +90,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 - Queue設定：1本、初期値は`batch size: 1`・`concurrency: 2`。
 - 時間制限の目安：AIプロバイダ呼び出しのtimeoutは120秒、ジョブ全体の完了目標は10分、進行が15分停止したものは`unknown`候補とします。
-- 定期処理（Cron）：未配送ジョブの照合は1分おき、期限切れデータの掃除は日次（1日1回）とし、Workersの実行制限と実測値を踏まえて調整します（詳細は担当PRで具体化）。
+- 定期処理（Cron）：`* * * * *`は未配送jobの再送・期限照合、`0 15 * * *`（UTC）はJST 0時の期限削除です。Cron文字列でhandlerを分け、dailyは`local-connected` / `live-demo`に限り個人データへ接続します。1回に最大10entryを処理します。
 - ※ 開発内部でのAIモデル比較実験は同期処理で行っても構いませんが、その実験用コードをそのまま外部へ公開しません。
 
 ---
@@ -81,19 +101,21 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定の検証とlocal-mock・preview-sampleは実装済みです。local-connectedとlive-demoの接続処理は未実装で、個人APIは503を返します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、local-mockの生成API受付と固定結果の表示ではfalseのまま使います。preview-sampleでは生成受付を無効にします。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。`/assets/:id/url`は本人の有効なmock jobだけに公開サンプル画像を返し、Storage署名URLを発行しません。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。live-demoの新しい実AI生成は未実装のため常に停止し、実AI・Storageのprivate画像保存と署名URLも未接続です。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、mock生成ではfalseのまま使います。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
 | `local-mock` | `development` | `mock` | `mock` | `false` | localhost限定の仮ユーザー・仮保存・固定漫画 |
-| `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・固定漫画で結合確認 |
+| `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・Queue経由の固定mock漫画で結合確認。Queue/Turnstile secretsがなければ新規受付は停止 |
 | `preview-sample` | `staging`または`production` | `sample` | `mock` | `false` | 架空サンプルだけ。匿名登録・個人データAPI・生成受付は無効 |
-| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、承認後`true` | 本物Auth・private保存・Queue。停止中も本人の履歴は閲覧可能 |
+| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、承認後`true` | 本物Auth・日記CRUDと期限削除service。実AI生成は停止し、画像のprivate保存・署名URLは未接続 |
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
-- `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。`local-connected`のstaging配信では本物Authを使い、モックと明示した架空データだけで検証します。
+- `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
 - 実AIは`live-demo`で環境変数とDBの`enabled`が両方有効、かつ予算・認証・Queue等の公開条件を満たす場合だけ呼びます。他モードでの`GENERATION_ENABLED=true`は拒否します。
-- モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`の見本です。
+- local-connectedのmock予約は`reserve_mock_generation`だけで行い、DB policyが有効かつmock profileのときに限ります。実profileはこの経路から予約できません。
+- Queueには`{ generationId }`だけを送ります。Worker Consumerはmock profileだけを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合は未配送queuedを再送し、15分を過ぎたrunningはRPC結果に従ってfailed / unknown / heldを確定します。unknownを自動再実行しません。
+- モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`、`dev.vars.local-connected.example`はSupabase接続を設定する開発用見本です。共有DBへのmigration適用前にlocal-connectedを有効なDBへ接続しないでください。
 
 ### PWA（Progressive Web App）の設計方針
 

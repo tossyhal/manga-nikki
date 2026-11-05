@@ -1,91 +1,57 @@
 import { createDevComicRoutes } from './dev-comic';
 import {
-  type GeminiDiagnostics,
-  GeminiScriptError,
-  GeminiScriptProvider,
-  geminiScriptModelProfile,
-} from './ai/gemini-script-provider';
+  getMockQuota,
+  createMockEntry,
+  listMockEntries,
+  getMockEntry,
+  reserveMockGeneration,
+} from './repositories/mock-service';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { MockScriptProvider, mockScriptModelProfile } from './ai/mock-script-provider';
-import { pageComic } from '../shared/fixtures';
-import { createEntrySchema, updateEntrySchema, generateSchema, jstToday } from '../shared/schemas';
+import { createEntrySchema, updateEntrySchema, generateSchema } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
 import { createMockRepository, type MockRepository } from './repositories/mock';
+import {
+  createLiveEntry,
+  deleteLiveEntry,
+  getLiveEntryDetail,
+  listLiveEntries,
+  LiveEntryError,
+  updateLiveEntry,
+} from './live-entries';
+import {
+  generationIngressConfigured,
+  getLiveGeneration,
+  getLiveGenerationQuota,
+  getLiveMockAssetUrl,
+  LiveGenerationError,
+  reserveLiveMockGeneration,
+} from './live-generations';
+import {
+  getBearerToken,
+  InvalidAccessTokenError,
+  SupabaseAuthUnavailableError,
+  verifySupabaseAccessToken,
+} from './auth';
 
-class ApiError extends Error {
-  constructor(
-    public status: 400 | 401 | 404 | 409 | 413 | 429 | 503,
-    public code: string,
-    public diagnostics?: GeminiDiagnostics,
-  ) {
-    super(code);
-  }
-}
-const messages: Record<string, string> = {
-  GEMINI_SERVICE_UNAVAILABLE:
-    'Gemini側がサーバーエラーを返しました。diagnosticsのHTTPステータスを確認してください。',
-  GEMINI_TIMEOUT:
-    'Geminiの応答待ちがタイムアウトしました。実行状況を確認してから再操作してください。',
-  GEMINI_ABORTED: 'Geminiの応答待ちが中断されました。実行状況を確認してください。',
-  GEMINI_NETWORK_ERROR:
-    'Geminiとの通信でエラーになりました。実行状況とネットワークを確認してください。',
-  GEMINI_RATE_LIMIT: 'Geminiの利用上限に達しました。AI Studioで上限を確認してください。',
-  GEMINI_REQUEST_REJECTED: 'Geminiのキー、モデルの利用権限、リクエスト設定を確認してください。',
-  GEMINI_RESULT_UNKNOWN:
-    '送信後の結果を確認できません。自動再送せず、AI Studioで利用状況を確認してください。',
-  GEMINI_LOCAL_LIMIT: 'ローカル検証は同時1件、サーバー起動中5試行までです。',
-  INVALID_INPUT: '入力内容を確認してください。',
-  AUTH_REQUIRED: '開発用セッションを確認してください。',
-  NOT_FOUND: '記録が見つかりません。',
-  REVISION_CONFLICT: '記録が更新されています。再読み込みしてください。',
-  IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
-  INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
-  USER_LIMIT_REACHED: 'モックの本日の生成上限に達しました。',
-  DRAFT_LIMIT_REACHED: '下書きが上限に達しました。不要な記録を削除してください。',
-  DEPENDENCY_UNAVAILABLE: 'この接続方式は初期基盤では未対応です。',
-  GENERATION_DISABLED: 'この環境では個人データの操作は利用できません。',
-};
-async function jsonBody(request: Request): Promise<unknown> {
-  if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json')
-    throw new ApiError(400, 'INVALID_INPUT');
-  const reader = request.body?.getReader();
-  if (!reader) throw new ApiError(400, 'INVALID_INPUT');
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      size += part.value.byteLength;
-      if (size > 16384) {
-        await reader.cancel();
-        throw new ApiError(413, 'INPUT_TOO_LARGE');
-      }
-      chunks.push(part.value);
-    }
-    const data = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      data.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(400, 'INVALID_INPUT');
-  } finally {
-    reader.releaseLock();
-  }
-}
+import { ApiError, messages, jsonBody } from './http';
+
 export function createApp(
-  options: { localDevelopment?: boolean; repository?: MockRepository } = {},
+  options: {
+    localDevelopment?: boolean;
+    repository?: MockRepository;
+    authFetch?: typeof fetch;
+    supabaseFetch?: typeof fetch;
+    turnstileFetch?: typeof fetch;
+  } = {},
 ) {
-  const repository = options.repository ?? createMockRepository();
-  type Bindings = Environment & { GEMINI_API_KEY?: string; GEMINI_SCRIPT_ENABLED?: string };
-  const app = new Hono<{ Bindings: Bindings; Variables: { owner: string } }>();
-  let geminiBusy = false;
-  let geminiAttempts = 0;
+  let repository = options.repository;
+  const getRepository = () => (repository ??= createMockRepository());
+  const app = new Hono<{
+    Bindings: Environment;
+    Variables: { owner: string; accessToken: string | null };
+  }>();
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     await next();
@@ -94,19 +60,23 @@ export function createApp(
     const failure =
       error instanceof ApiError
         ? error
-        : error instanceof z.ZodError
-          ? new ApiError(400, 'INVALID_INPUT')
-          : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+        : error instanceof LiveEntryError
+          ? new ApiError(error.status, error.code)
+          : error instanceof LiveGenerationError
+            ? new ApiError(error.status, error.code)
+            : error instanceof z.ZodError
+              ? new ApiError(400, 'INVALID_INPUT')
+              : new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
     return c.json(
       {
         error: {
           code: failure.code,
-          message: messages[failure.code],
+          message:
+            error instanceof LiveGenerationError && error.code === 'GENERATION_DISABLED'
+              ? '現在、新しい漫画の生成を利用できません。'
+              : messages[failure.code],
           requestId: crypto.randomUUID(),
           retryable: false,
-          ...(options.localDevelopment && failure.diagnostics
-            ? { diagnostics: failure.diagnostics }
-            : {}),
         },
       },
       failure.status,
@@ -126,7 +96,9 @@ export function createApp(
   app.get('/api/v1/config', (c) => {
     const current = mode(c.env);
     return c.json({
-      generationAvailable: current === 'local-mock',
+      generationAvailable:
+        current === 'local-mock' ||
+        (current === 'local-connected' && generationIngressConfigured(c.env)),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
       consentVersion: 'v1',
@@ -141,60 +113,6 @@ export function createApp(
     }),
   );
 
-  app.route(
-    '/api/v1/dev/openai-color-comics',
-    createDevComicRoutes({
-      localDevelopment: options.localDevelopment ?? false,
-      readJson: jsonBody,
-      color: true,
-    }),
-  );
-
-  // 実AIの比較実験専用。公開生成のモード・Queue・利用枠とは分離する。
-  app.post('/api/v1/dev/gemini-script', async (c) => {
-    const url = new URL(c.req.url);
-    if (!options.localDevelopment || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-      throw new ApiError(404, 'NOT_FOUND');
-    if (mode(c.env) !== 'local-mock') throw new ApiError(404, 'NOT_FOUND');
-    const origin = c.req.header('Origin');
-    if (origin && origin !== url.origin) throw new ApiError(404, 'NOT_FOUND');
-    if (c.env.GEMINI_SCRIPT_ENABLED !== 'true') throw new ApiError(503, 'GENERATION_DISABLED');
-    // カスタムヘッダーを要求し、他サイトの単純なフォーム送信を受け付けない。
-    if (c.req.header('X-Dev-Gemini') !== '1') throw new ApiError(400, 'INVALID_INPUT');
-    const input = z
-      .strictObject({
-        body: createEntrySchema.shape.body,
-        diaryDate: createEntrySchema.shape.diaryDate,
-      })
-      .parse(await jsonBody(c.req.raw));
-    if (!c.env.GEMINI_API_KEY?.trim()) throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
-    if (geminiBusy || geminiAttempts >= 5) throw new ApiError(429, 'GEMINI_LOCAL_LIMIT');
-    geminiBusy = true;
-    geminiAttempts += 1;
-    try {
-      const script = await new GeminiScriptProvider(c.env.GEMINI_API_KEY).createScript(
-        { id: crypto.randomUUID(), ...input, revision: 1 },
-        {
-          signal: c.req.raw.signal,
-          generationId: crypto.randomUUID(),
-          callIndex: 1,
-          modelProfile: geminiScriptModelProfile,
-        },
-      );
-      return c.json({ mock: false, modelId: geminiScriptModelProfile.modelId, script });
-    } catch (error) {
-      if (error instanceof GeminiScriptError && error.code in messages) {
-        throw new ApiError(
-          error.code === 'GEMINI_RATE_LIMIT' ? 429 : 503,
-          error.code,
-          error.diagnostics,
-        );
-      }
-      throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
-    } finally {
-      geminiBusy = false;
-    }
-  });
   // 固定サンプル専用。個人データAPIの認証とは分離してブラウザで確認する。
   app.get('/api/v1/dev/script', async (c) => {
     const url = new URL(c.req.url);
@@ -223,98 +141,99 @@ export function createApp(
   });
   app.use('/api/v1/*', async (c, next) => {
     const current = mode(c.env);
-    if (current !== 'local-mock')
-      throw new ApiError(
-        503,
-        current === 'preview-sample' ? 'GENERATION_DISABLED' : 'DEPENDENCY_UNAVAILABLE',
-      );
+    if (current === 'preview-sample') throw new ApiError(503, 'GENERATION_DISABLED');
     const url = new URL(c.req.url);
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
-      throw new ApiError(401, 'AUTH_REQUIRED');
     const origin = c.req.header('Origin');
     if (origin && origin !== url.origin) throw new ApiError(401, 'AUTH_REQUIRED');
-    const owner = c.req.header('Authorization')?.match(/^Bearer mock:([0-9a-f-]+)$/)?.[1];
-    if (!owner || !z.uuid().safeParse(owner).success) throw new ApiError(401, 'AUTH_REQUIRED');
+
+    let owner: string;
+    let accessToken: string | null = null;
+    if (current === 'local-mock') {
+      if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+        throw new ApiError(401, 'AUTH_REQUIRED');
+      owner = c.req.header('Authorization')?.match(/^Bearer mock:([0-9a-f-]+)$/)?.[1] ?? '';
+      if (!z.uuid().safeParse(owner).success) throw new ApiError(401, 'AUTH_REQUIRED');
+    } else {
+      try {
+        const token = getBearerToken(c.req.header('Authorization'));
+        owner = await verifySupabaseAccessToken(c.env, token, options.authFetch);
+        accessToken = token;
+      } catch (error) {
+        if (error instanceof InvalidAccessTokenError) throw new ApiError(401, 'AUTH_REQUIRED');
+        if (error instanceof SupabaseAuthUnavailableError)
+          throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+        throw error;
+      }
+    }
     c.set('owner', owner);
+    c.set('accessToken', accessToken);
     await next();
   });
-  const getEntry = (id: string, owner: string) => {
-    const found = repository.entries.get(id);
-    if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
-    return found;
+  const liveContext = (c: {
+    env: Environment;
+    get: (key: 'owner' | 'accessToken') => string | null;
+  }) => {
+    const accessToken = c.get('accessToken');
+    if (!accessToken) throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    return {
+      environment: c.env,
+      owner: c.get('owner') as string,
+      accessToken,
+      fetcher: options.supabaseFetch,
+      turnstileFetch: options.turnstileFetch,
+    };
   };
-  app.get('/api/v1/me/quota', (c) => {
-    const day = jstToday();
-    const resetAt = new Date(Date.parse(`${day}T00:00:00+09:00`) + 86400000).toISOString();
-    return c.json({
-      remainingToday: Math.max(0, 2 - (repository.counts.get(`${c.get('owner')}:${day}`) ?? 0)),
-      activeGenerationId: null,
-      resetAt,
-      generationAvailable: true,
-    });
+  app.get('/api/v1/me/quota', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock')
+      return c.json(
+        await getLiveGenerationQuota(
+          liveContext(c),
+          current === 'local-connected' && generationIngressConfigured(c.env),
+        ),
+      );
+    return c.json(getMockQuota(getRepository(), c.get('owner')));
   });
   app.post('/api/v1/entries', async (c) => {
     const input = createEntrySchema.parse(await jsonBody(c.req.raw));
-    const owner = c.get('owner');
-    const existing = [...repository.entries.values()].find(
-      (x) => x.owner === owner && x.requestId === input.createRequestId,
-    );
-    if (existing) {
-      if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
-        throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
-      return c.json(existing.entry, 201);
-    }
-    if (
-      [...repository.entries.values()].filter(
-        (x) => x.owner === owner && !x.entry.latestGenerationId,
-      ).length >= 20
-    )
-      throw new ApiError(429, 'DRAFT_LIMIT_REACHED');
-    const now = new Date().toISOString();
-    const entry = {
-      id: crypto.randomUUID(),
-      diaryDate: input.diaryDate,
-      body: input.body,
-      revision: 1,
-      latestGenerationId: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
-    return c.json(entry, 201);
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await createLiveEntry(liveContext(c), input), 201);
+    return c.json(createMockEntry(getRepository(), c.get('owner'), input), 201);
   });
-  app.get('/api/v1/entries', (c) => {
+  app.get('/api/v1/entries', async (c) => {
     const limit = z.coerce
       .number()
       .int()
       .min(1)
       .max(50)
       .parse(c.req.query('limit') ?? 20);
-    const sorted = [...repository.entries.values()]
-      .filter((x) => x.owner === c.get('owner'))
-      .map((x) => x.entry)
-      .sort((a, b) => b.diaryDate.localeCompare(a.diaryDate) || b.id.localeCompare(a.id));
-    const cursor = c.req.query('cursor');
-    const index = cursor ? sorted.findIndex((x) => x.id === cursor) : -1;
-    if (cursor && index < 0) throw new ApiError(400, 'INVALID_INPUT');
-    const items = sorted.slice(index + 1, index + 1 + limit);
-    return c.json({
-      items,
-      nextCursor: sorted.length > index + 1 + limit ? (items.at(-1)?.id ?? null) : null,
-    });
+    if (mode(c.env) !== 'local-mock') {
+      const cursor = c.req.query('cursor');
+      return c.json(
+        await listLiveEntries(liveContext(c), { limit, ...(cursor ? { cursor } : {}) }),
+      );
+    }
+    return c.json(listMockEntries(getRepository(), c.get('owner'), limit, c.req.query('cursor')));
   });
-  app.get('/api/v1/entries/:id', (c) => {
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+  app.get('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock') {
+      const detail = await getLiveEntryDetail(liveContext(c), c.req.param('id'));
+      if (!detail) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(detail);
+    }
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     return c.json({
       ...entry,
       latestGeneration: entry.latestGenerationId
-        ? (repository.generations.get(entry.latestGenerationId)?.generation ?? null)
+        ? (getRepository().generations.get(entry.latestGenerationId)?.generation ?? null)
         : null,
     });
   });
   app.patch('/api/v1/entries/:id', async (c) => {
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await updateLiveEntry(liveContext(c), c.req.param('id'), input));
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     if (input.expectedRevision !== entry.revision) throw new ApiError(409, 'REVISION_CONFLICT');
     Object.assign(entry, {
       body: input.body,
@@ -324,57 +243,55 @@ export function createApp(
     });
     return c.json(entry);
   });
-  app.delete('/api/v1/entries/:id', (c) => {
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
-    repository.entries.delete(entry.id);
-    for (const [key, job] of repository.generations)
-      if (job.generation.entryId === entry.id) repository.generations.delete(key);
+  app.delete('/api/v1/entries/:id', async (c) => {
+    if (mode(c.env) !== 'local-mock')
+      return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
+    getRepository().entries.delete(entry.id);
+    for (const [key, job] of getRepository().generations)
+      if (job.generation.entryId === entry.id) getRepository().generations.delete(key);
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
+    const current = mode(c.env);
+    if (current === 'live-demo') throw new LiveGenerationError(503, 'GENERATION_DISABLED');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    if (current !== 'local-mock') {
+      const receipt = await reserveLiveMockGeneration(
+        { ...liveContext(c), turnstileFetch: options.turnstileFetch },
+        {
+          entryId: z.uuid().parse(c.req.param('id')),
+          expectedRevision: input.expectedRevision,
+          idempotencyKey: z.uuid().parse(c.req.header('Idempotency-Key')),
+          captchaToken: input.captchaToken,
+        },
+      );
+      return c.json(receipt, 202);
+    }
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
-    const owner = c.get('owner');
-    const old = [...repository.generations.values()].find(
-      (x) => x.owner === owner && x.key === key,
-    );
-    if (old && (old.generation.entryId !== entry.id || old.revision !== input.expectedRevision))
-      throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
-    if (!old && input.expectedRevision !== entry.revision)
-      throw new ApiError(409, 'REVISION_CONFLICT');
-    const receipt = (id: string) => ({
-      generationId: id,
-      status: 'queued' as const,
-      statusUrl: `/api/v1/generations/${id}`,
-    });
-    if (old) return c.json(receipt(old.generation.id), 202);
-    const counter = `${owner}:${jstToday()}`;
-    const count = repository.counts.get(counter) ?? 0;
-    if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');
-    const id = crypto.randomUUID();
-    const assetId = crypto.randomUUID();
-    const comic = {
-      ...pageComic,
-      visual: { kind: 'page' as const, assetId, textMode: 'external' as const },
-    };
-    repository.generations.set(id, {
-      owner,
-      key,
-      revision: entry.revision,
-      generation: { id, entryId: entry.id, status: 'succeeded', stage: null, comic, mock: true },
-    });
-    repository.counts.set(counter, count + 1);
-    entry.latestGenerationId = id;
-    return c.json(receipt(id), 202);
+    return c.json(reserveMockGeneration(getRepository(), c.get('owner'), entry, key, input), 202);
   });
-  app.get('/api/v1/generations/:id', (c) => {
-    const job = repository.generations.get(c.req.param('id'));
+  app.get('/api/v1/generations/:id', async (c) => {
+    const current = mode(c.env);
+    if (current !== 'local-mock') {
+      const generation = await getLiveGeneration(liveContext(c), c.req.param('id'));
+      if (!generation) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(generation);
+    }
+    const job = getRepository().generations.get(c.req.param('id'));
     if (!job || job.owner !== c.get('owner')) throw new ApiError(404, 'NOT_FOUND');
     return c.json(job.generation);
   });
-  app.get('/api/v1/assets/:id/url', (c) => {
-    const job = [...repository.generations.values()].find(
+  app.get('/api/v1/assets/:id/url', async (c) => {
+    const current = mode(c.env);
+    if (current === 'local-connected') {
+      const asset = await getLiveMockAssetUrl(liveContext(c), c.req.param('id'));
+      if (!asset) throw new ApiError(404, 'NOT_FOUND');
+      return c.json(asset);
+    }
+    if (current !== 'local-mock') throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    const job = [...getRepository().generations.values()].find(
       (x) =>
         x.owner === c.get('owner') &&
         x.generation.status === 'succeeded' &&

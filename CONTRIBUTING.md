@@ -1,5 +1,7 @@
 # 開発手順（CONTRIBUTING）
 
+本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+
 ## 1. 最初にやること（ツールの準備）
 
 初期基盤と固定版の設定は追加済みです。この節でツールとエディターを準備し、次の節で開発サーバーを起動します。
@@ -79,12 +81,20 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
+`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`dev.vars.local-connected.example`を編集し、`.dev.vars.local-connected`へコピーして、開発用Supabaseにレビュー済みmigrationを適用してから次のように起動します。Turnstile検証用secretと許可hostnameがない状態では生成受付が停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
+
+```sh
+CLOUDFLARE_ENV=local-connected pnpm dev
+```
+
 ## 3. 初期基盤の範囲
+
+以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueなどは後続のStack PRで実装済みですが、共有DB適用や実AI接続は未完了です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
 - 標準コマンド・lint/format・型確認・unit/E2E・CIを用意し、秘密情報なしの新規Windows環境で起動と検査が通ることを確認する。
-- モック表示、localhost制限、動作モードの起動時検証を入れる。DB・Queue・実AI・本番公開は後続PRで扱う。
+- モック表示、localhost制限、動作モードの起動時検証を入れる。初期基盤の対象外だったDB・Queue・実AI・本番公開は後続段階で扱い、実AIと外部公開には別途承認を要します。
 
 以下は基盤設定を更新するときだけの参考です。通常の参加者は作り直さず、前節の`--locked`で導入します。
 
@@ -97,7 +107,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 ## 4. 標準コマンド一覧
 
-初期基盤のコマンドは実装済みです。DBテストと公開用コマンドは後続で追加し、package.jsonの`scripts`を正本とします。
+初期基盤のコマンドと日記DBテスト、環境を明示したstaging/productionビルドを用意しています。`package.json`の`scripts`を正本とします。
 
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
@@ -107,20 +117,41 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | `pnpm test` | Vitestの非watch実行 | 実装済み |
 | `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
 | `pnpm build` | ビルド検証。公開しない | 実装済み |
+| `pnpm build:staging` / `pnpm build:production` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
+| `pnpm test:release-environment` | 隔離fixtureで環境変数の混入を検査 | 実装済み |
 | `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
-| `pnpm test:db` | 隔離DBのRLS/RPC・同時要求 | DB・認証の実装時 |
-| `pnpm build:staging` / `pnpm build:production` | 環境別ビルド | 公開準備時 |
-| `pnpm deploy:staging` / `pnpm deploy:production` | 承認済み環境への公開 | 公開準備時 |
+| `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
 
 `pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはUbuntuだけで実行し、mise-actionで同じ版を導入します。同じブランチの古い実行はキャンセルします。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
+### 環境別ビルド
+
+staging / productionのビルドは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+
+```sh
+pnpm build:staging
+pnpm build:production
+pnpm preview
+```
+
+Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
+
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。デプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
+
+DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
+
 ## 5. ブランチ運用とPull Request（PR）の進め方
+
+### 作業の分担とStacked PR
+
+- 親担当者が計画・作業範囲・base branchを決め、実装はfreshなGPT-6-Luna Maxで行います。Figmaデザインと漫画生成・保存の主担当は別メンバーですが、接続に必要な修正は担当PRに含めて構いません。
+- PRは通常`main`をbaseにします。Stacked PRは親branchをbaseにし、親側の修正を子branchへmergeして伝播させます。親PRがmergeされた後は子PRのbaseを`main`へ切り替えます。履歴の通常rebaseやforce pushは行いません。
 
 ### ① 作業ブランチの作成
 
-必ず最新の`main`ブランチから作業ブランチを作成し、「1タスク＝1PR」の小さな単位で進めます。
+通常は最新の`main`ブランチから作業ブランチを作成し、「1タスク＝1PR」の小さな単位で進めます。Stacked PRでは親担当者が指定した親branchから作成します。
 作業を始める前に、`git status`で未コミットの変更がないことを確認してください。
 
 ```sh
@@ -138,15 +169,15 @@ git switch -c feat/diary-form
 
 ### ③ PRの作成とレビュー
 
-1. ブランチをpushし、GitHub上でbaseブランチを`main`とするPRを作成します。
-2. PRの本文には「変更理由」「確認手順と結果」「未検証の項目」を記載します。画面の変更がある場合はスクリーンショットも添付してください（作業途中の場合はDraft PRにします）。
-3. レビューは変更者以外のチームメンバーに依頼します。
+1. PR作成前にCLIからfreshなOpus 5.5（medium）とGPT-6.1-sol（medium）の独立レビューを行い、指摘を修正して両方のレビューを通します。画面・操作の変更はその後`agent-browser`で実画面を確認します。
+2. ブランチをpushし、通常はbaseを`main`、Stacked PRは指定された親branchとしてPRを作成します。本文は[日本語PRテンプレート](.github/PULL_REQUEST_TEMPLATE.md)に沿って記載し、画面変更にはスクリーンショットを添付します（作業途中の場合はDraft PRにします）。
+3. レビューは変更者以外のチームメンバーにも依頼します。
    - 認証・RLS・RPC・予算制限・公開設定・DB migrationに関わる変更は、人間によるレビューを必須とします。
    - AIツールが生成したコードであっても、PRを出す担当者自身が「何を入力して何が出力されるか」「どう動作確認したか」を説明できるようにしてください。
 
 ### ④ マージとブランチの更新
 
-- マージ方法：レビュー承認後、Merge commitで統合します（Squash mergeやRebase mergeには変更しないでください）。
+- マージ方法：ユーザーがレビュー承認後にMerge commitで統合します（Squash mergeやRebase mergeには変更しないでください）。
 - 禁止事項：`main`ブランチへの直接コミット、`force push`、他人のコミット履歴の書き換えは禁止です。
 - CIの必須化：GitHub ActionsのCIをrequired check（マージ必須条件）に設定するのは、実際に成功するジョブが動いてからにします。
 - 作業中に`main`が進んだ場合：
@@ -183,8 +214,8 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 ## 開発モックの制限
 
-- 本文と結果はWorkerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
-- 表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- Supabase接続・JWT検証・CAPTCHA・Queue・実AI・30日期限削除・PWAは未実装です。接続モードをliveに変えても実APIには接続せず503で拒否します。
-- ビルド結果はサンプル配信向けです。コンパイル済みWorkerはモック認証を拒否するため、`pnpm preview`は日記保存の動作確認には使いません。
+- `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
+- `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handlerを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、最新branchの全経路、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AIと生成画像のprivate Storage保存・署名URL発行は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
