@@ -57,8 +57,8 @@
 
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
 - Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
-- `pnpm build:staging` / `pnpm build:production`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
-- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
+- `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。demoは3値すべてが必須で、未設定なら停止します。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
+- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。専用demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue binding / Cronを定義しますが、実Queue・Supabase・Worker Secretsはまだ設定していません。Workers.devとpreview URLは無効で、routeも設定していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
 - release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
 - 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式またはJWTの`role=service_role`が見つかった場合に停止します。これは既知のSupabaseサーバー専用キー形式の誤設定対策であり、他の秘密情報形式まで検出する保証ではありません。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー。OpenAIを使う場合は`OPENAI_API_KEY`）を配置します。例ファイルは空値やplaceholderのみです。
@@ -141,11 +141,11 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。staging/productionにも日次Cronを準備しますが、初期`DATA_MODE=sample`のmode gateにより個人DB/Storageへ接続せず、Queue bindingもありません。Cron設定だけでremote Queue作成やdeployは行っていません。
+   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。staging/productionにも日次Cronを準備しますが、初期`DATA_MODE=sample`のmode gateにより個人DB/Storageへ接続せず、Queue bindingもありません。独立demo targetには専用名`manga-nikki-demo`、Queue producer / consumer、batch size 1・concurrency 2、1分照合と日次削除Cronを定義します。CronやQueue bindingは設定のみで、remote Queue作成やdeployは行いません。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
-   - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
-   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在アプリ配信用のデプロイscriptはありません。最小Workerの初期作成手順は[DEPLOYMENT](DEPLOYMENT.md)に分けています。この作業では実デプロイを行っていません。
+   - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`によるsample成果物確認 → staging sampleの検証 → 隔離demo環境・DB / Queue / 秘密情報確認 → 公開範囲の別承認 → 実AI費用の別承認後に少数の生成計測」の順に進めます。
+   - `build:staging` / `build:production` / `build:demo`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在アプリ配信用のデプロイscriptはありません。最小Workerの初期作成手順は[DEPLOYMENT](DEPLOYMENT.md)に分けています。この作業では実デプロイを行っていません。
    - ストレージ容量・転送量・WorkerのCPU/メモリ・Queueの利用枠を実アカウントで確認します。
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
@@ -153,14 +153,14 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
 
 ### 実デモ用live-demoを準備する手順
 
-現在の`wrangler.jsonc`はstaging / productionを`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`に固定し、両環境にQueue bindingを設定していません。実デモへ移すには環境設定を変える別レビューが必要です。以下は実AIの課金・公開を有効化する許可ではありません。
+`wrangler.jsonc`には独立した`demo` targetを追加しています。staging / productionのsample設定は変えていません。demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、専用Queue名とCron、Workers.dev / preview URL無効で、実資源・秘密情報・routeは未設定です。`pnpm build:demo`は成果物を作るだけです。この準備はDB接続・日記CRUDの公開・実AIの課金を許可するものではありません。日記が実保存されるlive modeのため、隔離DB・RLS・認証・公開範囲を確認し、公開前に別途承認を得てください。
 
 1. 架空日記専用のSupabase demo projectを用意し、匿名Authを設定します。`supabase/migrations/`のレビュー済みmigrationを順番に適用し、`supabase/storage/comics-bucket.sql`でprivate `comics` bucketを設定します。migrationとbucket設定は管理roleで適用し、Worker用secret keyをDDL実行に使いません。
-2. staging用Wrangler設定の変更をレビューし、`APP_ENV=staging`、`DATA_MODE=live`、`AI_MODE=live`、初期値`GENERATION_ENABLED=false`とします。専用Queueを作り、`GENERATION_QUEUE` producer / consumerの両方へbindし、consumerのbatch size 1・concurrency 2を設定します。Cronには1分ごとのgeneration照合と`0 15 * * *`（UTC）の期限削除を設定します。現行sample設定のproduction環境は変更しません。
-3. Worker側に`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`、`OPENAI_API_KEY`を設定します。秘密値はWorker Secretsへ置きます。browser build側の`.env.staging.local`には公開値の`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを置きます。
+2. `pnpm build:demo`でWorker設定と成果物をレビューします。browser build側は`.env.demo.example`を`.env.demo.local`へコピーし、公開値の`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを設定します。staging用のsample Worker設定とproduction環境は変更しません。
+3. 別途承認を得た後、架空日記専用Supabase project、private Storage、migration、専用Cloudflare Queueを用意し、Worker側に`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`、`OPENAI_API_KEY`を設定します。秘密値はWorker Secretsへ置きます。`GENERATION_ENABLED=false`と初期DB policy disabled / 予算0を維持します。Queue作成、DB適用、Secrets登録はこの設定追加では実行していません。
 4. `GENERATION_ENABLED=false`かつDB policy disabledのまま、匿名Auth・日記CRUD・Queue binding・cleanup・private Storage保存/署名/削除とowner拒否を検証します。実AIを試す前に費用負担者、最大費用`Cmax`、日次/全期間枠、モデル利用権限を承認記録へ記し、隔離環境で検証します。その承認後だけDB policyとWorker flagを両方有効にし、承認された少数の架空日記で計測します。
 
-この作業branchでは共有DBへのmigration適用、Worker設定の変更、Queue作成、秘密情報登録、deploy、DB policy / `GENERATION_ENABLED`の有効化、実AI呼出しは行っていません。
+この設定追加ではWorker設定ファイルに専用targetとbuild検査を用意しましたが、共有DBへのmigration適用、Worker Secrets登録、Queue作成、公開route設定、deploy、DB policy / `GENERATION_ENABLED`の有効化、実AI呼出しは行っていません。公開先のURL、利用者データの保存、匿名Auth等の有効化、実AI費用上限・少数課金試験はそれぞれ別承認の対象です。
 
 ---
 

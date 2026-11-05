@@ -440,7 +440,7 @@ Worker entrypointは`src/server/index.ts`の`createWorker`で、runtime default�
 
 ### 実効ready条件
 
-- `/config.generationAvailable`はlive-demoで、新規生成用の`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handler、復旧callbackがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。default exportには保存handlerが注入済みですが、staging/productionの現在設定はsample mode・Queue未設定・実AI無効のためfalseです。
+- `/config.generationAvailable`はlive-demoで、新規生成用の`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handler、復旧callbackがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。default exportには保存handlerが注入済みですが、staging/productionの現在設定はsample mode・Queue未設定・実AI無効であり、demo targetも初期`GENERATION_ENABLED=false`のため新規生成は停止します。
 - `GET /me/quota.generationAvailable`はこれらの実行設定に加え、DB policyがenabled、固定profileと予算・全体枠・ユーザー枠が利用可能であることを確認します。画面はconfigとquotaの両方が利用可能な場合だけ「4コマにする」を有効にします。
 - live-demoの保存復旧用Cronは`recoverGeneratedComic`が設定されていれば、`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存のeligibleなsaving jobを回復できます。DBの候補選択順は通常精算→保存復旧→enqueueで、復旧候補は最大3件かつenqueueがあれば残枠のおよそ半分までに制限されます。Runtimeの実行順は通常精算→enqueue→保存復旧で、Queue送信の枠を先に確保します。復旧開始RPCがfalseなら別workerが取得済みまたは不適格としてcallbackを呼びません。成功時はDB状態を再検査し、nullableな`save_recovery_retry_at`を5分先へ進めてからcallbackを呼びます。worker一回のCronでcallbackは最大3回、各最大120秒です。次の保存復旧は元のprovider claim `deadline_at`から24時間以内に限られます。5分backoff中はcandidateから外し、通常expireにも落としません。24時間を超えたsaving jobは通常expireで`failed` / `consumed`として精算し、reservationをreleaseせずAI再実行もしません。新しいAI生成は開始しません。
 - initial DB policyは停止、全体枠・総予算は0です。共有DB migrationを適用していないため、実環境でのready状態・課金品質・利用可能なアカウント権限は未確認です。実AI利用は通常開発やCIでは行いません。

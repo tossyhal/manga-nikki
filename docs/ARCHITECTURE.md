@@ -107,14 +107,14 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳・private画像保存・assets登録・保存復旧・実Storage署名URLを接続しています。`/assets/:id/url`は固定mockに公開サンプル画像を返し、実assetには所有者・有効なentry・成功済みgeneration・comic参照を照合して署名URLを返します。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。staging/productionはsample/offでQueueも未設定のため、実生成は受付されません。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は新しい実AI呼出しの許可で、mock生成や既存saving taskの復旧には不要です。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳・private画像保存・assets登録・保存復旧・実Storage署名URLを接続しています。`/assets/:id/url`は固定mockに公開サンプル画像を返し、実assetには所有者・有効なentry・成功済みgeneration・comic参照を照合して署名URLを返します。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。staging/productionはsample/offでQueueも未設定のため、実生成は受付されません。`demo` Wrangler targetはlive-demo用設定を準備していますが、Queue・Secrets・共有DB migration・deployは未実施です。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は新しい実AI呼出しの許可で、mock生成や既存saving taskの復旧には不要です。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
 | `local-mock` | `development` | `mock` | `mock` | `false` | localhost限定の仮ユーザー・仮保存・固定漫画 |
 | `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・Queue経由の固定mock漫画で結合確認。Queue/Turnstile secretsがなければ新規受付は停止 |
 | `preview-sample` | `staging`または`production` | `sample` | `mock` | `false` | 架空サンプルだけ。匿名登録・個人データAPI・生成受付は無効 |
-| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、別承認後に設定 | 本物Auth・日記CRUD・実AI Queue経路。policy/予算/Turnstile/Queue/OpenAI key/保存・復旧handlerが揃わなければ新規生成を停止。画像保存・成功確定RPC・復旧handlerは実装済みだが、現staging/productionはsample/off・Queue未設定 |
+| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、別承認後に設定 | 本物Auth・日記CRUD・実AI Queue経路。policy/予算/Turnstile/Queue/OpenAI key/保存・復旧handlerが揃わなければ新規生成を停止。専用`demo` targetは`APP_ENV=staging`で隔離設定を準備するが、resource/secret/DB/deployは未適用 |
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
 - `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
