@@ -407,7 +407,12 @@ test('入力カードはviewportが高くなると利用可能な高さに合わ
     cardHeights.push(bounds?.height ?? 0);
   }
 
-  expect(cardHeights[1]).toBeGreaterThan(cardHeights[0] + 40);
+  const shortCardHeight = cardHeights[0];
+  const tallCardHeight = cardHeights[1];
+  if (shortCardHeight === undefined || tallCardHeight === undefined) {
+    throw new Error('入力カードの高さを取得できませんでした');
+  }
+  expect(tallCardHeight).toBeGreaterThan(shortCardHeight + 40);
 });
 
 test('オフライン通知と拡大表示がある短い画面でも記録ページ送りへ到達する', async ({ page }) => {
