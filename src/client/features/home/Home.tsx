@@ -97,6 +97,7 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
         {preview.error && (preview.generation || preview.comicGeneration) && (
           <p>最新の状態を確認できません。</p>
         )}
+        {preview.imageError && <p>{preview.imageError}</p>}
         <Link className="today-write-link" to={`/entries/${encodeURIComponent(entry.id)}`}>
           <span>{hasComic ? '漫画を読む' : '記録を読む'}</span>
           <Icon name="chevron-right" size={18} />
