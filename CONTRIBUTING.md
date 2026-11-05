@@ -138,9 +138,11 @@ pnpm preview
 
 Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
 
-`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。デプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。アプリ配信用のデプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
 
 DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
+
+上記のアプリ配信とは別に、staging用の最小Workerを初期作成する手動workflowを用意しています。Bitwardenの設定・main限定の実行・運用上の排他・作成結果の確認は[デプロイ基盤の初期設定](docs/DEPLOYMENT.md)に従ってください。通常CDや実AIの有効化は行いません。
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 

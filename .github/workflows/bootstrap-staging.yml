@@ -1,0 +1,86 @@
+name: Bootstrap staging Worker
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Bitwarden接続確認またはstaging Worker初期作成
+        type: choice
+        options:
+          - check
+          - create
+        default: check
+        required: true
+      confirmation:
+        description: createを選ぶ場合は manga-nikki-staging と入力
+        type: string
+        required: false
+        default: ''
+      exclusive_setup:
+        description: create実行中は管理画面や他CIから同Workerを作成・更新しない
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+jobs:
+  checks:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - run: node -e "require('node:fs').copyFileSync('.dev.vars.example', '.dev.vars')"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  bootstrap:
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main' && needs.checks.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: staging
+    concurrency:
+      group: manga-nikki-deploy-staging
+      cancel-in-progress: false
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - name: Bitwarden secret IDの形式を検証
+        env:
+          BWS_BOOTSTRAP_SECRET_ID: ${{ vars.BWS_BOOTSTRAP_SECRET_ID }}
+        run: |
+          node -e "const id = process.env.BWS_BOOTSTRAP_SECRET_ID ?? ''; const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; if (!uuid.test(id)) { console.error('BWS_BOOTSTRAP_SECRET_ID_INVALID'); process.exitCode = 1; }"
+      - name: Bitwardenから初期化用Cloudflare tokenを取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_BOOTSTRAP_SECRET_ID }} > CLOUDFLARE_API_TOKEN
+      - name: staging Workerを確認または初期作成
+        env:
+          DEPLOYMENT_OPERATION: ${{ inputs.operation }}
+          DEPLOYMENT_CONFIRMATION: ${{ inputs.confirmation }}
+          DEPLOYMENT_EXCLUSIVE_SETUP: ${{ inputs.exclusive_setup }}
+        run: node --experimental-strip-types scripts/bootstrap-staging.ts
