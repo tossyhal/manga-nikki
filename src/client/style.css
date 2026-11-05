@@ -692,6 +692,7 @@ p {
   min-height: 44px;
   flex: 0 0 auto;
   align-items: center;
+  padding-right: 12px;
 }
 
 .primary-shell .new-entry-page .date-control:focus-within {
@@ -741,7 +742,7 @@ p {
 }
 
 .primary-shell .new-entry-page .date-picker-input {
-  right: -12px;
+  right: 0;
 }
 
 .entry-editor-card {
