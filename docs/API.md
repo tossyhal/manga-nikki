@@ -5,13 +5,13 @@
 
 ### 現在の実装範囲
 
-本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[開発計画](PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。このPRではOpenAI白黒生成profileと台帳hookを追加し、live-demoのQueue経路を接続します。private Storageへの画像保存本体は保存担当の実装待ちで、保存handlerが注入されていない環境ではlive生成を停止します。共有DB migration、実Turnstile・Cloudflare Queue結合、保存handlerの接続、実AIの品質・課金は未確認です。段階ごとの詳細は[開発計画](PLAN.md)を参照してください。
 
 localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`/config.generationAvailable`はlocal-mockと、Queue・生成用Turnstileが設定済みのlocal-connectedだけtrueです。local-connectedでの最終的な受付可否は`GET /me/quota`の値も確認します。
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。`live-demo`は新しい実AI生成を停止し、実AI・private Storage/署名URL・画像保存は未接続です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
+liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。live-demoの実生成経路はOpenAI白黒profile・原子的予約・Queue・provider attempt台帳を通しますが、private画像保存handlerが未接続なら受付を停止します。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合、保存handler接続、実AIの品質・課金は未確認です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
 
 liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。入力・閲覧だけでは登録やCAPTCHAを始めず、説明の近くにある保存・生成ボタンを利用者が明示的に押した場合に限って登録を開始します。`POST /entries`には既存契約どおり`consentVersion`を送り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。生成用CAPTCHAと利用枠のUIは実装済みで、`local-connected` APIを呼ぶ場合は登録用とは別の生成用tokenが必要です。`live-demo`の新規実AI生成はサーバーが停止します。実Turnstile結合、共有DBへの適用、最新branchの全経路は未確認です。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
 
@@ -227,7 +227,7 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約です。共有DBには未適用で、隔離PostgreSQLによる一部RPC / RLS検証を行っています。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路も実装しましたが、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合確認は未実施です。実AI・private画像保存と署名URLは未接続です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路に加え、live-demo向けOpenAI profileの予約wrapperとQueue Consumer接続を追加しています。新規実生成は`GENERATION_ENABLED`・DB policy・queue・API key・private画像保存handlerのすべてが整わないと受付されません。保存handler本体は別担当の作業待ちです。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合確認、保存handler接続、実AIの品質・課金は未確認です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
 `generations.is_mock`は生成元metadataです。実装済みの固定mock job writerは`true`を設定し、将来実生成を接続するときは`false`を明示します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
@@ -243,7 +243,20 @@ type ComicDocument = {
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
 | `private.provider_attempts` | `id`, `generation_id`, `owner_id`, `stage`, `call_index`, `is_mock`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。生成jobと所有者の一致、mock由来の固定、AIモデルの重複呼び出し防止 |
 
-`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。設定する場合は内部profileの`profile_id`・`is_mock`・整数`max_cost_micro_usd`を検証し、`is_mock=false`では最大費用を正数にします。optionalな`max_image_calls`は整数`1`〜`4`で、未指定時は`1`です。`max_cost_micro_usd`はscript 1回と`max_image_calls`までのimage呼出し最大費用を含めます。provider/modelなどの他設定はprofile snapshotに保持します。
+`generation_policy`の初期値は`enabled=false`、`user_daily_limit=2`、全体日次枠・全期間枠・予算が`0`、`model_profile_json={}`です。profileは外部リクエストでは選択できず、DB policy内の選択済み値を使います。mock profileは`reserve_mock_generation`だけが受け付けます。実AI用`reserve_openai_generation`は次の固定profileだけを許可します。
+
+| snapshot key | 値・制約 |
+|---|---|
+| `profile_id` | `openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1` |
+| `is_mock` | `false` |
+| `max_cost_micro_usd` | DB側で承認・設定する正の整数。現在の料金・予算額は未承認 |
+| `max_image_calls` | `4` |
+| `provider` | `openai` |
+| `script_model` | `gpt-4.1-mini-2025-04-14` |
+| `image_model` | `gpt-image-2.5-flare` |
+| `color_mode` | `monochrome` |
+
+`max_cost_micro_usd`はscriptを1回、imageを最大4回実行する費用上限を含めます。profile snapshotは予約時に固定し、HTTP bodyからモデル・料金・枠を選べません。
 
 - 所有者とスキーマ保護：`owner_id`は検証済みJWTの`sub`から設定し、`entry`・`job`・`asset`の間でも所有者が一致することを照合します。`auth.users`はSupabase管理とし、`private`スキーマは外部Data APIへ公開しません。
 - 主なインデックス：`entries(owner_id, diary_date, id)`、`generations(owner_id, created_at)`、`generations(status, created_at)`、`assets(generation_id)`。
@@ -259,10 +272,12 @@ type ComicDocument = {
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
 | `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
 | `reserve_mock_generation` | local-connected Worker | receiptを先に照会し、policy用advisory lockの下でenabledかつmock profileを確認した場合だけ既存の`reserve_generation(..., true)`へ渡す。実profileは受け付けない |
+| `reserve_openai_generation` | live-demo Worker | receiptを先に照会し、`generation_enabled=true`と上記固定OpenAI白黒profileをpolicy lock下で確認してから予約する。モデル、料金、呼出上限は入力から選べない |
 | `get_generation_quota` | Worker | 検証済み`sub`のJST日次残数・active generation・reset日時と、DB policy / 全体枠・予算を反映したmock利用可否を返す |
-| `claim_generation` | Queue Consumer | `p_generation_id uuid`。queued jobを1Consumerだけがrunningへ移し、全ロック取得後から15分の`claim_token`を設定。日記/profile snapshotとtoken/deadlineを返す。日記期限はロック後の時刻で確認し、削除・期限切れ・cancel要求済みjobは`null` |
+| `claim_generation` | Queue Consumer | `p_generation_id uuid`。queued jobを1Consumerだけがrunningへ移し、全ロック取得後から15分の`claim_token`を設定。日記の日付・本文・profile snapshotとtoken/deadlineを返す。日記期限はロック後の時刻で確認し、削除・期限切れ・cancel要求済みjobは`null` |
 | `begin_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean`。全ロック取得後の現在時刻でclaim期限・entry・cancel・policyを再検査し、送信前にattemptを記録。script成功後の最初のimages開始と同じtransactionで`stage`も進める。返値`{attempt_id,generation_id,stage,call_index,mode,is_mock}`。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）成功ごとに次を許可。`mode=mock`は実AIを呼ばない専用経路で、`GENERATION_ENABLED=false`でもprofile由来`is_mock=true`だけを許可 |
 | `finish_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null`。running job・一致するclaim token・reserved枠に属するdispatch済みattemptだけを確定。同じ確定値の再送だけ冪等。削除要求・entry期限・claim期限後の既知結果も記録し、job終端状態は戻さない |
+| `mark_generation_saving` | live-demo Queue Consumer | 完了済みscript 1回・image 4回のattempt、claim、期限、削除/cancel、予約額とsnapshotの整合性を再確認してstageを`saving`へ進める。同claim tokenでの再送は冪等。policy停止の判定は外部呼出し前の`begin_provider_attempt`が担当 |
 | `complete_mock_generation` | local-connected Queue Consumer | claim、期限、mock attempt 2件、固定comicのschema・generation由来asset IDを確認し、comic JSONとconsumed台帳状態を確定。Storage画像を保存しない |
 | `mark_generation_enqueued` | Worker | Queue送信後にqueued jobの配送時刻を更新し、未配送再送までの待機を記録 |
 | `list_generation_reconcile_candidates` | Scheduled handler | 最大50件までqueued再送・削除/期限cancel・期限切れrunning照合のgeneration IDとactionだけを返す |
@@ -272,14 +287,14 @@ type ComicDocument = {
 
 - デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
 - 物理削除のfinalizeもpolicy advisory lock→owner advisory lock→entry→jobの順で処理します。期限切れ/削除済みentryにqueued / running jobがあればcleanup claimから除外し、Queue側の`fail_or_hold_generation`によるcancel・精算が終わるまでmetadataを保持します。
-- APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証してlocal-connectedでは`reserve_mock_generation`を呼びます。wrapperはpolicy更新用lockを保持し、profileがmockであることを確認してから既存予約RPCへ渡します。
+- APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して、local-connectedでは`reserve_mock_generation`、live-demoでは`reserve_openai_generation`を呼びます。各wrapperはpolicy更新用lockを保持し、指定されたmockまたは固定OpenAI profileだけを既存予約RPCへ渡します。新規live-demo予約は、環境flag・OpenAI key・Queue・Turnstile・保存handlerの設定もそろわなければ拒否します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
 - `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
 - `claim_generation`のJSONBはQueue Consumerだけが読み、`generation_id`・`entry_id`・`owner_id`・`entry_revision`・`is_mock`・`input_snapshot`・`model_profile_snapshot`・`claim_token`・`deadline_at`を含みます。日記期限は全ロック取得後の時刻で再確認し、その時刻から15分のclaim期限を設定します。期限切れjobは自動再claimしません。
 - `begin_provider_attempt`のJSONBは`attempt_id`・`generation_id`・`stage`・`call_index`・`mode`・`is_mock`です。claim期限・日記期限はquota・entry・job lock取得後の現在時刻で再検査します。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）連番で開始できます。最初のimages attemptはscript成功後に限り、`generations.stage`を`script`から`images`へ同じtransactionで進めます。失敗後・結果不明・dispatch未確定の同じstageを再送せず、mockもattemptを台帳へ記録してAI providerへ渡しません。
 - `finish_provider_attempt`はrunning job・一致するclaim token・reserved reservation・dispatch済みattemptを再確認します。外部送信はすでに済んでいるため、削除要求・日記期限・claim期限後でもknown resultとrequest IDを記録します。terminal job・古いtoken・精算済みreservationは変更しません。request IDはnullableかつ最大200文字、mockではnullです。
 - `fail_or_hold_generation`は全ロック取得後の現在時刻でclaim期限を再確認し、queued / runningの未終端jobだけを扱います。non-mockの`dispatched` / `unknown` attemptが残ればjobを`unknown`、reservationを`held`にします。既知のnon-mock結果または確定したmock結果は予約最大額を`consumed`にし、外部未送信を証明できる場合のみ`released`へ変更します。releaseは予約時の`reserved_day`に対して各1回だけ行い、terminal job・古いclaim token・二重精算は状態やcounterを書き換えません。
-- `get_generation_quota`はDB残数とpolicy由来のmock可否を内部JSONBで返します。HTTP APIは`profile_is_mock`などのpolicy情報を除外し、queue/Turnstile設定とlocal-connected modeも合わせて`generationAvailable`を返します。live-demoは実AI adapter未実装のため常にfalseです。
+- `get_generation_quota`はDB残数とpolicy由来の利用可否を内部JSONBで返します。HTTP APIは`profile_is_mock`などのpolicy情報を除外し、mode・queue・Turnstile・OpenAI key・flag・保存handlerの設定も合わせて`generationAvailable`を返します。実AI policyが初期停止中、必要な設定が欠けている場合、または保存handlerが未注入の場合はfalseです。
 - `complete_mock_generation`はQueue Consumerが固定fixtureを確定する専用RPCです。`complete_generation`や実AI/Storage保存serviceを代用せず、表示される画像URLは公開サンプルに限ります。
 - canonical requestはAPI v1・`entryId`・`expectedRevision`のJSONB表現をUTF-8 SHA-256化した値で、`find_generation_receipt`と`reserve_generation`が同じprivate helperを使用します。JSON body、単価、profile ID、残り枠をRPC引数で受けず、本文・profileはDB正本から取得します。
 
@@ -312,11 +327,14 @@ interface ImageProvider {
 ```
 
 - 入出力の役割
-  - `CallOptions`：中断用の`AbortSignal`、`generationId`、`callIndex`、許可された`modelProfile`を渡します。
+  - `CallOptions`：中断用の`AbortSignal`、`generationId`、`callIndex`、許可された`modelProfile`と任意の`attemptHooks`を渡します。
   - `ScriptResult`：スキーマ検証済みの4コマ脚本データ。
   - `RenderedComic`：`page`画像1枚または`panels`画像4枚のバイナリデータに加え、プロバイダから取得できる`requestId`・`modelId`・トークン等の`usage`情報を含めます。
 - アダプターの境界ルール
   - アダプター自身はDB・HTTPレスポンス・利用枠（quota）を直接操作しません。
+  - `attemptHooks.begin(stage, callIndex)`は各外部呼出しの直前に台帳を開始し、完了後の`finish`へ既知結果または`unknown`と安全なrequest ID・usageを返します。画像Providerは4回を直列に行い、各画像SDKメソッドを呼ぶ前にbeginを完了させます。
+  - 送信後timeoutや通信切断は`unknown`として保持し、provider SDKの自動再送を無効にします。成功HTTP応答後のJSON・スキーマ・画像デコード失敗は外部呼出し成功として台帳へ記録し、別のAPI呼出しに置き換えません。
+  - 個人の日記・画像を扱うOpenAI SDK clientは`logLevel: 'off'`を指定し、`OPENAI_LOG`環境設定でrequest詳細が出ないようにします。
   - 保存service側が`RenderedComic`の画像をStorageへ保存して`assetId`に変換し、最終的な`ComicDocument`を組み立てます。
   - 巨大な画像Base64データをHTTPのJSONレスポンスやDBの`comic_json`カラムへ直接埋め込んではいけません。
   - AIプロバイダが画像バイナリではなく一時URLを返す場合のダウンロード制約は、[OPERATIONS.md](OPERATIONS.md)のセキュリティ規則に従います。
@@ -364,187 +382,70 @@ http://127.0.0.1:5173/api/v1/dev/script
 結果の `mock: true` はHTTP側が付けます。将来は別のScriptProvider実装へ差し替えられます。
 
 
-### Gemini脚本生成のローカル実験
+## 11. OpenAI白黒生成と保存受け渡し
 
-`GeminiScriptProvider`は公式SDKの `models.generateContent` を使い、
-`gemini-3.5-flash-lite`へ日付と本文を送ります。モデルはサーバー側に固定します。
-JSON Schemaで4コマの出力形式を指定し、既存Zodスキーマで文字数と番号も検証します。
-タイムアウト120秒、自動再試行なし、最大出力4096トークンです。
-不完全な終了、空出力、不正JSON、スキーマ違反はエラーにします。
-プロバイダの生エラーや日記本文はログへ出しません。
+### 固定profileとProvider
 
-最初にAI Studioで対象プロジェクトがFreeであり、モデルの無料枠と利用上限を確認します。
-無料枠のキーかどうかをコードから判定することはできません。
-検証には個人情報のない架空の日記を使ってください。
+本番QueueのProviderはOpenAIに固定し、HTTP bodyでmodel・color mode・料金・呼出回数を指定できません。DBの`reserve_openai_generation` wrapperと`src/server/ai/openai-generation-profile.ts`はprofile全体を照合します。
 
-`.dev.vars`の既存のキー設定に加えて、実験を行うときだけ次を設定して開発サーバーを再起動します。
+- profile ID：`openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1`
+- 脚本：Responses API、`gpt-4.1-mini-2025-04-14`、JSON Schema strict、`store: false`
+- 画像：Images API、`gpt-image-2.5-flare`、1024×1024、`quality=low`、PNG、最大4回
+- 画像生成は1コマ目を`images.generate`で作り、2〜4コマ目は1コマ目の画像を参照に`images.edit`で順番に作ります。APIへ文字を描かせず、captionとdialogueは既存Comic表示へ渡します。
+- 脚本promptは日記内の命令を実行せず、原文にない事実・感情・直接発言を追加しないよう指定します。画像の主人公に使う短い黒髪と黒いパーカーは物語の事実ではなく、全コマで外見をそろえるための架空アバター表現です。
+- 脚本modelは公式model pageにdeprecatedとshutdown予定日`2027-01-14`が記載されています。PRでは既存profileを維持し、長期運用前に移行先と品質を再評価します。
 
-```dotenv
-GEMINI_API_KEY="自分のキー"
-GEMINI_SCRIPT_ENABLED="true"
+OpenAI SDKの自動再送は無効です。SDK responseから安全なrequest ID・usageを受け取り、4xx拒否は`failed`、timeout・ネットワーク断・5xxは結果不明として`unknown`に記録します。HTTP成功を受けた後のJSON・schema・画像デコード失敗も外部APIの成功記録を残し、再送しません。SDKの`logLevel`は`off`です。
+
+### live-demoの受付から保存まで
+
+既存の`POST /entries/:entryId/generations`を使います。受付・queue・consumerは次の順で動きます。
+
+1. JWTを検証し、owner・entry・revision・idempotency keyを確定します。
+2. `find_generation_receipt`で既存receiptを確認します。既存なら新しいCAPTCHA検証・予約・AI呼出しをせず同じreceiptを返します。
+3. 新しい受付は生成用Turnstileを検証し、`reserve_openai_generation`でDB policy lock下のOpenAI profile・日記snapshot・最大費用枠を原子的に予約します。
+4. Queueへは`{ generationId }`だけを送ります。Consumerはclaim後にsnapshotを検証し、script 1回、image 1〜4の各API呼出し直前に`begin_provider_attempt`、既知結果直後に`finish_provider_attempt`を呼びます。
+5. scriptと4枚の画像が検証済みになった後、`mark_generation_saving`でstageを`saving`へ進めます。これは画像保存や成功確定を行いません。
+6. 保存handlerがprivate Storageへ画像を保存し、assets・`comic_json`を登録して完了を確定した後だけ、generation IDと`succeeded`を返します。保存完了までConsumerは`succeeded`を報告しません。
+
+`unknown`のattemptは自動再実行せず、予約枠をheldにします。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、QueueにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。画像bytesやBase64はQueue、HTTP body/response、`comic_json`へ載せません。
+
+### 保存担当が接続するhandler
+
+`src/server/generation-save-handler.ts`の`SaveGeneratedComic`がConsumerから保存担当への受け渡し型です。入力は`generation`（generation / entry / owner ID、revision、日付、claim token、期限）、`profileId`、検証済み`script`、4枚の`rendered` panel bytesとMIME、各providerのrequest ID・usageです。画像metadataは4件・順番・profile modelをConsumerで再検証します。`SaveGeneratedComicContext`はそのQueue実行のWorker environmentと、14分またはclaim期限の早い方で中断される`AbortSignal`を渡します。
+
+```ts
+const saveGeneratedComic: SaveGeneratedComic = async (input, context) => {
+  // 1. claim / owner / entry revision / deadlineを確認
+  // 2. input.rendered.panelsをprivate comics bucketへ保存し、asset metadataを登録
+  // 3. scriptとasset IDでcomic_jsonを作り、server-only completion RPCでsucceeded確定
+  // 4. 3つがすべて完了したときだけresolveする
+  await savePrivateAssetsAndCompleteGeneration(input, context);
+  return { generationId: input.generation.generationId, status: 'succeeded' };
+};
 ```
 
-`APP_ENV=development`、`DATA_MODE=mock`、`AI_MODE=mock`、`GENERATION_ENABLED=false`のまま使います。
-`GEMINI_SCRIPT_ENABLED`省略時は実験APIを停止します。
-公開環境の実AI有効化とは別の、ローカル比較実験用の入口です。
+`savePrivateAssetsAndCompleteGeneration`は説明用の仮名で、現repositoryにはまだ実装されていません。`mark_generation_saving`は実装済みですが、実画像のStorage保存・assets登録・実生成用のsucceeded確定RPCは未実装です。このRPCと保存serviceが接続されるまではhandlerを注入せず、live生成はfail closedにします。接続するWorker entrypointは`src/server/index.ts`の`createWorker({ saveGeneratedComic })`です。現default exportはhandler未設定です。
 
-```powershell
-$payload = @{
-  diaryDate = '2026-10-29'
-  body = '架空の日記。図書館で本を読んだ。帰り道で猫を見かけた。'
-} | ConvertTo-Json
-$result = Invoke-RestMethod -Uri 'http://127.0.0.1:5173/api/v1/dev/gemini-script' `
-  -Method Post -Headers @{ 'X-Dev-Gemini' = '1' } `
-  -ContentType 'application/json; charset=utf-8' `
-  -Body ([System.Text.Encoding]::UTF8.GetBytes($payload))
-$result | ConvertTo-Json -Depth 10
+保存handlerは保存済みの同一generation IDを冪等に扱い、期限・削除・owner・claim tokenを再検証します。外部AIが完了した後に保存だけ失敗した場合にAIを再実行してはいけません。成功レスポンスを返す条件はprivate assetsとDB completionの双方が確定したことです。
+
+### 実効ready条件
+
+- `/config.generationAvailable`はlive-demoで、`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handlerがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。
+- `GET /me/quota.generationAvailable`はこれらの実行設定に加え、DB policyがenabled、固定profileと予算・全体枠・ユーザー枠が利用可能であることを確認します。画面はconfigとquotaの両方が利用可能な場合だけ「4コマにする」を有効にします。
+- initial DB policyは停止、全体枠・総予算は0です。共有DB migrationを適用していないため、実環境でのready状態・課金品質・利用可能なアカウント権限は未確認です。実AI利用は通常開発やCIでは行いません。
+
+### ローカルのProvider確認
+
+`GET /api/v1/dev/script`は架空固定脚本だけを返し、AIを呼びません。読み取り専用のCLI確認も外部送信しません。
+
+```sh
+mise exec -- node --experimental-transform-types scripts/generate-script-openai.ts
+mise exec -- node scripts/render-comic.ts
 ```
 
-実行するとGemini APIへ1回送信します。成功時は `{ mock: false, modelId, script }` を返します。
-日記や生成結果のDB保存、画像生成はこの入口では行いません。
-開発ビルド・local-mock・loopbackホスト限定、Origin指定時は同一Originのみです。
-既存の固定サンプルGET APIは引き続き利用できます。
-ローカルWorker内で同時1件、起動中5試行までに制限します。このカウンターは再起動やHMRでリセットされ、
-クラウド側の予算制限の代わりにはなりません。失敗も1試行として数え、429や通信中断を自動再送しません。
-実験後は `GEMINI_SCRIPT_ENABLED=false` に戻してください。
+`generate-script-openai.ts`は`--generate`が指定された場合だけOpenAIへ脚本を送り、既定の出力はgitignore対象の一意な`generated/openai-scripts/<uuid>.json`です。`render-comic.ts --generate`は開発用`POST /api/v1/dev/openai-comics`を呼びます。このローカル専用routeはlocalhost・development build・`local-mock`に限り、`OPENAI_IMAGE_ENABLED=true`と`OPENAI_IMAGE_BUDGET_APPROVED=true`の両方が必要です。これはliveの予約台帳を使わず、最大4回の実AI画像呼出しは課金対象になり得ます。プレビューはWorker memoryに15分保持し、永続保存しません。実生成を使う場合も、別途の課金承認後に架空fixtureだけを使ってください。
 
+fixture `docs/contracts/script.example.openai.generated.json`と`docs/contracts/script.example.txt`は架空データです。実日記・実生成結果を`docs/`やGitへ保存しないでください。
 
-## ローカル開発用：脚本から4コマ画像を生成
-
-`POST /api/v1/dev/openai-comics` は検証済み脚本を受け取り、OpenAI Images APIで1コマずつ順に生成する開発用API。
-localhostの開発ビルド、local-mockモード、同一Origin限定。通常の生成API・Queue・DB・Storageには接続しない。
-既存の脚本生成プロンプトは変更しない。
-
-- 使用モデル：`gpt-image-2.5-flare`、1024×1024、quality=low、PNG。OpenAI APIの利用料金が発生する。
-- 実行前に課金設定・利用可能モデル・料金と予算の承認を確認する。実装時には実AIの呼び出しは行っていない。
-- `.dev.vars` の既存 `OPENAI_API_KEY` に加え、予算承認後に `OPENAI_IMAGE_ENABLED="true"` と `OPENAI_IMAGE_BUDGET_APPROVED="true"` を設定し、開発サーバーを再起動する。既定は無効。キーを `VITE_*` に置かない。
-- ヘッダー `X-Dev-OpenAI: 1` が必要。本文は `{ "script": { "title": "...", "panels": [...] } }`。既存のscriptSchemaで検証する。
-- 主人公は試作用の「白い二頭身の猫・黒いパーカー」固定。1コマ目を2〜4コマ目の外見参照として送る。外見の完全一致は保証されない。
-- 文字は画像に描かせず、HTMLプレビュー側でcaption/dialogueを表示する。4枚を縦に並べる方式で、結合PNGの出力ではない。
-- 同時1件・Worker起動中2試行まで。SDKの自動再送は無効。1リクエスト最大4回の画像生成で、後続コマへの参照画像入力にも料金がかかる。再起動で制限は戻るため、実予算の上限管理の代用にはしない。
-- 画像はPNG/JPEG/WebPのMIMEと先頭バイトを検証し、1枚8MiB・合計16MiBまで。Base64をJSONへ返さない。
-- 成功時は200、生成中の失敗は503。`status`, `previewUrl`, `panels[].url` を返す。失敗時は`error.code`, `failedPanel`, `retryable: false`も返す。成功済み画像は保持する。結果不明時はOpenAI API Platformの利用状況を確認し、むやみに再送しない。
-- プレビューと画像は生成終了から15分間、Workerメモリにだけ保持する。再起動・期限切れで消える。永続保存・公開用途には使用しない。
-
-PowerShellの実行例（課金と予算の確認・承認が済んだ場合のみ）：
-
-```powershell
-# 保存済みの脚本JSONを利用。ファイルの中身はtitleとpanelsを持つ脚本そのもの。
-$script = Get-Content './docs/contracts/script.example.generated.json' -Raw -Encoding UTF8 | ConvertFrom-Json
-$comicPayload = @{ script = $script } | ConvertTo-Json -Depth 10
-$comic = Invoke-RestMethod `
-  -Uri 'http://127.0.0.1:5173/api/v1/dev/openai-comics' `
-  -Method Post `
-  -Headers @{ 'X-Dev-OpenAI' = '1' } `
-  -ContentType 'application/json; charset=utf-8' `
-  -Body ([System.Text.Encoding]::UTF8.GetBytes($comicPayload)) `
-  -TimeoutSec 600 `
-  -SkipHttpErrorCheck
-$comic | ConvertTo-Json -Depth 10
-'http://127.0.0.1:5173' + $comic.previewUrl
-```
-
-最後に表示されるURLをブラウザで開く。既に`$result.script`に生成済み脚本がある場合は、上の`$script`への代入を`$script = $result.script`に置き換えられる。
-生成だけを試す場合は既存の`docs/contracts/script.example.json`も使用可能。
-料金・利用可能モデルは実行時に[公式の料金表](https://developers.openai.com/api/docs/pricing)で再確認する。
-
-
-### 保存済みのGemini脚本から生成するコマンド
-
-開発サーバーを既定ポート5173で起動したまま、別のターミナルで実行します。
-既定の入力は `docs/contracts/script.example.generated.json` です。
-
-```powershell
-# まず入力検証のみ。AIは呼びません。
-node scripts/render-comic.ts
-
-# 画像生成の予算承認・有効化後、最大4回の画像生成を実行します。
-node scripts/render-comic.ts --generate
-
-# 別の脚本JSONも指定できます。
-node scripts/render-comic.ts docs/contracts/script.example.json --generate
-```
-
-APIキーはWorkerの環境変数で管理します。コマンドは検証済み脚本だけをローカルAPIへ送り、
-画像を含むJSONを出力せずにプレビューURLと取得コマ数を表示します。
-部分失敗時も取得できたプレビューURLを表示し、終了コード1で終了します。
-自動再送は行いません。画像の品質・所要時間・実費は実モデルによる検証が必要です。
-
-
-脚本はGeminiで生成し、保存したJSONをOpenAIの画像Providerへ渡します。
-画像Providerの1コマ目は `images.generate`、2〜4コマ目は1コマ目のPNGを参照する
-`images.edit` を使います。Gemini用の画像生成フラグでは有効化されません。
-旧Gemini画像アダプターは既存コードとして残っていますが、開発APIからは呼び出しません。
-
-### OpenAI版の脚本生成コマンド（Gemini版とは別実装）
-
-`scripts/generate-script-openai.ts` は開発サーバーを経由せず、Node.jsからOpenAI Responses APIを1回呼ぶ比較用コマンドです。
-既存のGemini Provider・APIは変更しません。モデルは `gpt-4.1-mini-2025-04-14` 固定。
-Gemini版の指示・JSON Schemaを作成時点で複製し、主人公だけ人間の大学生に指定しています。
-今後片方のプロンプトを変更する場合、比較条件の差として記録してください。
-Structured Outputsの後に共通Zodで検証し、完成した脚本のみをJSONに書き込みます。
-120秒、最大出力4096トークン、SDK自動再送なし、`store: false`。本文や生エラーは表示しません。
-`store: false` はResponsesの保存設定であり、サービス全体のデータ保持を保証するものではありません。
-
-既存の `.dev.vars` の `OPENAI_API_KEY` をNodeの `--env-file` で読み込みます。環境変数の追加は不要です。
-Worker用の画像・Geminiの有効化フラグとは独立し、`--generate` がこのコマンドの送信スイッチです。
-費用確認後、リポジトリのルートで実行します。日記TXTは本文だけのUTF-8ファイルです。
-
-```powershell
-# 入力確認のみ。APIへの送信・出力ファイル作成はしません。
-node scripts/generate-script-openai.ts --date 2026-10-29
-
-# APIへ1回送信し、OpenAI専用のJSONへ保存します。
-node --env-file=.dev.vars scripts/generate-script-openai.ts --date 2026-10-29 --generate
-
-# 生成した脚本を使ってOpenAIで漫画を生成します。こちらはpnpm devが必要です。
-node scripts/render-comic.ts docs/contracts/script.example.openai.generated.json --generate
-
-# 別の日記・出力先も指定できます。
-node --env-file=.dev.vars scripts/generate-script-openai.ts docs/contracts/script.example.txt docs/contracts/script.openai.second.json --date 2026-10-29 --generate
-```
-
-日記の既定入力は `docs/contracts/script.example.txt`、出力は `docs/contracts/script.example.openai.generated.json`。
-日付の省略時は日本時間の当日。比較時は同じ本文と日付を指定してください。
-既存ファイルは送信前に拒否し、上書きしません。失敗時は空・不完全な出力ファイルが残る場合があります。
-API利用状況を確認し、ファイルを手動で整理するか別名を指定します。画像生成は自動開始しません。
-既存の `script.example.generated.json` を使うGemini脚本経路はそのままです。
-現時点で漫画のCLIが接続する先はOpenAI画像APIです。Geminiだけで脚本と画像を生成する経路はこの追加には含みません。
-
-参考：[OpenAI公式 Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、
-[GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini)。
-
-
-### Geminiだけで日記から漫画を生成する別コマンド
-
-`node --experimental-transform-types --env-file=.dev.vars scripts/generate-comic-gemini.ts --generate`で、Geminiの既存脚本Providerと画像Providerを順に呼び出します。
-OpenAI版とは別実装で、開発サーバーを経由せず、生成結果をローカルファイルへ保存します。
-既定は入力確認のみ。費用確認後に有効化フラグと`--generate`を指定します。
-詳しい準備・出力・失敗時の手順は[GEMINI_LOCAL.md](GEMINI_LOCAL.md)を参照してください。
-
-### OpenAIカラー漫画の比較用コマンド
-
-白黒版の `scripts/render-comic.ts` と `OpenAIImageProvider` を残し、
-カラー専用の `scripts/render-comic-color.ts` と `OpenAIColorImageProvider` を追加。
-同じモデル・解像度・品質で、フルカラーの彩色と全コマの色の統一を指示します。
-人間の大学生という主人公設定、1コマ目を後続の参照画像にする方式は白黒版と同じです。
-実際の彩色や外見の一致は実生成で確認が必要です。
-
-```powershell
-# pnpm devを起動した状態で、別のターミナルから入力確認
-node scripts/render-comic-color.ts docs/contracts/script.example.openai.generated.json
-
-# カラー漫画を生成（最大4回の画像生成で料金が発生）
-node scripts/render-comic-color.ts docs/contracts/script.example.openai.generated.json --generate
-
-# 同じ脚本の白黒版
-node scripts/render-comic.ts docs/contracts/script.example.openai.generated.json --generate
-```
-
-入力を省略すると白黒版と同じ `docs/contracts/script.example.generated.json` を使用。
-カラー版は `POST /api/v1/dev/openai-color-comics` に送信し、カラー専用URLでプレビューします。
-白黒・カラーで各々同時1件・起動中2試行までです。合計では最大4試行となります。
-既存の `OPENAI_API_KEY`、`OPENAI_IMAGE_ENABLED`、`OPENAI_IMAGE_BUDGET_APPROVED` を共用し、新しい環境変数は不要。
-ローカル限定・15分間のメモリ保存・部分失敗の回収・自動再送なしの条件も白黒版と同じです。
-コード変更や再起動で以前のプレビューは失われる場合があります。画像の永続保存は行いません。
-Geminiの生成スクリプトと脚本JSONは変更していません。
+参考：[OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、[GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini)、[gpt-image-2.5-flare](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)、[Images API guide](https://developers.openai.com/api/docs/guides/image-generation)。
