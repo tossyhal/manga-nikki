@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { scriptSchema } from '../src/server/ai/script-schema.ts';
 
 const defaultPath = fileURLToPath(
-  new URL('../docs/contracts/script.example.generated.json', import.meta.url),
+  new URL('../docs/contracts/script.example.openai.generated.json', import.meta.url),
 );
 const args = process.argv.slice(2);
 const generate = args.includes('--generate');

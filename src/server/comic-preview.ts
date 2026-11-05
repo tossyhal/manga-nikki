@@ -6,7 +6,7 @@ const escapeHtml = (value: string) =>
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
   );
 
-// OpenAI開発APIとGeminiローカル生成で、同じ4コマ表示を使う。
+// OpenAIの開発APIで生成した4コマを同じプレビューに表示する。
 export function renderComicPreview(input: {
   script: ScriptResult;
   images: { index: number; url: string }[];

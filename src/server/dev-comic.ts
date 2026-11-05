@@ -1,4 +1,3 @@
-import { OpenAIColorImageProvider } from './ai/openai-color-image-provider';
 import { Hono } from 'hono';
 import { renderComicPreview } from './comic-preview';
 import { z } from 'zod';
@@ -26,12 +25,10 @@ type Preview = {
 
 export function createDevComicRoutes(options: {
   localDevelopment: boolean;
-  color?: boolean;
   readJson: (request: Request) => Promise<unknown>;
 }) {
   const app = new Hono<{ Bindings: Bindings }>();
-  const basePath = options.color ? '/api/v1/dev/openai-color-comics' : '/api/v1/dev/openai-comics';
-  const Provider = options.color ? OpenAIColorImageProvider : OpenAIImageProvider;
+  const basePath = '/api/v1/dev/openai-comics';
   const previews = new Map<string, Preview>();
   let busy = false;
   let attempts = 0;
@@ -94,7 +91,7 @@ export function createDevComicRoutes(options: {
     };
     let failure: ImageGenerationError | undefined;
     try {
-      const result = await new Provider(c.env.OPENAI_API_KEY).render(script, {
+      const result = await new OpenAIImageProvider(c.env.OPENAI_API_KEY).render(script, {
         signal: c.req.raw.signal,
         generationId: id,
         callIndex: 1,
@@ -171,7 +168,7 @@ export function createDevComicRoutes(options: {
           index: panel.index,
           url: `${basePath}/${c.req.param('id')}/images/${panel.index}`,
         })),
-        notice: `ローカル${options.color ? 'カラー' : '白黒'}実生成プレビュー。15分で期限切れになります。${preview.status === 'failed' ? '一部の生成に失敗しています。' : ''}`,
+        notice: `ローカル白黒実生成プレビュー。15分で期限切れになります。${preview.status === 'failed' ? '一部の生成に失敗しています。' : ''}`,
       }),
     );
   });

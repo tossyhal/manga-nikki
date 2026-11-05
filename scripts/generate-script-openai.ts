@@ -1,5 +1,6 @@
-import { open, readFile } from 'node:fs/promises';
+import { mkdir, open, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createEntrySchema, jstToday } from '../src/shared/schemas.ts';
 import {
@@ -30,7 +31,7 @@ async function main() {
   const outputPath =
     positionals[1] ??
     fileURLToPath(
-      new URL('../docs/contracts/script.example.openai.generated.json', import.meta.url),
+      new URL(`../generated/openai-scripts/${crypto.randomUUID()}.json`, import.meta.url),
     );
   let source: string;
   try {
@@ -54,7 +55,8 @@ async function main() {
   const key = process.env.OPENAI_API_KEY;
   if (!key?.trim())
     throw new Error('OPENAI_API_KEYがありません。--env-file=.dev.varsで設定を読み込んでください。');
-  // 送信前に出力先を確保し、Gemini版や過去の結果を上書きしない。
+  await mkdir(dirname(outputPath), { recursive: true });
+  // 送信前に出力先を確保し、既存ファイルを上書きしない。
   let output;
   try {
     output = await open(outputPath, 'wx');
