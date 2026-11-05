@@ -12,8 +12,14 @@ function HomeRoute() {
   return <Home config={config} configError={configError} retryConfig={retryConfig} />;
 }
 function NewEntryRoute() {
-  const { config, configError, personalDataAvailable, onActivityChange, retryConfig } =
-    useOutletContext<AppContext>();
+  const {
+    config,
+    configError,
+    personalDataAvailable,
+    onActivityChange,
+    hasBlockedNavigation,
+    retryConfig,
+  } = useOutletContext<AppContext>();
   if (!config && !configError)
     return (
       <AppStateCard title="準備しています" description="入力画面を読み込んでいます。" status />
@@ -37,7 +43,13 @@ function NewEntryRoute() {
       />
     );
   if (personalDataAvailable && config)
-    return <NewEntry config={config} onActivityChange={onActivityChange} />;
+    return (
+      <NewEntry
+        config={config}
+        onActivityChange={onActivityChange}
+        hasBlockedNavigation={hasBlockedNavigation}
+      />
+    );
   return (
     <AppStateCard
       title="日記を保存できません"
@@ -90,8 +102,14 @@ function LibraryRoute() {
 }
 
 function DetailRoute() {
-  const { config, configError, personalDataAvailable, onActivityChange, retryConfig } =
-    useOutletContext<AppContext>();
+  const {
+    config,
+    configError,
+    personalDataAvailable,
+    onActivityChange,
+    hasBlockedNavigation,
+    retryConfig,
+  } = useOutletContext<AppContext>();
   if (!config && !configError)
     return <AppStateCard title="準備しています" description="記録を読み込んでいます。" status />;
   if (configError)
@@ -113,7 +131,11 @@ function DetailRoute() {
       />
     );
   return personalDataAvailable && config ? (
-    <Detail config={config} onActivityChange={onActivityChange} />
+    <Detail
+      config={config}
+      onActivityChange={onActivityChange}
+      hasBlockedNavigation={hasBlockedNavigation}
+    />
   ) : (
     <AppStateCard
       title="記録を表示できません"
