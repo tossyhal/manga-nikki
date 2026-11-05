@@ -51,7 +51,7 @@ test('未保存の日記入力中は更新を保留し、保存後も明示操�
   await expect(diary).toHaveValue('更新中も残す架空の日記');
   expect(await page.evaluate(() => Reflect.get(window, '__pwaUpdateCalls'))).toBe(0);
 
-  await page.getByRole('checkbox').check();
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(updateButton).toBeEnabled();

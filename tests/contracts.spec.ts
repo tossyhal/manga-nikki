@@ -208,16 +208,51 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
         data: { expectedRevision: 1, captchaToken: '' },
       });
       expect(generated.status()).toBe(202);
+      const detailResponse = await request.get(`/api/v1/entries/${entry.id}`, { headers });
+      const detail = await detailResponse.json();
+      expect(detail.body).toBe('架空の履歴1件目');
+      expect(detail.latestGeneration).toMatchObject({ mock: true, status: 'succeeded' });
     }
   }
+  const requestedCursors: string[] = [];
+  await page.route('**/api/v1/entries**', (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    if (cursor) requestedCursors.push(cursor);
+    return route.continue();
+  });
   await page.goto('/library');
   await expect(page.getByRole('heading', { name: '記録', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '一覧で見る' }).click();
-  await expect(page.locator('.entry-history-card')).toHaveCount(20);
-  await expect(page.getByText('架空の履歴1件目', { exact: true })).not.toBeVisible();
-  await page.getByRole('button', { name: '続きを読み込む' }).click();
-  await expect(page.locator('.entry-history-card')).toHaveCount(21);
-  await expect(page.getByRole('button', { name: '続きを読み込む' })).not.toBeVisible();
+  const pageControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
+  const visibleSummaries = new Set<string>();
+  for (let index = 0; index < 7; index++) {
+    const summaries = await page.locator('.entry-history-summary').allTextContents();
+    expect(summaries).toHaveLength(index < 6 ? 3 : 2);
+    summaries.forEach((summary) => visibleSummaries.add(summary));
+    if (index < 6) await pageControls.getByRole('button', { name: '次へ' }).click();
+  }
+  await expect(pageControls).toContainText('7ページ目');
+  await pageControls.getByRole('button', { name: '次へ' }).click();
+  await expect(page.locator('.entry-history-summary')).toHaveCount(3);
+  const finalPageSummaries = await page.locator('.entry-history-summary').allTextContents();
+  finalPageSummaries.forEach((summary) => visibleSummaries.add(summary));
+  expect(visibleSummaries.size).toBe(21);
+  for (let index = 1; index <= 21; index++) {
+    expect(visibleSummaries).toContain(`架空の履歴${index}件目`);
+  }
+  expect(requestedCursors).toHaveLength(1);
+
+  await pageControls.getByRole('button', { name: '前へ' }).click();
+  await expect(pageControls).toContainText('6ページ目');
+  await expect(page.getByRole('link', { name: /架空の履歴6件目/ })).toBeVisible();
+  for (let index = 0; index < 5; index++) {
+    await pageControls.getByRole('button', { name: '前へ' }).click();
+  }
+  await expect(pageControls).toContainText('1ページ目');
+  await expect(page.getByRole('link', { name: /架空の履歴21件目/ })).toBeVisible();
+  for (let index = 0; index < 6; index++) {
+    await pageControls.getByRole('button', { name: '次へ' }).click();
+  }
   await page.getByRole('link', { name: /架空の履歴1件目/ }).click();
   await expect(page).toHaveURL(`/entries/${oldestId}`);
   await expect(page.getByText('元の日記を読む', { exact: true })).toBeVisible();
@@ -237,7 +272,6 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   });
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('保存だけ成功した架空の日記');
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
   await page.getByRole('button', { name: '下書き保存' }).click();
@@ -261,7 +295,6 @@ test('390px幅の履歴では200文字の日記を40文字の要約で表示す�
   const summary = `${'A'.repeat(39)}…`;
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill(body);
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();

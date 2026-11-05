@@ -5,7 +5,13 @@ import { liveClientConfigFixture, mockClientConfigFixture } from './fixtures/cli
 import { clickAppDialogButton, clickEntryMenuItem } from './fixtures/ui';
 test('入力からモック漫画を再読込し、最近の記録から削除できる', async ({ page }) => {
   const externalAuthRequests: string[] = [];
+  const entryPosts: Array<{ body: string; consentVersion: string }> = [];
   page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === '/api/v1/entries' && request.method() === 'POST') {
+      const payload = request.postDataJSON() as { body: string; consentVersion: string };
+      entryPosts.push(payload);
+    }
     if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url()))
       externalAuthRequests.push(request.url());
   });
@@ -13,10 +19,8 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
-  await page.getByRole('checkbox').check();
-  await expect(page.getByRole('checkbox')).toHaveAccessibleName(
-    /漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。/,
-  );
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  expect(externalAuthRequests).toEqual([]);
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
@@ -47,6 +51,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await clickAppDialogButton(page, deleteDialogTitle, '削除する');
   await expect(page).toHaveURL(/\/library$/);
   await expect(page.getByText('図書館で本を読んだ。', { exact: true })).toHaveCount(0);
+  expect(entryPosts).toMatchObject([{ body: '図書館で本を読んだ。', consentVersion: 'v1' }]);
   expect(externalAuthRequests).toEqual([]);
 });
 test('狭い画面で下書き保存とHTML風の文字を安全に表示できる', async ({ page }) => {
@@ -56,10 +61,10 @@ test('狭い画面で下書き保存とHTML風の文字を安全に表示でき�
   await expect(page.locator('#summary-preview')).toHaveText(
     '見出し：<script>window.injected=true</script>',
   );
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
@@ -321,8 +326,9 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   expect(externalAuthRequests).toEqual([]);
 });
 
-test('同意がないライブ保存では登録や登録用CAPTCHAを開始しない', async ({ page }) => {
+test('ライブの新規作成は入力だけでは登録やCAPTCHA、書き込みを始めない', async ({ page }) => {
   let entryPosts = 0;
+  let generationPosts = 0;
   const externalAuthRequests: string[] = [];
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({
@@ -334,8 +340,11 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
       },
     }),
   );
-  await page.route('**/api/v1/entries', (route) => {
-    if (route.request().method() === 'POST') entryPosts++;
+  await page.route('**/api/v1/entries**', (route) => {
+    if (route.request().method() === 'POST') {
+      if (new URL(route.request().url()).pathname.endsWith('/generations')) generationPosts++;
+      else entryPosts++;
+    }
     return route.continue();
   });
   page.on('request', (request) => {
@@ -344,19 +353,18 @@ test('同意がないライブ保存では登録や登録用CAPTCHAを開始し�
   });
 
   await page.goto('/new');
-  const consent = page.getByRole('checkbox');
-  await expect(consent).toHaveAccessibleName(
-    /匿名セッションはこのブラウザに保存され、別の端末へ引き継げません/,
-  );
-  await expect(consent).toHaveAccessibleName(
-    /保存後30日を過ぎると閲覧できなくなることに同意します/,
-  );
-  await expect(consent).toHaveAccessibleName(/現在、漫画生成は利用できません。/);
-  await page.getByLabel('日記', { exact: true }).fill('同意前の架空の日記');
-  await page.getByRole('button', { name: '下書き保存' }).click();
-
-  await expect(page.getByRole('alert')).toContainText('保存と匿名利用の条件を確認してください');
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
+  const body = '入力だけの架空の日記\n改行を保持する。';
+  const diary = page.getByLabel('日記', { exact: true });
+  await diary.fill(body);
+  await page.getByLabel('日付', { exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(diary).toHaveValue(body);
+  await expect(page).toHaveURL(/\/new$/);
+  await page.waitForLoadState('networkidle');
   expect(entryPosts).toBe(0);
+  expect(generationPosts).toBe(0);
   expect(externalAuthRequests).toEqual([]);
 });
 
@@ -384,7 +392,6 @@ test('通信失敗時に入力と再送IDを維持する', async ({ page }) => {
   });
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('通信後も残す架空の日記');
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持したまま再操作');
   await expect(page.getByLabel('日記', { exact: true })).toHaveValue('通信後も残す架空の日記');
@@ -442,11 +449,9 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   await page.goto('/new');
   const diary = page.getByLabel('日記', { exact: true });
   await expect(diary).toBeVisible();
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   await diary.fill(originalBody);
-  const consent = page.getByRole('checkbox');
-  await consent.check();
-  await expect(consent).toBeChecked();
   const beforeOffline = apiRequests.length;
   await page.context().setOffline(true);
   await expect(page.getByRole('heading', { name: 'オフラインです' })).toBeVisible();
@@ -463,7 +468,7 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   await page.context().setOffline(false);
   await expect(page.getByRole('heading', { name: 'オフラインです' })).toHaveCount(0);
   await expect(diary).toHaveValue(offlineBody);
-  await expect(consent).toBeChecked();
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   const reconnectRequests = apiRequests.slice(beforeReconnect);
   expect(reconnectRequests.length).toBeGreaterThan(0);
@@ -495,7 +500,6 @@ test('別の日記の通信失敗後に元の日記を再送しても重複作�
   await page.goto('/new');
   const diary = page.getByLabel('日記', { exact: true });
   await diary.fill(firstBody);
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
   await diary.fill(secondBody);

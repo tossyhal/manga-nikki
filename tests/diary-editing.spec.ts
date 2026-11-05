@@ -564,7 +564,6 @@ for (const accept of [false, true]) {
     await page.goto('/new');
     const draft = '保存処理中も確認する架空の日記';
     await page.getByLabel('日記', { exact: true }).fill(draft);
-    await page.getByRole('checkbox').check();
     await page.getByRole('button', { name: '下書き保存' }).click();
     await started;
     await expect(page.getByRole('button', { name: '保存しています…' })).toBeDisabled();
@@ -590,7 +589,6 @@ for (const accept of [false, true]) {
 test('削除応答後に別記録を編集中なら新しい画面の状態を維持する', async ({ page }) => {
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('削除応答を待つAの記録');
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   const firstId = new URL(page.url()).pathname.split('/').at(-1);
@@ -598,7 +596,6 @@ test('削除応答後に別記録を編集中なら新しい画面の状態を�
 
   await page.goto('/new');
   await page.getByLabel('日記', { exact: true }).fill('編集中に保護するBの記録');
-  await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   const secondId = new URL(page.url()).pathname.split('/').at(-1);
