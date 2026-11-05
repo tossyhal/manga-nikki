@@ -146,7 +146,11 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
   expect(requestedCursors.filter(Boolean)).toEqual(['fixture-cursor-20']);
   await listControls.getByRole('button', { name: '前へ' }).click();
   await expect(listControls).toContainText('6ページ目');
-  await expect(page.getByRole('link', { name: /先月の架空日記1/ })).toBeVisible();
+  await expect(page.locator('.entry-history-summary')).toHaveText([
+    '先月の架空日記15',
+    '先月の架空日記16',
+    '先月の架空日記17',
+  ]);
 });
 
 test('前月の全件取得中は空日として表示せず、6週分のカレンダーを保つ', async ({ page }) => {
