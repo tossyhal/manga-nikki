@@ -295,21 +295,17 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   });
   expect(layout.picker.left).toBeGreaterThanOrEqual(layout.control.left);
   expect(layout.picker.right).toBeLessThanOrEqual(layout.row.right + 1);
-  expect(
-    layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left,
-  ).toBe(true);
+  expect(layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left).toBe(
+    true,
+  );
   expect(layout.save.right).toBeCloseTo(layout.row.right, 0);
   expect(
-    Math.abs(
-      layout.save.top + layout.save.bottom - layout.control.top - layout.control.bottom,
-    ),
+    Math.abs(layout.save.top + layout.save.bottom - layout.control.top - layout.control.bottom),
   ).toBeLessThanOrEqual(2);
   expect(layout.icon.left).toBeGreaterThanOrEqual(layout.time.right);
   expect(layout.icon.left - layout.time.right).toBeLessThanOrEqual(12);
   expect(
-    Math.abs(
-      layout.icon.top + layout.icon.bottom - layout.picker.top - layout.picker.bottom,
-    ),
+    Math.abs(layout.icon.top + layout.icon.bottom - layout.picker.top - layout.picker.bottom),
   ).toBeLessThanOrEqual(2);
 
   const body = '日付と保存ボタンの表示を確認する架空の日記';
