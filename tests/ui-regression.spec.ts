@@ -407,6 +407,7 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     await expectMainToFit(page);
 
     await page.getByRole('tab', { name: 'リスト' }).click();
+    await expect(page.getByRole('tabpanel', { name: 'リスト' })).toBeVisible();
     const listCards = page.locator('.library-list-records .entry-history-list .entry-history-card');
     await expect(listCards).toHaveCount(3);
     const listCardBounds = await listCards.evaluateAll((cards) =>
