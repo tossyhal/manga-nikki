@@ -372,6 +372,11 @@ function DetailContent({
     !generationForCurrentRevision &&
     !hasUnresolvedRequest,
   );
+  const showExternalAiPolicy =
+    config.dataMode === 'live' &&
+    ((showGenerationAction && canStartGeneration) ||
+      generationCaptchaOpen ||
+      generationCaptchaRetry);
   const draftSavedConfirmation = Boolean(
     entry && draftSavedEntryId === id && !generation && !generationReferenceUnavailable && !editing,
   );
@@ -1015,6 +1020,9 @@ function DetailContent({
       )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
+          {showExternalAiPolicy && (
+            <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
+          )}
           {quota && !showQuotaStatus && !pending && !unknownGeneration && (
             <button
               className="button-text quota-refresh-action"

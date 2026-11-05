@@ -142,6 +142,56 @@ async function generationCaptchaExecutions(page: import('@playwright/test').Page
   );
 }
 
+test('保存済み下書きから生成する前に外部AIへの送信を案内する', async ({ page }) => {
+  await installTurnstileFake(page, { delayFirstGenerationCallback: 'token' });
+  await installLiveSession(page);
+  const generation = generationFixtures(entryId, generationId).queued;
+  let generationPosts = 0;
+
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+  );
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({
+      json: {
+        ...draftEntryDetailFixture,
+        latestGenerationId: generationPosts > 0 ? generation.id : null,
+        latestGeneration: generationPosts > 0 ? generation : null,
+      },
+    }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
+    generationPosts++;
+    return route.fulfill({
+      status: 202,
+      json: {
+        generationId,
+        status: 'queued',
+        statusUrl: `/api/v1/generations/${generationId}`,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+  await page.goto(`/entries/${entryId}`);
+  const policyNote = page.locator('.detail-action-dock .policy-note');
+  await expect(policyNote).toHaveText('※漫画の生成時に、日記の内容を外部AIへ送信します。');
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+  await expect(page.getByRole('region', { name: '漫画生成の確認' })).toBeVisible();
+  await expect(policyNote).toHaveText('※漫画の生成時に、日記の内容を外部AIへ送信します。');
+  expect(generationPosts).toBe(0);
+
+  await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
+
+  await expect.poll(() => generationPosts).toBe(1);
+  expect(await generationCaptchaExecutions(page)).toBe(1);
+});
+
 test('利用枠を手動更新して別job完了後の操作可否を反映し、入力を保つ', async ({ page }) => {
   let currentQuota = availableQuota(activeGenerationId);
   let quotaRequests = 0;
