@@ -46,6 +46,16 @@ supabase/
  └─ { migrations, tests }                                # DBスキーマ定義とRLS/RPCテスト
 ```
 
+### 実装コードの責務境界
+
+- `client/app/App.tsx`はアプリ共通枠・設定取得・画面離脱保護、`app/routes.tsx`はルートと利用可否の表示を担当します。ホーム固有の取得・表示は`features/home/`に置きます。
+- 日記の新規作成と編集では`DiaryDateField`・`DiaryBodyField`と日付書式を共有します。利用枠は`useGenerationQuota`で取得し、新規画面だけ再取得時にloadingへ戻す差を明示します。
+- 記録のURL状態は`librarySearch.ts`、日付計算は`libraryCalendar.ts`、取得範囲の走査は`libraryCoverage.ts`、取得中の状態とキャンセルは`useLibraryEntries.ts`が担当します。表示のページ数とAPIのcursorは別に扱います。
+- 詳細の編集は`useEntryEditor`、生成中の状態取得は`useGenerationPolling`、操作メニューは`DetailToolbar`、状態カードは`GenerationStatusCard`へ分離します。編集・生成・削除の排他用refは詳細画面内で共有し、別々の操作ロックを作りません。
+- `client/lib/api/`は通信基盤、日記操作、生成受付・再確認、画像URL取得で分けます。既存の`lib/api.ts`からのexportは維持し、作成・生成の冪等性キーと保存形式も変更しません。
+- サーバーの`http.ts`はHTTPエラーとサイズ制限付き本文読取、`repositories/mock-service.ts`はモックの日記作成・一覧・枠確認・生成を担当します。実接続との振り分けと認証の順序は`server/app.ts`に残します。
+- SupabaseのURL・キー検証は`supabase-config.ts`、生成行の状態変換は`generation-row.ts`へ集約します。利用者用・RPC専用・Storage削除専用のクライアントは分け、所有者と最新／履歴生成の関連確認は呼出元で行います。
+
 ---
 
 ## 2. 非同期生成の処理フローと境界
