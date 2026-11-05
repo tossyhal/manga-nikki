@@ -24,7 +24,7 @@ import {
 } from '../../lib/api';
 import { Comic } from '../comic/Comic';
 import { validateLibraryBackTo } from './librarySearch';
-import type { DiaryActivity } from '../diary/NewEntry';
+import type { DiaryActivity } from '../diary/diaryActivity';
 import { GenerationQuotaStatus } from '../diary/GenerationQuotaStatus';
 import { RegistrationCaptcha } from '../diary/RegistrationCaptcha';
 import { ConfirmDialog } from '../../app/ConfirmDialog';

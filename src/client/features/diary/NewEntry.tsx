@@ -18,7 +18,7 @@ import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { useOnlineStatus } from '../../lib/useOnlineStatus';
 
-export type DiaryActivity = { dirty: boolean; busy: boolean };
+import type { DiaryActivity } from './diaryActivity';
 
 type NewEntryProps = {
   config: ClientConfig;
