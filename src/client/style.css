@@ -683,6 +683,7 @@ p {
 
 .primary-shell .new-entry-page .date-row {
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .primary-shell .new-entry-page .date-control {
@@ -691,6 +692,12 @@ p {
   min-height: 44px;
   flex: 0 0 auto;
   align-items: center;
+}
+
+.primary-shell .new-entry-page .date-control:focus-within {
+  outline: 2px solid #555555;
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .date-display {
@@ -709,6 +716,12 @@ p {
   width: auto;
   justify-content: flex-start;
   gap: 12px;
+  white-space: nowrap;
+}
+
+.primary-shell .new-entry-page .date-row > .button-text {
+  flex: 0 0 auto;
+  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -1608,6 +1621,12 @@ p {
 
 .detail-edit-form .entry-editor-card {
   min-height: 330px;
+}
+
+.detail-edit-form .date-row:focus-within {
+  outline: 2px solid #555555;
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .detail-edit-form .entry-editor-footer {

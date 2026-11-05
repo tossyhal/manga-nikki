@@ -670,6 +670,7 @@ function DetailContent({
   }
 
   function requestCancelEditing() {
+    if (busy || actionInFlightRef.current) return;
     if (!draftDirty) {
       cancelEditing();
       return;
@@ -842,6 +843,7 @@ function DetailContent({
             className="icon-button"
             type="button"
             aria-label="編集をやめる"
+            disabled={busy}
             onClick={requestCancelEditing}
           >
             <Icon name="back" />
