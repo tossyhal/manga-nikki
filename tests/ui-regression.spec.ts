@@ -294,7 +294,7 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
     };
   });
   expect(layout.picker.left).toBeGreaterThanOrEqual(layout.control.left);
-  expect(layout.picker.right).toBeLessThanOrEqual(layout.row.right + 1);
+  expect(layout.picker.right).toBeLessThanOrEqual(layout.control.right + 1);
   expect(layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left).toBe(
     true,
   );
