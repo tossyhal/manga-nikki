@@ -333,6 +333,23 @@ select test.assert((select count(*) = 0 from public.assets), '他ownerには成�
 reset role;
 set local role service_role;
 
+select public.request_entry_deletion(:'complete_owner'::uuid, :'complete_entry'::uuid);
+select public.claim_retention_cleanup(10) as completed_cleanup \gset
+select public.finalize_retention_cleanup(
+  :'complete_entry'::uuid, (:'completed_cleanup'::jsonb -> 0 ->> 'claim_token')::uuid, true
+) as completed_purged \gset
+reset role;
+select test.assert(:'completed_purged'::boolean
+  and (select count(*) = 4 from private.storage_deletion_outbox
+    where object_path in (
+      select asset.value ->> 'object_path'
+      from jsonb_array_elements(:'complete_save'::jsonb -> 'task' -> 'asset_metadata') asset(value)
+    ))
+  and not exists (select 1 from public.assets
+    where generation_id = :'complete_generation'::uuid),
+  'purgeは完了済みpublic.assetsのStorage pathもoutboxへ移す');
+set local role service_role;
+
 select test.make_saving_fixture('recovery_missing_task', false) as missing_fixture \gset
 select (:'missing_fixture'::jsonb ->> 'generation_id') as missing_generation \gset
 select (:'missing_fixture'::jsonb ->> 'owner_id') as missing_owner \gset
@@ -470,6 +487,82 @@ select test.assert(:'cancel_purged'::boolean
   and not test.comic_save_task_exists(:'cancel_generation'::uuid)
   and test.retained_reservation_state(:'cancel_generation'::uuid) = 'consumed',
   'Storage削除後のpurgeはtask・画像path・jobを掃除し消費台帳を保持');
+
+select test.assert(not has_table_privilege('service_role',
+    'private.storage_deletion_outbox', 'SELECT')
+  and not has_table_privilege('service_role', 'private.storage_deletion_outbox', 'INSERT')
+  and not has_table_privilege('service_role', 'private.storage_deletion_outbox', 'UPDATE')
+  and not has_table_privilege('service_role', 'private.storage_deletion_outbox', 'DELETE')
+  and not has_table_privilege('anon', 'private.storage_deletion_outbox', 'SELECT')
+  and not has_table_privilege('authenticated', 'private.storage_deletion_outbox', 'SELECT')
+  and (select relrowsecurity from pg_catalog.pg_class
+    where oid = 'private.storage_deletion_outbox'::regclass)
+  and not has_function_privilege('anon',
+    'public.claim_storage_deletion_cleanup(integer)', 'EXECUTE')
+  and has_function_privilege('service_role',
+    'public.claim_storage_deletion_cleanup(integer)', 'EXECUTE')
+  and has_function_privilege('service_role',
+    'public.finalize_storage_deletion_cleanup(text,uuid,boolean)', 'EXECUTE'),
+  '削除outboxはprivateで直接操作不可、GC RPCだけservice_role専用');
+select test.expect_error('select * from private.storage_deletion_outbox', '42501');
+reset role;
+select test.assert((select count(*) = 4
+    and bool_and(next_check_at > pg_catalog.clock_timestamp())
+    and bool_and(next_check_at <= pg_catalog.clock_timestamp() + interval '61 minutes')
+    from private.storage_deletion_outbox
+    where object_path in (
+      select asset.value ->> 'object_path'
+      from jsonb_array_elements(:'cancel_fixture'::jsonb -> 'save' -> 'task' -> 'asset_metadata')
+        asset(value)
+    )), 'purgeはtaskのplanned path全件を1時間graceつきoutboxへ同時登録');
+update private.storage_deletion_outbox
+set next_check_at = pg_catalog.clock_timestamp()
+where object_path = (:'cancel_fixture'::jsonb -> 'save' -> 'task' ->
+  'asset_metadata' -> 0 ->> 'object_path');
+set local role service_role;
+select public.claim_storage_deletion_cleanup(40) as outbox_claim \gset
+select (:'outbox_claim'::jsonb -> 0 ->> 'object_path') as outbox_path \gset
+select (:'outbox_claim'::jsonb -> 0 ->> 'claim_token') as outbox_claim_token \gset
+select test.assert(jsonb_array_length(:'outbox_claim'::jsonb) = 1
+  and :'outbox_path' = (:'cancel_fixture'::jsonb -> 'save' -> 'task' ->
+    'asset_metadata' -> 0 ->> 'object_path')
+  and (:'outbox_claim'::jsonb -> 0 ->> 'lease_expires_at')::timestamptz >
+    pg_catalog.clock_timestamp()
+  and (:'outbox_claim'::jsonb -> 0 ->> 'lease_expires_at')::timestamptz <=
+    pg_catalog.clock_timestamp() + interval '16 minutes',
+  'GC claimは期限到来pathだけを15分leaseで取得');
+select test.assert(not public.finalize_storage_deletion_cleanup(
+    :'outbox_path', :'outbox_claim_token'::uuid, false),
+  'Storage削除未確認のfinalizeは拒否');
+select test.assert(public.finalize_storage_deletion_cleanup(
+    :'outbox_path', :'outbox_claim_token'::uuid, true),
+  'Storage absence確認後のfinalizeを受理');
+reset role;
+select test.assert((select count(*) = 1 and bool_and(claim_token is null)
+    and bool_and(lease_expires_at is null) and bool_and(last_checked_at is not null)
+    and bool_and(next_check_at > pg_catalog.clock_timestamp())
+    and bool_and(next_check_at <= pg_catalog.clock_timestamp() + interval '25 hours')
+    and bool_and(attempt_count = 1)
+    from private.storage_deletion_outbox where object_path = :'outbox_path'),
+  '確認後もoutbox markerを保持し翌日再照合を予約');
+update private.storage_deletion_outbox
+set next_check_at = pg_catalog.clock_timestamp()
+where object_path = :'outbox_path';
+set local role service_role;
+select public.claim_storage_deletion_cleanup(40) as outbox_recheck \gset
+select (:'outbox_recheck'::jsonb -> 0 ->> 'claim_token') as outbox_recheck_token \gset
+select test.assert(jsonb_array_length(:'outbox_recheck'::jsonb) = 1
+  and (:'outbox_recheck'::jsonb -> 0 ->> 'object_path') = :'outbox_path'
+  and public.finalize_storage_deletion_cleanup(
+    :'outbox_path', :'outbox_recheck_token'::uuid, true),
+  '日次GCは過去に確認済みの同pathも再照合できる');
+reset role;
+select test.assert((select count(*) = 1 and bool_and(attempt_count = 2)
+    from private.storage_deletion_outbox where object_path = :'outbox_path'),
+  '成功済みpath markerは無期限に保持し再確認履歴を増やす');
+select test.expect_error(format(
+  'insert into private.storage_deletion_outbox(object_path,next_check_at) values (%L,clock_timestamp())',
+  'not-a-storage-path'), '23514');
 
 select test.make_saving_fixture('expired_entry', true) as expiry_fixture \gset
 select (:'expiry_fixture'::jsonb ->> 'generation_id') as expiry_generation \gset
