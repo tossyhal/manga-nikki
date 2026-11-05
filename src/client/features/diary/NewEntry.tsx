@@ -19,9 +19,10 @@ import type { DiaryActivity } from './diaryActivity';
 type NewEntryProps = {
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
+  hasBlockedNavigation: () => boolean;
 };
 
-export function NewEntry({ config, onActivityChange }: NewEntryProps) {
+export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: NewEntryProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
@@ -82,8 +83,8 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
 
   useLayoutEffect(() => {
-    if (activeRef.current) onActivityChange({ dirty, busy });
-  }, [busy, dirty, onActivityChange]);
+    if (activeRef.current) onActivityChange({ dirty, busy, failed: Boolean(error) });
+  }, [busy, dirty, error, onActivityChange]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -93,7 +94,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     return () => {
       window.clearTimeout(refreshTimer);
       activeRef.current = false;
-      onActivityChange({ dirty: false, busy: false });
+      onActivityChange({ dirty: false, busy: false, failed: false });
     };
   }, [onActivityChange, refreshQuota]);
 
@@ -147,22 +148,24 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       }
       if (!activeRef.current) return;
       setSaved(entry);
-      onActivityChange({ dirty: false, busy: makeComic && config.dataMode === 'mock' });
+      onActivityChange({ dirty: false, busy: true, failed: false });
     }
     if (!makeComic) {
-      onActivityChange({ dirty: false, busy: false });
-      navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
+      onActivityChange({ dirty: false, busy: false, failed: false });
+      if (!hasBlockedNavigation())
+        navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
       return;
     }
     if (!navigator.onLine) {
       refreshOnlineStatus();
       setError('日記は保存しました。オフラインのため漫画の受付はしていません。');
-      onActivityChange({ dirty: false, busy: false });
-      navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
+      onActivityChange({ dirty: false, busy: false, failed: true });
+      if (!hasBlockedNavigation())
+        navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
       return;
     }
     if (makeComic && config.dataMode === 'mock') {
-      const currentQuota = await refreshQuota();
+      const currentQuota = await refreshQuota({ fresh: true });
       if (!activeRef.current) return;
       if (!quotaAllowsGeneration(currentQuota)) {
         setError(
@@ -172,8 +175,9 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               ? '本日の生成上限に達しています。日記は保存しました。'
               : '利用枠を確認できないため、漫画の受付を停止しています。日記は保存しました。',
         );
-        onActivityChange({ dirty: false, busy: false });
-        navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
+        onActivityChange({ dirty: false, busy: false, failed: true });
+        if (!hasBlockedNavigation())
+          navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
         return;
       }
       try {
@@ -192,10 +196,11 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       }
     }
     if (!activeRef.current) return;
-    onActivityChange({ dirty: false, busy: false });
-    navigate(`/entries/${entry.id}`, {
-      state: makeComic && config.dataMode === 'live' ? { startGeneration: true } : null,
-    });
+    onActivityChange({ dirty: false, busy: false, failed: false });
+    if (!hasBlockedNavigation())
+      navigate(`/entries/${entry.id}`, {
+        state: makeComic && config.dataMode === 'live' ? { startGeneration: true } : null,
+      });
   }
 
   async function save(makeComic: boolean) {
@@ -284,8 +289,8 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     try {
       await recheckGeneration(generationCheckEntry);
       if (activeRef.current) {
-        onActivityChange({ dirty: false, busy: false });
-        navigate(`/entries/${generationCheckEntry.id}`);
+        onActivityChange({ dirty: false, busy: false, failed: false });
+        if (!hasBlockedNavigation()) navigate(`/entries/${generationCheckEntry.id}`);
       }
     } catch (failure) {
       if (activeRef.current)
