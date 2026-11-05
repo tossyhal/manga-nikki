@@ -49,6 +49,7 @@ supabase/
 ### 実装コードの責務境界
 
 - 運用資格情報の保管には、ユーザーと合意したBitwarden Secrets Managerを使います。GitHub Environmentにmachine accountの入口トークンだけを置き、初期設定workflowが固定SHAの公式Actionで必要なSecret1件だけを取得します。個人のPassword Manager全体や、Supabase・AIの秘密情報を初期作成処理へ渡しません。staging Workerの初期作成と通常CD・アプリ公開は分け、詳細は[デプロイ基盤の初期設定](DEPLOYMENT.md)に記載します。
+- チームの開発ブランチへのpushとPR作成は維持し、mainのmerge・初期設定・将来の本番操作は所有者だけに限定します。初期設定では初回実行者の固定User IDと再実行者を検証し、Environment制限とmainの更新者制限を併用します。通常dev配信は後続CDでチーム共有にします。
 - `client/app/App.tsx`はアプリ共通枠・設定取得・画面離脱保護、`app/routes.tsx`はルートと利用可否の表示を担当します。ホーム固有の取得・表示は`features/home/`に置きます。
 - 日記の新規作成と編集では`DiaryDateField`・`DiaryBodyField`と日付書式を共有します。利用枠は`useGenerationQuota`で取得し、新規画面だけ再取得時にloadingへ戻す差を明示します。
 - 記録のURL状態は`librarySearch.ts`、日付計算は`libraryCalendar.ts`、取得範囲の走査は`libraryCoverage.ts`、取得中の状態とキャンセルは`useLibraryEntries.ts`が担当します。表示のページ数とAPIのcursorは別に扱います。

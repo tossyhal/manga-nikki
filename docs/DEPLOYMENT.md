@@ -8,11 +8,30 @@
 | --- | --- |
 | GitHubリポジトリ | `tossyhal/manga-nikki` |
 | 実行ブランチ | `main` |
+| 実行者・再実行者 | `tossyhal`（初回実行者のUser IDは`92223710`） |
 | GitHub Environment | `staging` |
 | Cloudflare Account ID | `c9cee9599752cb191815c0eea6ff457e` |
 | Worker | `manga-nikki-staging` |
 
 Worker名や対象アカウントを入力で切り替えることはできません。本番用BitwardenプロジェクトとGitHubの`production`環境は使用しません。
+
+## チーム内の操作分担
+
+| 操作 | 許可する人 |
+| --- | --- |
+| 開発ブランチへのpush・PR作成 | チームメンバー |
+| mainへのPRのmerge | `tossyhal`だけ |
+| この初期設定workflowの実行・再実行 | `tossyhal`だけ |
+| 通常dev配信 | 後続CDでチーム共有にする |
+| 本番配信・本番の運用操作 | 後続workflowでも`tossyhal`だけにする |
+
+手動workflowのボタン自体はWrite権限のメンバーにも表示され得ます。初期設定workflowはSecrets取得前に実行者を検査し、本人以外では初期設定処理へ進みません。初回が本人でも、別メンバーが失敗したjobを再実行した場合には資格情報を渡さないよう、Secretsを使うjobでも再実行者を検査します。
+
+workflow内の判定を書き換えて取り込まれることを防ぐため、GitHubの`main-owner-merge-only`Rulesetでmainの更新を制限し、`tossyhal`だけをPR経由の例外にします。既存の`protect-main`は別Rulesetとして残し、本人も直接push・force pushできない状態を維持します。チームメンバーのWrite権限や開発ブランチへのpush・PR作成権限は取り上げません。
+
+Write権限を残すため、Actions実行のキャンセルまで本人だけに制限するものではありません。中断後は実状態を照合します。また、PRのレビュー後に追加pushされる場合もあるので、本人がmergeする直前に最新HEADとCI結果を確認してください。
+
+これらはGitHub側の制限です。Cloudflare・Supabase・Bitwardenへ直接ログインできる管理者や、別途配布したAPIキーの権限までは制限しません。クラウド側へメンバーを招待する場合は、通常dev用の権限だけに限定し、本番・初期作成用資格情報を共有しません。
 
 初期作成用トークンには、対象アカウントのWorkers作成を許可する管理権限を使います。通常CD用トークンではありません。同アカウントの他Workerにも変更可能な権限なので、初期設定後に対象Workerだけを更新できる資格情報へ移行し、このトークンを失効させます。DNS・R2・KV等の権限は追加しません。
 
@@ -22,7 +41,7 @@ GitHubの[staging環境](https://github.com/tossyhal/manga-nikki/settings/enviro
 
 初期作成用トークンを登録している間、**Deployment branches and tags**は**Selected branches and tags**を選び、Branchの`main`だけを許可します。タグや他ブランチは許可しません。workflow内のmain判定だけでは、別ブランチに追加したworkflowからEnvironment Secretを読むことを防げないため、最初の`check`より前にEnvironment側の制限を確認します。developを許可するのは、初期作成用トークンの失効・通常CD用資格情報への移行とdevelop保護を済ませた後です。
 
-最初の`check`より前に[Rulesets](https://github.com/tossyhal/manga-nikki/settings/rules)も確認し、mainに適用する有効なルールでPR経由の変更を必須にし、直接push・force pushを禁止します。初期設定用workflowを含む変更は本人がレビューし、権限を持つ担当者を限定します。
+最初の`check`より前に[Rulesets](https://github.com/tossyhal/manga-nikki/settings/rules)も確認し、`protect-main`でPR経由の変更を必須にし、直接push・force pushを禁止します。`main-owner-merge-only`がmainに適用され、更新の例外が`tossyhal`のPR経由だけであることも確認します。初期設定用workflowを含む変更は本人がレビューします。
 
 | 種類 | 名前 | 設定内容 |
 | --- | --- | --- |

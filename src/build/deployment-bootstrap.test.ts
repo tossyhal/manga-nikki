@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   BootstrapFailure,
+  OWNER_LOGIN,
+  OWNER_USER_ID,
   STAGING_ACCOUNT_ID,
   STAGING_CONFIRMATION,
   STAGING_WORKER_NAME,
@@ -19,6 +21,8 @@ function context(overrides: Partial<BootstrapContext> = {}): BootstrapContext {
     githubActions: 'true',
     githubRepository: 'tossyhal/manga-nikki',
     githubRef: 'refs/heads/main',
+    githubActorId: OWNER_USER_ID,
+    githubTriggeringActor: OWNER_LOGIN,
     operation: 'check',
     confirmation: '',
     exclusiveSetup: 'false',
@@ -224,6 +228,40 @@ describe('staging Worker bootstrap', () => {
         BootstrapFailure,
       );
       expect(calls).toHaveLength(0);
+    }
+  });
+
+  it('元の実行者と起動者が両方ownerでない場合、ネットワーク・runner前に拒否する', async () => {
+    const invalidActors = [
+      { githubActorId: '103', githubTriggeringActor: 'team-member' },
+      { githubActorId: OWNER_USER_ID, githubTriggeringActor: 'team-member' },
+      { githubActorId: '103', githubTriggeringActor: OWNER_LOGIN },
+      { githubActorId: undefined, githubTriggeringActor: OWNER_LOGIN },
+      { githubActorId: OWNER_USER_ID, githubTriggeringActor: undefined },
+    ];
+
+    for (const actor of invalidActors) {
+      const { fetcher, calls } = fakeFetcher([]);
+      let deployCalls = 0;
+      const input = context({
+        ...actor,
+        operation: 'create',
+        confirmation: STAGING_CONFIRMATION,
+        exclusiveSetup: 'true',
+      });
+
+      expect(
+        await failureCode(
+          runDeploymentBootstrap(input, {
+            fetcher,
+            async deploy() {
+              deployCalls += 1;
+            },
+          }),
+        ),
+      ).toBe('INPUT_ACTOR_INVALID');
+      expect(calls).toHaveLength(0);
+      expect(deployCalls).toBe(0);
     }
   });
 

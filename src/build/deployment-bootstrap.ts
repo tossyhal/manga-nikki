@@ -2,6 +2,8 @@ export const STAGING_ACCOUNT_ID = 'c9cee9599752cb191815c0eea6ff457e';
 export const STAGING_WORKER_NAME = 'manga-nikki-staging';
 export const STAGING_COMPATIBILITY_DATE = '2026-10-26';
 export const STAGING_CONFIRMATION = 'manga-nikki-staging';
+export const OWNER_USER_ID = '92223710';
+export const OWNER_LOGIN = 'tossyhal';
 export const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
 
 export const STAGING_WORKER_SOURCE = `export default {
@@ -37,6 +39,7 @@ export type BootstrapOperation = 'check' | 'create';
 export type BootstrapErrorCode =
   | 'INPUT_OPERATION_INVALID'
   | 'INPUT_CONTEXT_INVALID'
+  | 'INPUT_ACTOR_INVALID'
   | 'INPUT_CONFIRMATION_INVALID'
   | 'INPUT_EXCLUSIVE_SETUP_REQUIRED'
   | 'CLOUDFLARE_TOKEN_MISSING'
@@ -69,6 +72,8 @@ export type BootstrapContext = {
   githubActions?: string;
   githubRepository?: string;
   githubRef?: string;
+  githubActorId?: string;
+  githubTriggeringActor?: string;
   operation?: string;
   confirmation?: string;
   exclusiveSetup?: string;
@@ -108,6 +113,7 @@ export function renderBootstrapSummary(
   const errorCodes: readonly BootstrapDisplayErrorCode[] = [
     'INPUT_OPERATION_INVALID',
     'INPUT_CONTEXT_INVALID',
+    'INPUT_ACTOR_INVALID',
     'INPUT_CONFIRMATION_INVALID',
     'INPUT_EXCLUSIVE_SETUP_REQUIRED',
     'CLOUDFLARE_TOKEN_MISSING',
@@ -195,6 +201,9 @@ function validateContext(context: BootstrapContext): {
     context.githubRef !== 'refs/heads/main'
   ) {
     return fail('INPUT_CONTEXT_INVALID');
+  }
+  if (context.githubActorId !== OWNER_USER_ID || context.githubTriggeringActor !== OWNER_LOGIN) {
+    return fail('INPUT_ACTOR_INVALID');
   }
   if (operation === 'create' && context.confirmation !== STAGING_CONFIRMATION) {
     return fail('INPUT_CONFIRMATION_INVALID');

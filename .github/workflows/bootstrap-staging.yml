@@ -23,7 +23,19 @@ on:
 permissions:
   contents: read
 jobs:
+  authorize:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 実行者と再実行者を確認
+        run: |
+          if [[ "${GITHUB_ACTOR_ID:-}" != '92223710' || "${GITHUB_TRIGGERING_ACTOR:-}" != 'tossyhal' ]]; then
+            echo 'INPUT_ACTOR_INVALID' >&2
+            exit 1
+          fi
+
   checks:
+    needs: authorize
     if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -46,8 +58,8 @@ jobs:
       - run: pnpm build
 
   bootstrap:
-    needs: checks
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main' && needs.checks.result == 'success'
+    needs: [authorize, checks]
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main' && github.actor_id == '92223710' && github.triggering_actor == 'tossyhal' && needs.checks.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: staging

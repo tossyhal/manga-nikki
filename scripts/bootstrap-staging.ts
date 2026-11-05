@@ -30,6 +30,8 @@ async function main(): Promise<void> {
         githubActions: process.env.GITHUB_ACTIONS,
         githubRepository: process.env.GITHUB_REPOSITORY,
         githubRef: process.env.GITHUB_REF,
+        githubActorId: process.env.GITHUB_ACTOR_ID,
+        githubTriggeringActor: process.env.GITHUB_TRIGGERING_ACTOR,
         operation: process.env.DEPLOYMENT_OPERATION,
         confirmation: process.env.DEPLOYMENT_CONFIRMATION,
         exclusiveSetup: process.env.DEPLOYMENT_EXCLUSIVE_SETUP,
