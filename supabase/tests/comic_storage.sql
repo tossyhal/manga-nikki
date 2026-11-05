@@ -523,20 +523,31 @@ set local role service_role;
 select public.claim_storage_deletion_cleanup(40) as outbox_claim \gset
 select (:'outbox_claim'::jsonb -> 0 ->> 'object_path') as outbox_path \gset
 select (:'outbox_claim'::jsonb -> 0 ->> 'claim_token') as outbox_claim_token \gset
+reset role;
 select test.assert(jsonb_array_length(:'outbox_claim'::jsonb) = 1
   and :'outbox_path' = (:'cancel_fixture'::jsonb -> 'save' -> 'task' ->
     'asset_metadata' -> 0 ->> 'object_path')
   and (:'outbox_claim'::jsonb -> 0 ->> 'lease_expires_at')::timestamptz >
     pg_catalog.clock_timestamp()
   and (:'outbox_claim'::jsonb -> 0 ->> 'lease_expires_at')::timestamptz <=
-    pg_catalog.clock_timestamp() + interval '16 minutes',
+    pg_catalog.clock_timestamp() + interval '16 minutes'
+  and (select next_check_at > pg_catalog.clock_timestamp()
+      and next_check_at <= pg_catalog.clock_timestamp() + interval '16 minutes'
+    from private.storage_deletion_outbox where object_path = :'outbox_path'),
   'GC claimは期限到来pathだけを15分leaseで取得');
+set local role service_role;
 select test.assert(not public.finalize_storage_deletion_cleanup(
     :'outbox_path', :'outbox_claim_token'::uuid, false),
   'Storage削除未確認のfinalizeは拒否');
 select test.assert(public.finalize_storage_deletion_cleanup(
     :'outbox_path', :'outbox_claim_token'::uuid, true),
   'Storage absence確認後のfinalizeを受理');
+select test.assert(not public.finalize_storage_deletion_cleanup(
+    :'outbox_path', :'outbox_claim_token'::uuid, true),
+  'finalize後の古いclaim token再利用を拒否');
+select test.assert(not public.finalize_storage_deletion_cleanup(
+    :'outbox_path', null::uuid, true),
+  '未claim markerにNULL tokenを指定したfinalizeを拒否');
 reset role;
 select test.assert((select count(*) = 1 and bool_and(claim_token is null)
     and bool_and(lease_expires_at is null) and bool_and(last_checked_at is not null)
@@ -560,6 +571,70 @@ reset role;
 select test.assert((select count(*) = 1 and bool_and(attempt_count = 2)
     from private.storage_deletion_outbox where object_path = :'outbox_path'),
   '成功済みpath markerは無期限に保持し再確認履歴を増やす');
+
+create temp table outbox_fairness_paths (object_path text primary key) on commit drop;
+create temp table outbox_fairness_failed_paths (object_path text primary key) on commit drop;
+create temp table outbox_fairness_success_paths (object_path text primary key) on commit drop;
+with inserted as (
+  insert into private.storage_deletion_outbox (object_path, next_check_at)
+  select pg_catalog.format(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/%s/%s.png',
+      gen_random_uuid(), gen_random_uuid()),
+    pg_catalog.clock_timestamp()
+  from pg_catalog.generate_series(1, 45)
+  returning object_path
+)
+insert into outbox_fairness_paths select object_path from inserted;
+set local role service_role;
+select public.claim_storage_deletion_cleanup(40) as fairness_first_claim \gset
+reset role;
+insert into outbox_fairness_failed_paths
+select candidate.value ->> 'object_path'
+from pg_catalog.jsonb_array_elements(:'fairness_first_claim'::jsonb) candidate(value);
+select test.assert(jsonb_array_length(:'fairness_first_claim'::jsonb) = 40
+    and (select count(*) = 40 from private.storage_deletion_outbox
+      where object_path in (select object_path from outbox_fairness_failed_paths)
+        and attempt_count = 1
+        and next_check_at > pg_catalog.clock_timestamp()),
+  'GCは1回あたり40pathをclaimし、失敗pathのretry時刻をlease期限へ進める');
+set local role service_role;
+select public.claim_storage_deletion_cleanup(40) as fairness_remaining_claim \gset
+reset role;
+insert into outbox_fairness_success_paths
+select candidate.value ->> 'object_path'
+from pg_catalog.jsonb_array_elements(:'fairness_remaining_claim'::jsonb) candidate(value);
+select test.assert(jsonb_array_length(:'fairness_remaining_claim'::jsonb) = 5
+    and (select count(*) = 5 from private.storage_deletion_outbox
+      where object_path in (select object_path from outbox_fairness_success_paths)),
+  '先頭40pathが失敗しても次のclaimで残り5pathへ進む');
+set local role service_role;
+select test.assert((
+    select pg_catalog.bool_and(public.finalize_storage_deletion_cleanup(
+      candidate.value ->> 'object_path',
+      (candidate.value ->> 'claim_token')::uuid,
+      true))
+    from pg_catalog.jsonb_array_elements(:'fairness_remaining_claim'::jsonb) candidate(value)
+  ), '成功した残りpathを再確認済みにする');
+reset role;
+update private.storage_deletion_outbox outbox
+set next_check_at = pg_catalog.clock_timestamp(),
+    claim_token = null,
+    lease_expires_at = null,
+    attempt_count = case
+      when outbox.object_path in (select object_path from outbox_fairness_failed_paths)
+        then 3
+      else outbox.attempt_count
+    end
+where outbox.object_path in (select object_path from outbox_fairness_paths);
+set local role service_role;
+select public.claim_storage_deletion_cleanup(40) as fairness_recheck_claim \gset
+reset role;
+select test.assert(jsonb_array_length(:'fairness_recheck_claim'::jsonb) = 40
+    and (select count(*) = 5
+      from pg_catalog.jsonb_array_elements(:'fairness_recheck_claim'::jsonb) candidate(value)
+      where candidate.value ->> 'object_path' in (
+        select object_path from outbox_fairness_success_paths)),
+  '再確認済みmarkerは繰り返し失敗した未確認markerより先に再確認する');
 select test.expect_error(format(
   'insert into private.storage_deletion_outbox(object_path,next_check_at) values (%L,clock_timestamp())',
   'not-a-storage-path'), '23514');

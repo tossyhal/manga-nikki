@@ -176,15 +176,18 @@ export async function cleanRetainedEntriesForScheduledEnvironment(
   }
   if (mode !== 'local-connected' && mode !== 'live-demo') return undefined;
 
-  const summary = await createRetentionCleanupServiceForEnvironment(
-    environment,
-    fetcher,
-  ).cleanDueEntries();
-  console.info('retention_cleanup_summary', summary);
   try {
-    await cleanStorageDeletionOutboxForScheduledEnvironment(environment, fetcher);
-  } catch {
-    console.error('storage_deletion_cleanup_unavailable');
+    const summary = await createRetentionCleanupServiceForEnvironment(
+      environment,
+      fetcher,
+    ).cleanDueEntries();
+    console.info('retention_cleanup_summary', summary);
+    return summary;
+  } finally {
+    try {
+      await cleanStorageDeletionOutboxForScheduledEnvironment(environment, fetcher);
+    } catch {
+      console.error('storage_deletion_cleanup_unavailable');
+    }
   }
-  return summary;
 }
