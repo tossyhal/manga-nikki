@@ -2,16 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { shouldRenewExpiredAsset } from './signedAssetRefresh';
 
 describe('expired signed asset refresh', () => {
-  const now = 1_800_000_000_000;
+  const receivedAt = 10_000;
 
-  it('renews once after expiry, including images first loaded lazily', () => {
-    expect(shouldRenewExpiredAsset(now - 1, false, now)).toBe(true);
-    expect(shouldRenewExpiredAsset(now - 1, true, now)).toBe(false);
+  it('renews once after the signed URL age limit, including images first loaded lazily', () => {
+    expect(shouldRenewExpiredAsset(receivedAt, false, receivedAt + 55_000)).toBe(true);
+    expect(shouldRenewExpiredAsset(receivedAt, true, receivedAt + 55_000)).toBe(false);
   });
 
-  it('does not renew a still-valid URL or missing expiry metadata', () => {
-    expect(shouldRenewExpiredAsset(now + 1, false, now)).toBe(false);
-    expect(shouldRenewExpiredAsset(undefined, false, now)).toBe(false);
-    expect(shouldRenewExpiredAsset(Number.NaN, false, now)).toBe(false);
+  it('does not renew before the age limit or without a receive time', () => {
+    expect(shouldRenewExpiredAsset(receivedAt, false, receivedAt + 54_999)).toBe(false);
+    expect(shouldRenewExpiredAsset(receivedAt + 1, false, receivedAt)).toBe(false);
+    expect(shouldRenewExpiredAsset(undefined, false, receivedAt + 55_000)).toBe(false);
+    expect(shouldRenewExpiredAsset(Number.NaN, false, receivedAt + 55_000)).toBe(false);
+    expect(shouldRenewExpiredAsset(receivedAt, false, Number.NaN)).toBe(false);
   });
 });
