@@ -2,7 +2,7 @@
 
 > 2026-10-27に採用した実装方針です。全体の構成・共通型・公開条件を先に揃え、通常の開発はモックで進めます。
 
-PR#29までの変更は`main`へ統合済みです。PR#41ではlive-demo用のOpenAI白黒profile、原子的予約、attempt ledgerとQueue runnerを接続しています。画像のprivate Storage保存・assets登録・成功確定RPCは未実装です。詳細は[PLAN](PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。PR#41ではlive-demo用のOpenAI白黒profile、原子的予約、attempt ledger、Queue runner、保存復旧callback契約を接続しています。画像のprivate Storage保存・assets登録・成功確定RPC・復旧handler本体は未実装です。詳細は[PLAN](PLAN.md)を参照してください。
 
 ---
 
@@ -14,7 +14,7 @@ React PWA ─ Supabase Auth（匿名サインイン・トークン更新）
          ├─ PostgreSQL（読み取りは利用者JWT + RLS、書き込みはサーバー専用RPC）
          ├─ private Storage（画像保存・短命の署名URL発行）
          └─ Queues（job IDのみ送信）→ 同じWorkerのConsumer → AI生成 → 保存
-Scheduled handler（定期実行）→ 未配送jobの再送・停止状態の照合・保存期限/削除処理
+Scheduled handler（定期実行）→ 未配送jobの再送・停止状態の照合・期限切れ保存taskの復旧・保存期限/削除処理
 ```
 
 ### 採用技術スタック
@@ -82,10 +82,12 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 4. AI呼び出しと保存（Consumer → OpenAI → 保存handler）
    - OpenAI白黒profileはscriptを1回、画像を最大4回呼びます。各SDK呼出し自体の前にDBでattemptを開始し、response後にrequest IDと既知状態を記録します。
    - scriptと4枚の画像を検証した後、`mark_generation_saving`を呼び、保存handlerへgeneration/owner/claim、script、画像bytes、provider metadataを渡します。
-   - 保存handler・Storage・実AI用completion RPCは未接続です。handlerがWorker runtimeへ注入されない場合、live生成の可用性はfalseとなり、ConsumerはAI providerを呼びません。
+   - 保存handler・Storage・実AI用completion RPC・復旧handler本体は未接続です。`createWorker({ saveGeneratedComic, recoverGeneratedComic })`でどちらか一方でもhandlerを注入しない場合、新規live生成の可用性はfalseとなり、ConsumerはAI providerを呼びません。
 5. 中断・障害時の扱い
    - 外部AIへリクエストを送信した後に処理が中断した場合は、[用語集](../README.md#glossary)の`unknown`として記録・照合します（`running`状態のジョブを自動的に`queued`へ戻して再実行することはしません）。
-   - Storageへの画像保存後にDB更新だけが失敗した場合は、AIを再実行せず保存済みの既存画像から完了確定を再試行します。
+   - 保存handlerのthrow・不正結果はQueue messageをackし、jobを`running` / `saving`のまま保ちます。Cronは取消・削除・entry期限切れの通常精算を先に行い、次に期限切れOpenAI saving jobを`recoverGeneratedComic`へ渡し、最後に未配送jobを再送します。
+   - 保存handlerはscript・asset/taskの再開情報をdurableに早期記録します。復旧callbackは保存済みdurable情報とgeneration IDから保存だけを再開し、新しいAI呼出しをしません。未保存の画像bytes保持は保証されず、復旧情報が足りない場合は保存担当が安全な失敗・取消を確定します。
+   - live-demo Cronの保存復旧は`recoverGeneratedComic`があれば`GENERATION_ENABLED=false`やOpenAI API key不在でも動作します。新規AI呼出しのready条件とは分離し、復旧callbackはowner・保存用lease・期限・削除/cancelを検証して保存完了または安全な終端状態を確定します。
 
 ### キューとタイムアウトの初期設定値
 
@@ -102,20 +104,20 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳接続がありますが、画像private保存・assets登録・実生成の完了確定は未実装です。`/assets/:id/url`は本人の有効なmock jobだけに公開サンプル画像を返し、実Storage署名URLは発行しません。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。実生成は環境flag・DB policy・Queue・Turnstile・OpenAI API key・保存handlerが揃うまで停止します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は実AI呼び出しの許可で、mock生成ではfalseのまま使います。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳接続がありますが、画像private保存・assets登録・実生成の完了確定は未実装です。`/assets/:id/url`は本人の有効なmock jobだけに公開サンプル画像を返し、実Storage署名URLは発行しません。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。実生成は環境flag・DB policy・Queue・Turnstile・OpenAI API key・保存handler・復旧callbackが揃うまで停止します。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は新しい実AI呼出しの許可で、mock生成や既存saving taskの復旧には不要です。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
 | `local-mock` | `development` | `mock` | `mock` | `false` | localhost限定の仮ユーザー・仮保存・固定漫画 |
 | `local-connected` | `development`または`staging` | `live` | `mock` | `false` | 開発Supabase・本物Auth・Queue経由の固定mock漫画で結合確認。Queue/Turnstile secretsがなければ新規受付は停止 |
 | `preview-sample` | `staging`または`production` | `sample` | `mock` | `false` | 架空サンプルだけ。匿名登録・個人データAPI・生成受付は無効 |
-| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、別承認後に設定 | 本物Auth・日記CRUD・実AI Queue経路。policy/予算/Turnstile/Queue/OpenAI key/保存handlerが揃わなければ停止。画像保存・成功確定RPCは未接続 |
+| `live-demo` | `staging`または`production` | `live` | `live` | 初期`false`、別承認後に設定 | 本物Auth・日記CRUD・実AI Queue経路。policy/予算/Turnstile/Queue/OpenAI key/保存・復旧handlerが揃わなければ新規生成を停止。画像保存・成功確定RPC・復旧本体は未接続 |
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
 - `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
-- 実AIは`live-demo`で`GENERATION_ENABLED=true`とDBの`enabled`が両方有効、固定profile・予算・quota・認証・Turnstile・Queue・OpenAI key・保存handler等がすべて整う場合だけ呼びます。現default Workerは保存handler未注入のため無効です。他モードでの`GENERATION_ENABLED=true`は拒否します。
+- 実AIは`live-demo`で`GENERATION_ENABLED=true`とDBの`enabled`が両方有効、固定profile・予算・quota・認証・Turnstile・Queue・OpenAI key・保存handler・復旧callback等がすべて整う場合だけ呼びます。現default Workerは保存・復旧handler未注入のため無効です。他モードでの`GENERATION_ENABLED=true`は拒否します。
 - local-connectedのmock予約は`reserve_mock_generation`だけで行い、DB policyが有効かつmock profileのときに限ります。実profileはこの経路から予約できません。
-- Queueには`{ generationId }`だけを送ります。Worker Consumerはmock profileだけを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合は未配送queuedを再送し、15分を過ぎたrunningはRPC結果に従ってfailed / unknown / heldを確定します。unknownを自動再実行しません。
+- Queueには`{ generationId }`だけを送ります。Worker Consumerはlocal-connectedのmock profileまたはlive-demoのOpenAI profileを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合は取消・削除・期限切れjobの通常精算、期限切れOpenAI saving jobの保存復旧、未配送queuedの再送の順で処理します。保存復旧はcallbackがあれば新規生成flagやOpenAI keyなしで動作し、AIを再実行しません。`unknown`を自動再実行しません。
 - モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`、`dev.vars.local-connected.example`はSupabase接続を設定する開発用見本です。共有DBへのmigration適用前にlocal-connectedを有効なDBへ接続しないでください。
 
 ### PWA（Progressive Web App）の設計方針

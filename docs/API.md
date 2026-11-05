@@ -5,15 +5,15 @@
 
 ### 現在の実装範囲
 
-PR#29までの変更は`main`へ統合済みです。このPRではOpenAI白黒生成profileと台帳hookを追加し、live-demoのQueue経路を接続します。private Storageへの画像保存本体は保存担当の実装待ちで、保存handlerが注入されていない環境ではlive生成を停止します。共有DB migration、実Turnstile・Cloudflare Queue結合、保存handlerの接続、実AIの品質・課金は未確認です。段階ごとの詳細は[開発計画](PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。このPRではOpenAI白黒生成profileと台帳hook、live-demoのQueue経路、保存復旧callback契約を追加します。private Storageへの画像保存本体は保存担当の実装待ちです。新規live生成は保存handlerまたは復旧callbackのどちらか一方でも未注入なら停止します。共有DB migration、実Turnstile・Cloudflare Queue結合、保存handlerの接続、実AIの品質・課金は未確認です。段階ごとの詳細は[開発計画](PLAN.md)を参照してください。
 
 localhost限定のモックで下記HTTP APIを実装しています。`/config.dataMode`で画面が認証・保存方式を選び、モードの判定はサーバーが行います。`/config.generationAvailable`はlocal-mockと、Queue・生成用Turnstileが設定済みのlocal-connectedだけtrueです。local-connectedでの最終的な受付可否は`GET /me/quota`の値も確認します。
 
 モックのBearerは`mock:<ランダムUUID>`で、ブラウザには仮セッションIDだけを保存します。`captchaToken`は空文字です。本物のJWT・Turnstileとは互換にせず、開発ビルドかつloopbackへの要求だけで許可します。生成は固定fixtureを即時確定し、Queue・実AIは呼びません。`mock: true`を生成結果へ付けます。画像URLは公開の架空サンプルであり、Storageの署名URLではありません。
 
-liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。live-demoの実生成経路はOpenAI白黒profile・原子的予約・Queue・provider attempt台帳を通しますが、private画像保存handlerが未接続なら受付を停止します。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合、保存handler接続、実AIの品質・課金は未確認です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
+liveモードではSupabase access token検証と日記CRUDを実装しています。日記一覧・詳細・生成状態・quotaの読み取りは利用者JWT + RLSとAPI側のowner条件を使い、書き込み・予約・状態確定はサーバー専用RPCを使います。`local-connected`では生成専用Turnstile検証、冪等予約、Queue、固定mockの状態遷移、未配送・期限照合を接続します。固定mockの画像はgeneration IDをasset IDに使い、本人の有効なmock jobを確認した場合だけ公開の`/sample-comic.svg`を返します。これは架空サンプルで、Storageへの画像保存や実生成を示しません。期限切れ・削除済み日記は日次Scheduled handlerからserver専用cleanup serviceへ渡します。`local-connected`と`live-demo`だけで実行し、sample / malformed modeでは個人DB・Storageへアクセスしません。live-demoの実生成経路はOpenAI白黒profile・原子的予約・Queue・provider attempt台帳を通します。保存handlerの一時障害ではjobを`saving`のまま保持し、復旧callbackがdurableな保存情報から再開します。新規実生成は保存handlerまたは復旧callbackのどちらか一方でも未接続なら受付を停止します。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合、保存handler接続、実AIの品質・課金は未確認です。local-mockの即時固定成功と、live APIがmock repositoryへ切り替わらない方針は維持します。
 
-liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。入力・閲覧だけでは登録やCAPTCHAを始めず、説明の近くにある保存・生成ボタンを利用者が明示的に押した場合に限って登録を開始します。`POST /entries`には既存契約どおり`consentVersion`を送り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。生成用CAPTCHAと利用枠のUIは実装済みで、`local-connected` APIを呼ぶ場合は登録用とは別の生成用tokenが必要です。`live-demo`の新規実AI生成はサーバーが停止します。実Turnstile結合、共有DBへの適用、最新branchの全経路は未確認です。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
+liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに既存セッションの保存・更新を任せます。ホームのサンプル閲覧や401応答を理由に匿名ユーザーを新規作成しません。入力・閲覧だけでは登録やCAPTCHAを始めず、説明の近くにある保存・生成ボタンを利用者が明示的に押した場合に限って登録を開始します。`POST /entries`には既存契約どおり`consentVersion`を送り、登録用Turnstile tokenをSDKの`signInAnonymously`へ一度だけ渡します。登録用tokenは生成APIへ流用しません。生成用CAPTCHAと利用枠のUIは実装済みで、`local-connected` APIを呼ぶ場合は登録用とは別の生成用tokenが必要です。`live-demo`の新規実AI生成は初期設定では停止しており、必要なready条件が揃った環境だけ受付可能です。実Turnstile結合、共有DBへの適用、最新branchの全経路は未確認です。Supabaseの公開設定または登録用site keyが不足する場合もlive認証を停止し、モックへ切り替えません。
 
 ---
 
@@ -227,7 +227,7 @@ type ComicDocument = {
 日記本文やジョブ状態の正本はPostgreSQL、生成画像の正本はprivate Storageとします。
 （※以下はSQL migrationの設計契約です。共有DBには未適用で、隔離PostgreSQLによる一部RPC / RLS検証を行っています。データの書き込みはすべてサーバー専用RPC経由で行い、読み取りは利用者JWT + RLSを使用します。詳細な権限設定は[OPERATIONS.md](OPERATIONS.md)を参照してください）。
 
-日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路に加え、live-demo向けOpenAI profileの予約wrapperとQueue Consumer接続を追加しています。新規実生成は`GENERATION_ENABLED`・DB policy・queue・API key・private画像保存handlerのすべてが整わないと受付されません。保存handler本体は別担当の作業待ちです。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合確認、保存handler接続、実AIの品質・課金は未確認です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
+日記・生成job管理テーブル、生成元`is_mock`、private予算台帳、受付・実行・Queue照合RPCのmigrationを追加済みです。HTTPのlocal-connected固定mock経路に加え、live-demo向けOpenAI profileの予約wrapperとQueue Consumer接続を追加しています。新規実生成は`GENERATION_ENABLED`・DB policy・queue・API key・private画像保存handler・保存復旧callbackのすべてが整わないと受付されません。保存handlerとprivate Storage保存本体は別担当の作業待ちです。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cronとの結合確認、保存handler接続、実AIの品質・課金は未確認です。DB RPCの引数、権限、ロックとエラーの接続契約は[DB基盤の説明](../supabase/README.md)を参照してください。`entries.create_request_hash`は作成要求の再送を編集後も判定する内部列で、クライアントには公開しません。
 
 `generations.is_mock`は生成元metadataです。実装済みの固定mock job writerは`true`を設定し、将来実生成を接続するときは`false`を明示します。既存jobなどで`NULL`の場合は由来不明としてdetail APIを503にし、現在の`AI_MODE`から生成元を推測しません。
 
@@ -280,21 +280,21 @@ type ComicDocument = {
 | `mark_generation_saving` | live-demo Queue Consumer | 完了済みscript 1回・image 4回のattempt、claim、期限、削除/cancel、予約額とsnapshotの整合性を再確認してstageを`saving`へ進める。同claim tokenでの再送は冪等。policy停止の判定は外部呼出し前の`begin_provider_attempt`が担当 |
 | `complete_mock_generation` | local-connected Queue Consumer | claim、期限、mock attempt 2件、固定comicのschema・generation由来asset IDを確認し、comic JSONとconsumed台帳状態を確定。Storage画像を保存しない |
 | `mark_generation_enqueued` | Worker | Queue送信後にqueued jobの配送時刻を更新し、未配送再送までの待機を記録 |
-| `list_generation_reconcile_candidates` | Scheduled handler | 最大50件までqueued再送・削除/期限cancel・期限切れrunning照合のgeneration IDとactionだけを返す |
+| `list_generation_reconcile_candidates_v2` | Scheduled handler | 最大50件までgeneration IDとactionだけを返す。通常のcancel/expiry精算を先に返し、対象となる期限切れOpenAI saving jobを`recover-saving`、未配送queued jobを最後に返す |
 | `claim_retention_cleanup` | 日次cleanup service | dueかつactive jobがないentryを最大10件claimし、15分lease・claim token・DB登録済み画像path snapshotを返す。Storage通信中はDB transactionを保持しない |
 | `finalize_retention_cleanup` | 日次cleanup service | Storage削除成功後だけ実行する。lease/token・期限・active jobなし・claim時点と同じasset path集合を再確認して台帳をprivateへ移し、asset→job→entryを削除する。quota counterは変更しない |
 | `fail_or_hold_generation` | Consumer / 定期照合 | `p_generation_id uuid`, `p_claim_token uuid`（queued jobは`null`）, `p_terminal_status text`（`failed` / `cancelled`）。未送信が証明できる場合だけreservationをreleaseし、結果不明はjob `unknown` / reservation `held`、結果既知は最大予約額を`consumed` |
 
 - デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
 - 物理削除のfinalizeもpolicy advisory lock→owner advisory lock→entry→jobの順で処理します。期限切れ/削除済みentryにqueued / running jobがあればcleanup claimから除外し、Queue側の`fail_or_hold_generation`によるcancel・精算が終わるまでmetadataを保持します。
-- APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して、local-connectedでは`reserve_mock_generation`、live-demoでは`reserve_openai_generation`を呼びます。各wrapperはpolicy更新用lockを保持し、指定されたmockまたは固定OpenAI profileだけを既存予約RPCへ渡します。新規live-demo予約は、環境flag・OpenAI key・Queue・Turnstile・保存handlerの設定もそろわなければ拒否します。
+- APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して、local-connectedでは`reserve_mock_generation`、live-demoでは`reserve_openai_generation`を呼びます。各wrapperはpolicy更新用lockを保持し、指定されたmockまたは固定OpenAI profileだけを既存予約RPCへ渡します。新規live-demo予約は、環境flag・OpenAI key・Queue・Turnstile・保存handler・復旧callbackの設定もそろわなければ拒否します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
 - `reserve_generation`はWorker環境変数`GENERATION_ENABLED`を信頼した`p_generation_enabled`引数として受け取り、クライアントからは受け取りません。新しいjobではpolicy profileの`model_profile_json`と日記本文/revisionをsnapshotへ固定し、`is_mock`をprofileから明示します。RPCのJSONB結果はSQL側の`generation_id`・`status`・`status_url`で、API担当がHTTP `GenerationReceipt`の`generationId`・`status`・`statusUrl`へmapします。
 - `claim_generation`のJSONBはQueue Consumerだけが読み、`generation_id`・`entry_id`・`owner_id`・`entry_revision`・`is_mock`・`input_snapshot`・`model_profile_snapshot`・`claim_token`・`deadline_at`を含みます。日記期限は全ロック取得後の時刻で再確認し、その時刻から15分のclaim期限を設定します。期限切れjobは自動再claimしません。
 - `begin_provider_attempt`のJSONBは`attempt_id`・`generation_id`・`stage`・`call_index`・`mode`・`is_mock`です。claim期限・日記期限はquota・entry・job lock取得後の現在時刻で再検査します。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）連番で開始できます。最初のimages attemptはscript成功後に限り、`generations.stage`を`script`から`images`へ同じtransactionで進めます。失敗後・結果不明・dispatch未確定の同じstageを再送せず、mockもattemptを台帳へ記録してAI providerへ渡しません。
 - `finish_provider_attempt`はrunning job・一致するclaim token・reserved reservation・dispatch済みattemptを再確認します。外部送信はすでに済んでいるため、削除要求・日記期限・claim期限後でもknown resultとrequest IDを記録します。terminal job・古いtoken・精算済みreservationは変更しません。request IDはnullableかつ最大200文字、mockではnullです。
 - `fail_or_hold_generation`は全ロック取得後の現在時刻でclaim期限を再確認し、queued / runningの未終端jobだけを扱います。non-mockの`dispatched` / `unknown` attemptが残ればjobを`unknown`、reservationを`held`にします。既知のnon-mock結果または確定したmock結果は予約最大額を`consumed`にし、外部未送信を証明できる場合のみ`released`へ変更します。releaseは予約時の`reserved_day`に対して各1回だけ行い、terminal job・古いclaim token・二重精算は状態やcounterを書き換えません。
-- `get_generation_quota`はDB残数とpolicy由来の利用可否を内部JSONBで返します。HTTP APIは`profile_is_mock`などのpolicy情報を除外し、mode・queue・Turnstile・OpenAI key・flag・保存handlerの設定も合わせて`generationAvailable`を返します。実AI policyが初期停止中、必要な設定が欠けている場合、または保存handlerが未注入の場合はfalseです。
+- `get_generation_quota`はDB残数とpolicy由来の利用可否を内部JSONBで返します。HTTP APIは`profile_is_mock`などのpolicy情報を除外し、mode・queue・Turnstile・OpenAI key・flag・保存handler・保存復旧callbackの設定も合わせて`generationAvailable`を返します。実AI policyが初期停止中、必要な設定が欠けている場合、または保存系handlerの片方でも未注入の場合はfalseです。Cronの保存復旧は既存jobの保存専用処理なので、`GENERATION_ENABLED`とOpenAI keyの有無に依存しません。
 - `complete_mock_generation`はQueue Consumerが固定fixtureを確定する専用RPCです。`complete_generation`や実AI/Storage保存serviceを代用せず、表示される画像URLは公開サンプルに限ります。
 - canonical requestはAPI v1・`entryId`・`expectedRevision`のJSONB表現をUTF-8 SHA-256化した値で、`find_generation_receipt`と`reserve_generation`が同じprivate helperを使用します。JSON body、単価、profile ID、残り枠をRPC引数で受けず、本文・profileはDB正本から取得します。
 
@@ -406,33 +406,44 @@ OpenAI SDKの自動再送は無効です。SDK responseから安全なrequest ID
 3. 新しい受付は生成用Turnstileを検証し、`reserve_openai_generation`でDB policy lock下のOpenAI profile・日記snapshot・最大費用枠を原子的に予約します。
 4. Queueへは`{ generationId }`だけを送ります。Consumerはclaim後にsnapshotを検証し、script 1回、image 1〜4の各API呼出し直前に`begin_provider_attempt`、既知結果直後に`finish_provider_attempt`を呼びます。
 5. scriptと4枚の画像が検証済みになった後、`mark_generation_saving`でstageを`saving`へ進めます。これは画像保存や成功確定を行いません。
-6. 保存handlerがprivate Storageへ画像を保存し、assets・`comic_json`を登録して完了を確定した後だけ、generation IDと`succeeded`を返します。保存完了までConsumerは`succeeded`を報告しません。
+6. `mark_generation_saving`の後、保存handlerはscriptと保存taskの再開情報をdurableに記録し、画像をprivate Storageへ保存してassets・`comic_json`を登録、完了を確定します。DBの完了確定後だけgeneration IDと`succeeded`を返します。
 
-`unknown`のattemptは自動再実行せず、予約枠をheldにします。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、Queue messageにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。画像bytesやBase64はアプリのJSON API body/responseや`comic_json`へ埋め込みません。Provider・保存handler内ではbinaryとして受け渡し、画像配信はasset ID用の専用URLを使います。
+`unknown`のattemptは自動再実行せず、予約枠をheldにします。保存handlerがthrowするか不正な結果を返した場合、Consumerは`saving-pending`としてQueue messageをackし、jobは`running` / `saving`のまま残します。Cronはdurableに保存済みの情報から保存復旧callbackを呼び、AIは再実行しません。durableな保存情報を作る前にhandlerが失敗するなど復旧データが足りない場合、保存担当が安全に失敗または取消を確定します。削除・cancel・entry期限切れのjobは保存復旧より通常の取消・期限精算を先に行います。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、Queue messageにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。Queueメッセージ、アプリのJSON API body/response、`comic_json`へ画像bytesやBase64を埋め込みません。Provider・保存handler内部ではbinaryで受け渡し、画像配信はasset ID用の専用URLを使います。
 
 ### 保存担当が接続するhandler
 
-`src/server/generation-save-handler.ts`の`SaveGeneratedComic`がConsumerから保存担当への受け渡し型です。入力は`generation`（generation / entry / owner ID、revision、日付、claim token、期限）、`profileId`、検証済み`script`、4枚の`rendered` panel bytesとMIME、各providerのrequest ID・usageです。画像metadataは4件・順番・profile modelをConsumerで再検証します。`SaveGeneratedComicContext`はそのQueue実行のWorker environmentと、14分またはclaim期限の早い方で中断される`AbortSignal`を渡します。
+`src/server/generation-save-handler.ts`の`SaveGeneratedComic`がConsumerから保存担当への受け渡し型です。入力は`generation`（generation / entry / owner ID、revision、日付、claim token、期限）、`profileId`、検証済み`script`、4枚の`rendered` panel bytesとMIME、各providerのrequest ID・usageです。画像metadataは4件・順番・profile modelをConsumerで再検証します。`SaveGeneratedComicContext`はそのQueue実行のWorker environmentと、14分またはclaim期限の早い方で中断される`AbortSignal`を渡します。保存handlerは再起動後にも続けられるよう、script・asset/task情報を早期にdurable保存し、同じgeneration IDに対して冪等に処理します。保存前のメモリ上の画像bytesがworker再起動後も保持される保証はありません。必要な画像がdurable保存される前に失われて復旧できない場合は、安全に失敗または取消を確定します。
 
 ```ts
 const saveGeneratedComic: SaveGeneratedComic = async (input, context) => {
   // 1. claim / owner / entry revision / deadlineを確認
-  // 2. input.rendered.panelsをprivate comics bucketへ保存し、asset metadataを登録
-  // 3. scriptとasset IDでcomic_jsonを作り、server-only completion RPCでsucceeded確定
-  // 4. 3つがすべて完了したときだけresolveする
+  // 2. script・保存taskの再開情報をdurableに保存
+  // 3. input.rendered.panelsをprivate comics bucketへ保存し、asset metadataを登録
+  // 4. scriptとasset IDでcomic_jsonを作り、server-only completion RPCでsucceeded確定
+  // 5. 保存とDB完了確定が両方済んだ場合だけresolveする
   await savePrivateAssetsAndCompleteGeneration(input, context);
   return { generationId: input.generation.generationId, status: 'succeeded' };
 };
 ```
 
-`savePrivateAssetsAndCompleteGeneration`は説明用の仮名で、現repositoryにはまだ実装されていません。`mark_generation_saving`は実装済みですが、実画像のStorage保存・assets登録・実生成用のsucceeded確定RPCは未実装です。このRPCと保存serviceが接続されるまではhandlerを注入せず、live生成はfail closedにします。接続するWorker entrypointは`src/server/index.ts`の`createWorker({ saveGeneratedComic })`です。現default exportはhandler未設定です。
+`savePrivateAssetsAndCompleteGeneration`は説明用の仮名で、現repositoryにはまだ実装されていません。`mark_generation_saving`は実装済みですが、実画像のStorage保存・assets登録・実生成用のsucceeded確定RPCは未実装です。保存handlerがthrowする、またはgeneration ID/statusが契約に合わない場合はConsumerが`GenerationSavePendingError`として扱い、Queueをackして`stage=saving`を維持します。失敗をterminal化せずAIも再実行しません。
 
-保存handlerは保存済みの同一generation IDを冪等に扱い、期限・削除・owner・claim tokenを再検証します。外部AIが完了した後に保存だけ失敗した場合にAIを再実行してはいけません。成功レスポンスを返す条件はprivate assetsとDB completionの双方が確定したことです。
+`RecoverGeneratedComic(generationId, { environment, signal })`は保存taskをIDで再開する注入callbackで、結果は`{ generationId, status: 'pending' | 'succeeded' | 'failed' | 'cancelled' }`です。復旧処理は保存担当がdurableに保持したscript/asset/task情報と既存generation IDから続け、AI providerを呼びません。復旧側でowner・保存専用lease・期限・削除/cancelを再確認し、完了または復旧不能時の安全な終端失敗・取消をDBへ確定します。`pending`は`stage=saving`を維持します。これは保存担当が実装する責務で、現repositoryには復旧handler本体も未実装です。
+
+```ts
+const recoverGeneratedComic: RecoverGeneratedComic = async (generationId, context) => {
+  // generation IDでdurableな保存taskを開き、保存だけを再開する。AI providerは呼ばない。
+  return resumePrivateSaveAndFinalize(generationId, context);
+};
+```
+
+`resumePrivateSaveAndFinalize`も説明用の仮名です。handlerを接続するWorker entrypointは`src/server/index.ts`の`createWorker({ saveGeneratedComic, recoverGeneratedComic })`です。default exportでは両方とも未設定です。新規実AI生成には両handlerの注入を必須とし、どちらかが未設定ならfail closedにします。
 
 ### 実効ready条件
 
-- `/config.generationAvailable`はlive-demoで、`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handlerがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。
+- `/config.generationAvailable`はlive-demoで、新規生成用の`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handler、復旧callbackがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。default exportではhandlerが両方未設定のためfalseです。
 - `GET /me/quota.generationAvailable`はこれらの実行設定に加え、DB policyがenabled、固定profileと予算・全体枠・ユーザー枠が利用可能であることを確認します。画面はconfigとquotaの両方が利用可能な場合だけ「4コマにする」を有効にします。
+- live-demoの保存復旧用Cronは`recoverGeneratedComic`が設定されていれば、`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存のeligibleなsaving jobを回復できます。Cronは取消・削除・期限切れjobの通常精算を先に行い、次に期限切れOpenAI saving jobの復旧、最後に未配送jobのenqueueを行います。新しいAI生成は開始しません。
 - initial DB policyは停止、全体枠・総予算は0です。共有DB migrationを適用していないため、実環境でのready状態・課金品質・利用可能なアカウント権限は未確認です。実AI利用は通常開発やCIでは行いません。
 
 ### ローカルのProvider確認

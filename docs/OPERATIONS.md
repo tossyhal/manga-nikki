@@ -1,6 +1,6 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> PR#29までの変更は`main`へ統合済みです。PR#41でOpenAI白黒生成のQueue・attempt ledger接続を加えていますが、画像private保存・asset登録・実生成の成功確定RPCは未実装です。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
+> PR#29までの変更は`main`へ統合済みです。PR#41でOpenAI白黒生成のQueue・attempt ledgerと保存復旧callback契約を加えていますが、画像private保存・asset登録・実生成の成功確定RPCは未実装です。保存taskのdurable記録と復旧callbackは保存担当の実装範囲です。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
 >
 > 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの課金・有料化・本番公開は別承認なしに行いません。
 
@@ -28,7 +28,7 @@
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。live-demoには固定OpenAI profile予約、脚本1回と画像4回のattempt ledger、Queue Consumerを実装しています。実Turnstile・共有DB・実Cloudflare Queue結合、画像private Storage保存・asset登録・実生成のsucceeded確定RPCは未接続です。保存handler未設定では受付とConsumerをfail closedにします。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。live-demoには固定OpenAI profile予約、脚本1回と画像4回のattempt ledger、Queue Consumerを実装しています。実Turnstile・共有DB・実Cloudflare Queue結合、画像private Storage保存・asset登録・実生成のsucceeded確定RPCは未接続です。新規生成は保存handlerまたは復旧callbackの片方でも未設定なら受付とConsumerをfail closedにします。保存が一時停止したjobは`running` / `saving`に残し、Queueをackします。Cronは保存復旧callbackからdurable taskを続けられます。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -89,7 +89,7 @@
 
 - 制限設定の正本はDBの`private.generation_policy`テーブルです。
   - 初期値：`enabled = false`、全体の日次枠・全期間枠・金額予算はすべて`0`、ユーザーごとの上限は「1日2試行まで・同時実行1ジョブまで」（日付の切り替わりはサーバー側の日本時間JST基準）。
-- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handlerが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存handler未設定は必ずfail closedにします。
+- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら必ずfail closedにします。default Workerには両handlerを注入していません。
 - `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、`find_generation_receipt`と`reserve_generation`の既存同一要求照会は停止中も同じjobを返します。
 - `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。現在コードが許可する実AI profileはOpenAI脚本`gpt-4.1-mini-2025-04-14` + 白黒画像`gpt-image-2.5-flare`、4 image callsです。profileには`profile_id`、`is_mock=false`、DB管理の正整数`max_cost_micro_usd`を含め、最大費用を予約します。provider/model/color modeなどは固定allowlistと一致しなければ停止し、日記本文やHTTP bodyから受けません。初期policyはdisabled・予算0で、費用負担者と実際の利用可能モデル権限は未確認です。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
@@ -165,7 +165,7 @@
 | 匿名ユーザーIDの再作成、全体/期間/金額上限への到達、キルスイッチ停止時 | ユーザーを作り直しても全体上限で止まり、停止時は未開始のAIプロバイダを一切呼ばない |
 | サインアップ用と生成用のTurnstileトークン使い回し、会場等の同一IPからの多人数利用 | トークン使い回しは拒否され、IP制限時は意図通り架空サンプル画面へ案内される |
 | Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mockはclaimで1回だけ処理し、未配送は照合する。OpenAI各callは事前にattemptを開始し、結果不明なら`unknown` / `held`で保持して自動再実行しない |
-| Storage保存成功後のDB失敗、古いジョブの遅延完了、生成中の日記削除 | AIの再生成が起きず、新しい`latest_generation_id`が巻き戻らず、削除済みデータが復活しない。保存handlerとcompletion RPCの結合試験が必要 |
+| Storage保存成功後のDB失敗、保存handler一時障害、古いjobの遅延完了、生成中の日記削除 | 保存障害はQueue ack後も`running` / `saving`に保持し、保存担当のdurable taskをCronの`recoverGeneratedComic`がgeneration IDから再開する。回復callbackはAIを呼ばず、owner・保存lease・期限・削除/cancelを再確認して保存または安全な終端化を行う。通常精算を保存復旧より先にし、削除済みデータを復活させない。保存handlerとcompletion RPCの結合試験が必要 |
 | JST日付境界（0時またぎ）、30日保存期限切れ / 削除処理中のStorage障害 | 元の予約日のカウンターだけで精算され、画面からは即座に非表示となり削除が裏で再試行される |
 | 通信切断・ページ再訪・PWA更新・キャッシュ・HTMLや命令文の入力 | 新規ジョブの勝手な作成、入力中の本文消失、個人データのキャッシュ残留、スクリプト実行が起きない |
 | スマートフォン実機・実際の生成画像・サーバーログの確認 | WorkerのCPU / メモリ / 容量が制限内に収まり、ログに日記本文や秘密情報が一切混入していない |
@@ -191,7 +191,7 @@
 
 - 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
 - `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
-- 1分のgeneration reconcileが動く環境では、取消済み・期限切れjobを既存の安全な精算RPCへ渡します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
+- 1分のgeneration reconcileは`list_generation_reconcile_candidates_v2`を使い、取消・削除・entry期限切れjobの通常精算、期限切れOpenAI saving jobの復旧、未配送queued jobの再送の順で処理します。live-demoのsaving復旧は`recoverGeneratedComic`が注入されていれば`GENERATION_ENABLED=false`またはOpenAI API keyなしでも続行し、保存側のdurable taskをgeneration IDから再開します。復旧callbackはAI providerを呼びません。`pending`または一時障害では`stage=saving`を保持し、`failed` / `cancelled`へ進める場合は保存側が安全な終端状態を確定します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
 - Storage `remove`後に`list`でpath不在を確認できた時だけDB finalizeし、asset→job→entryを消します。remove/list障害ではDB metadata・jobを残し、すでに消えた画像は次回の`remove`と`list`確認で安全に再試行します。
 - 日次batch上限を超えたdue entryは次の日次実行以降に残ります。Storage障害のentryも15分lease失効後に再claim可能ですが、同じ日の日次Cronは再実行しないため、通常の再試行機会は次回日次実行です。active jobがsettleした後も、cleanup実行は次の日次枠まで待つことがあります。物理消去を30日以内に保証するものではありません。
 - cleanup結果のaggregate logは`claimed` / `deleted` / `retrying` / `stale`の件数だけで、owner・本文・object path・claim tokenは記録しません。claim/finalize RPCの依存障害は一般化したエラーでCron invocationを失敗扱いにします。retryingはStorage remove/list失敗、staleはlease/token/期限/path集合の再検証不一致です。
