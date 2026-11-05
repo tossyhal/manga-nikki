@@ -16,7 +16,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
       externalAuthRequests.push(request.url());
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
   await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
@@ -295,7 +295,7 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   });
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
   const todaySection = page.getByRole('region', { name: '今日の記録' });
   await expect(todaySection.getByText('本人の今日の架空記録')).toBeVisible();
   await expect(todaySection.getByRole('link', { name: '漫画を読む' })).toBeVisible();
@@ -362,6 +362,7 @@ test('ライブの新規作成は入力だけでは登録やCAPTCHA、書き込�
   await page.keyboard.press('Enter');
   await expect(diary).toHaveValue(body);
   await expect(page).toHaveURL(/\/new$/);
+  await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
   await page.waitForLoadState('networkidle');
   expect(entryPosts).toBe(0);
   expect(generationPosts).toBe(0);

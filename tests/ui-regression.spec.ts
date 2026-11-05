@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+import { clickEntryMenuItem } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const today = jstToday();
@@ -42,8 +43,10 @@ async function installMockUiRoutes(page: Page, entries: Entry[] = [entryFixture]
   );
   await page.route('**/api/v1/entries**', (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname === `/api/v1/entries/${entryId}`) return route.fulfill({ json: detailFixture });
-    if (pathname === '/api/v1/entries')
+    if (route.request().method() === 'GET' && pathname === `/api/v1/entries/${entryId}`) {
+      return route.fulfill({ json: detailFixture });
+    }
+    if (route.request().method() === 'GET' && pathname === '/api/v1/entries')
       return route.fulfill({ json: { items: entries, nextCursor: null } });
     return route.continue();
   });
@@ -125,7 +128,7 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
     await page.goto(path);
     await expect(page.getByRole('link', { name: '漫画日記 ホーム' })).toBeVisible();
     if (path === '/') {
-      await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
+      await expect(page.getByRole('heading', { name: '今日の記録' })).toHaveClass(/sr-only/);
       await expect(page.locator('.home-today-hero')).toBeVisible();
     }
     if (path === '/new') await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
@@ -156,7 +159,7 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       await page.goto(path);
 
       if (path === '/') {
-        await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
       } else if (path === '/new') {
         const diary = page.getByLabel('日記', { exact: true });
         await expect(diary).toBeVisible();
@@ -187,6 +190,8 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
   for (const viewport of [
     { width: 393, height: 852 },
     { width: 390, height: 769 },
+    { width: 393, height: 724 },
+    { width: 390, height: 700 },
   ]) {
     await page.setViewportSize(viewport);
     for (const path of ['/', '/new', '/library']) {
@@ -199,20 +204,27 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
       if (path === '/library') {
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(6);
-        await page.getByRole('button', { name: '一覧で見る' }).click();
-        await expect(page.locator('.entry-history-card')).toHaveCount(3);
       }
 
-      const scroll = await page.evaluate(() => {
-        const main = document.querySelector('#main');
-        if (!main) throw new Error('本文領域がありません');
-        return {
-          document: document.documentElement.scrollHeight - window.innerHeight,
-          main: main.scrollHeight - main.clientHeight,
-        };
-      });
-      expect(scroll.document).toBeLessThanOrEqual(1);
-      expect(scroll.main).toBeLessThanOrEqual(1);
+      const expectNoPrimaryScroll = async () => {
+        const scroll = await page.evaluate(() => {
+          const main = document.querySelector('#main');
+          if (!main) throw new Error('本文領域がありません');
+          return {
+            document: document.documentElement.scrollHeight - window.innerHeight,
+            main: main.scrollHeight - main.clientHeight,
+          };
+        });
+        expect(scroll.document).toBeLessThanOrEqual(1);
+        expect(scroll.main).toBeLessThanOrEqual(1);
+      };
+
+      await expectNoPrimaryScroll();
+      if (path === '/library') {
+        await page.getByRole('button', { name: '一覧で見る' }).click();
+        await expect(page.locator('.entry-history-card')).toHaveCount(3);
+        await expectNoPrimaryScroll();
+      }
     }
   }
 });
@@ -254,11 +266,16 @@ test('オフライン通知と拡大表示がある短い画面でも記録ペ�
   await expect(controls).toContainText('2ページ目');
 });
 
-test('日付ピッカーと下書き保存が重ならず、保存操作を続けられる', async ({ page }) => {
+test('日付ピッカーに視覚フォーカスを示し、拡大時も保存操作へ到達できる', async ({ page }) => {
   await installMockUiRoutes(page);
   await page.setViewportSize({ width: 393, height: 852 });
   await page.goto('/new');
   await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+  const newDatePicker = page.getByLabel('日付', { exact: true });
+  await newDatePicker.focus();
+  await expect(page.locator('.date-control')).toHaveCSS('outline-style', 'solid');
+  await expect(page.locator('.date-control')).toHaveCSS('outline-width', '2px');
+  await expect(page.locator('.date-control')).toHaveCSS('outline-color', 'rgb(85, 85, 85)');
 
   const layout = await page.evaluate(() => {
     const rect = (selector: string) => {
@@ -277,11 +294,16 @@ test('日付ピッカーと下書き保存が重ならず、保存操作を続�
     };
   });
   expect(layout.picker.left).toBeGreaterThanOrEqual(layout.control.left);
-  expect(layout.picker.right).toBeLessThanOrEqual(layout.control.right + 1);
+  expect(layout.picker.right).toBeLessThanOrEqual(layout.row.right + 1);
   expect(
     layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left,
   ).toBe(true);
   expect(layout.save.right).toBeCloseTo(layout.row.right, 0);
+  expect(
+    Math.abs(
+      layout.save.top + layout.save.bottom - layout.control.top - layout.control.bottom,
+    ),
+  ).toBeLessThanOrEqual(2);
   expect(layout.icon.left).toBeGreaterThanOrEqual(layout.time.right);
   expect(layout.icon.left - layout.time.right).toBeLessThanOrEqual(12);
   expect(
@@ -294,5 +316,72 @@ test('日付ピッカーと下書き保存が重ならず、保存操作を続�
   await page.getByLabel('日記', { exact: true }).fill(body);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(page.locator('.draft-saved-card')).toBeVisible();
+  await page.reload();
   await expect(page.locator('.entry-draft-card .diary')).toHaveText(body);
+
+  await clickEntryMenuItem(page, '日記を編集');
+  await page.getByLabel('日付', { exact: true }).focus();
+  const detailDateRow = page.locator('.detail-edit-form .date-row');
+  await expect(detailDateRow).toHaveCSS('outline-style', 'solid');
+  await expect(detailDateRow).toHaveCSS('outline-width', '2px');
+  await expect(detailDateRow).toHaveCSS('outline-color', 'rgb(85, 85, 85)');
+
+  await page.setViewportSize({ width: 320, height: 480 });
+  await page.goto('/new');
+  await page.addStyleTag({
+    content: '.date-display, .date-row > .button-text { font-size: 200% !important; }',
+  });
+  const largeBody = '文字拡大時の保存を確認する架空の日記';
+  await page.getByLabel('日記', { exact: true }).fill(largeBody);
+  const largeSaveButton = page.getByRole('button', { name: '下書き保存' });
+  await largeSaveButton.scrollIntoViewIfNeeded();
+  await expect(largeSaveButton).toBeInViewport();
+  await expect(largeSaveButton).toBeEnabled();
+  const largeDateRow = await page.evaluate(() => {
+    const row = document.querySelector('.date-row');
+    const picker = document.querySelector('.date-picker-input');
+    const save = document.querySelector('.date-row button');
+    if (!row || !picker || !save) throw new Error('日付行の操作要素がありません');
+    const rowBounds = row.getBoundingClientRect();
+    const pickerBounds = picker.getBoundingClientRect();
+    const saveBounds = save.getBoundingClientRect();
+    const saveTarget = document.elementFromPoint(
+      saveBounds.left + saveBounds.width / 2,
+      saveBounds.top + saveBounds.height / 2,
+    );
+    return {
+      height: rowBounds.height,
+      rowLeft: rowBounds.left,
+      rowRight: rowBounds.right,
+      pickerLeft: pickerBounds.left,
+      pickerRight: pickerBounds.right,
+      pickerTop: pickerBounds.top,
+      pickerBottom: pickerBounds.bottom,
+      saveLeft: saveBounds.left,
+      saveRight: saveBounds.right,
+      saveTop: saveBounds.top,
+      saveBottom: saveBounds.bottom,
+      saveReceivesPointer: Boolean(saveTarget && save.contains(saveTarget)),
+    };
+  });
+  expect(largeDateRow.height).toBeGreaterThan(44);
+  expect(largeDateRow.pickerLeft).toBeGreaterThanOrEqual(largeDateRow.rowLeft - 1);
+  expect(largeDateRow.pickerRight).toBeLessThanOrEqual(largeDateRow.rowRight + 1);
+  expect(largeDateRow.saveLeft).toBeGreaterThanOrEqual(largeDateRow.rowLeft - 1);
+  expect(largeDateRow.saveRight).toBeLessThanOrEqual(largeDateRow.rowRight + 1);
+  expect(
+    largeDateRow.pickerRight <= largeDateRow.saveLeft ||
+      largeDateRow.saveRight <= largeDateRow.pickerLeft ||
+      largeDateRow.pickerBottom <= largeDateRow.saveTop ||
+      largeDateRow.saveBottom <= largeDateRow.pickerTop,
+  ).toBe(true);
+  expect(largeDateRow.saveReceivesPointer).toBe(true);
+  await largeSaveButton.click();
+  await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(page.locator('.draft-saved-card')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.entry-draft-card .diary')).toHaveText(largeBody);
 });

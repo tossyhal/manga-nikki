@@ -221,9 +221,11 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
     return route.continue();
   });
   await page.goto('/library');
-  await expect(page.getByRole('heading', { name: '記録', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '記録', exact: true })).toHaveClass(/sr-only/);
+  await expect(page.getByRole('table')).toBeVisible();
   await page.getByRole('button', { name: '一覧で見る' }).click();
   const pageControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
+  await expect(page.locator('.entry-history-summary')).toHaveCount(3);
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 7; index++) {
     const summaries = await page.locator('.entry-history-summary').allTextContents();

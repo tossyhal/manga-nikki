@@ -147,7 +147,7 @@ test('別タブから明示更新しても未保存の日記タブは保たれ�
     const pageA = await context.newPage();
     await addBootCounter(pageA);
     await pageA.goto(fixture.origin);
-    await expect(pageA.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+    await expect(pageA.getByRole('heading', { name: '今日の記録' })).toBeAttached();
     await pageA.evaluate(async () => {
       await navigator.serviceWorker.ready;
     });

@@ -78,7 +78,7 @@ test('詳細の日記編集が未保存の間は手動PWA更新を保留する',
 
 test('オフライン時に架空サンプルと利用制限を案内する', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
   await page.context().setOffline(true);
 
   const offlineNotice = page.getByRole('status').filter({ hasText: 'オフラインです。' });

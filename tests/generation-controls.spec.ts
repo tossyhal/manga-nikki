@@ -125,6 +125,7 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   const supabaseRequests: string[] = [];
   const entryPosts: Array<{ body: string; consentVersion: string }> = [];
   const generationRequests: Array<{ token: string; key: string; body: unknown }> = [];
+  const generationMockFlags: boolean[] = [];
   let quotaRequests = 0;
   let generation: Generation | null = null;
   const entryDetail: EntryDetail = { ...draftEntryDetailFixture };
@@ -151,6 +152,7 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
     });
     order.push('generation-requested');
     generation = generationFixtures(entryId, generationId).succeeded;
+    generationMockFlags.push(generation.mock);
     return route.fulfill({
       status: 202,
       json: {
@@ -227,7 +229,7 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   expect(entryPosts).toMatchObject([
     { body: '入力内容を反映しない架空の日記', consentVersion: 'v1' },
   ]);
-  expect(generation?.mock).toBe(true);
+  expect(generationMockFlags).toEqual([true]);
   expect(order.indexOf('anonymous-session-created')).toBeLessThan(order.indexOf('entry-saved'));
   expect(order.indexOf('entry-saved')).toBeLessThan(order.indexOf('generation-requested'));
   expect(generationRequests).toHaveLength(1);
@@ -703,6 +705,18 @@ for (const delayedCallback of ['token', 'error'] as const) {
     await page.getByLabel('日記', { exact: true }).fill('保存処理を確認する架空の日記');
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await patchReceived;
+    await expect(
+      page.locator('.detail-edit-toolbar').getByRole('button', {
+        name: '編集をやめる',
+      }),
+    ).toBeDisabled();
+    await expect(
+      page.locator('#edit-entry-form').getByRole('button', {
+        name: '編集をやめる',
+        exact: true,
+      }),
+    ).toBeDisabled();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
     await page.waitForTimeout(25);
     expect(generationRequests).toBe(0);
