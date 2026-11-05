@@ -1367,6 +1367,11 @@ p {
   margin: 35px 0 18px;
 }
 
+.detail-page.is-status.has-saved-comic .generation-card {
+  min-height: 0;
+  margin: 14px 0 18px;
+}
+
 .detail-page.is-draft .entry-draft-card {
   min-height: 311px;
 }

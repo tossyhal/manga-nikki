@@ -60,6 +60,8 @@ function DetailContent({
     draftSavedNavigation ? id : null,
   );
   const [entry, setEntry] = useState<EntryDetail | null>(null);
+  const entryRef = useRef<EntryDetail | null>(null);
+  const detailReadVersionRef = useRef(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [generationCaptchaOpen, setGenerationCaptchaOpen] = useState(false);
@@ -75,6 +77,9 @@ function DetailContent({
   const generationFlowRef = useRef(false);
   const generationCaptchaAttemptRef = useRef(0);
   const generationRequestRef = useRef(false);
+  useLayoutEffect(() => {
+    entryRef.current = entry;
+  }, [entry]);
   const autoGenerationRequestedRef = useRef(
     Boolean(
       location.state &&
@@ -89,17 +94,43 @@ function DetailContent({
       activeRef,
       markLoading: false,
       onActiveGeneration: (current) => {
-        if (current.entryId === id)
-          setEntry((existing) =>
-            existing
-              ? { ...existing, latestGenerationId: current.id, latestGeneration: current }
-              : existing,
-          );
+        const existing = entryRef.current;
+        if (
+          !current ||
+          current.entryId !== id ||
+          !existing ||
+          current.entryRevision !== existing.revision
+        )
+          return;
+        if (
+          existing.latestGenerationId &&
+          existing.latestGenerationId !== current.id &&
+          existing.latestGeneration &&
+          current.entryRevision <= existing.latestGeneration.entryRevision
+        )
+          return;
+        const updated = {
+          ...existing,
+          latestGenerationId: current.id,
+          latestGeneration: current,
+          lastSuccessfulGeneration:
+            current.status === 'succeeded' ? current : existing.lastSuccessfulGeneration,
+        };
+        entryRef.current = updated;
+        detailReadVersionRef.current++;
+        setEntry(updated);
       },
     });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
-  const pending =
-    entry?.latestGeneration?.status === 'queued' || entry?.latestGeneration?.status === 'running';
+  const latestCandidate = entry?.latestGeneration;
+  const pending = Boolean(
+    entry &&
+    latestCandidate &&
+    latestCandidate.id === entry.latestGenerationId &&
+    latestCandidate.entryId === entry.id &&
+    latestCandidate.entryRevision <= entry.revision &&
+    (latestCandidate.status === 'queued' || latestCandidate.status === 'running'),
+  );
   const {
     editing,
     draftDate,
@@ -179,16 +210,52 @@ function DetailContent({
 
   useEffect(() => {
     let active = true;
+    const readVersion = ++detailReadVersionRef.current;
+    const startingEntry = entryRef.current;
     getEntry(id)
       .then(async (result) => {
-        if (!active || !result.latestGenerationId) {
-          if (active) setEntry(result);
+        if (
+          !active ||
+          readVersion !== detailReadVersionRef.current ||
+          (entryRef.current &&
+            startingEntry &&
+            (entryRef.current.revision !== startingEntry.revision ||
+              entryRef.current.latestGenerationId !== startingEntry.latestGenerationId))
+        )
+          return;
+        if (!result.latestGenerationId) {
+          entryRef.current = result;
+          detailReadVersionRef.current++;
+          setEntry(result);
           return;
         }
         const latestGeneration = await getGeneration(result.latestGenerationId).catch(() => null);
-        if (active) {
-          setEntry(latestGeneration ? { ...result, latestGeneration } : result);
-        }
+        if (
+          !active ||
+          readVersion !== detailReadVersionRef.current ||
+          (entryRef.current &&
+            startingEntry &&
+            (entryRef.current.revision !== startingEntry.revision ||
+              entryRef.current.latestGenerationId !== startingEntry.latestGenerationId))
+        )
+          return;
+        const updated = {
+          ...result,
+          ...(latestGeneration?.id === result.latestGenerationId &&
+          latestGeneration.entryId === result.id &&
+          latestGeneration.entryRevision <= result.revision
+            ? { latestGeneration }
+            : {}),
+          ...(latestGeneration?.id === result.latestGenerationId &&
+          latestGeneration.entryId === result.id &&
+          latestGeneration.entryRevision <= result.revision &&
+          latestGeneration.status === 'succeeded'
+            ? { lastSuccessfulGeneration: latestGeneration }
+            : {}),
+        };
+        entryRef.current = updated;
+        detailReadVersionRef.current++;
+        setEntry(updated);
       })
       .catch((e: Error) => {
         if (active) setError(e.message);
@@ -205,8 +272,23 @@ function DetailContent({
     if (!draftSavedNavigation || location.state === null) return;
     navigate(location.pathname, { replace: true, state: null });
   }, [draftSavedNavigation, location.pathname, location.state, navigate]);
-  const generation = entry?.latestGeneration;
+  const generation =
+    entry &&
+    latestCandidate &&
+    latestCandidate.id === entry.latestGenerationId &&
+    latestCandidate.entryId === entry.id &&
+    latestCandidate.entryRevision <= entry.revision
+      ? latestCandidate
+      : null;
   const generationForCurrentRevision = generation?.entryRevision === entry?.revision;
+  const displayedGeneration =
+    generation?.status === 'succeeded' && generation.entryRevision <= (entry?.revision ?? 0)
+      ? generation
+      : entry?.lastSuccessfulGeneration?.status === 'succeeded' &&
+          entry.lastSuccessfulGeneration.entryId === entry.id &&
+          entry.lastSuccessfulGeneration.entryRevision <= entry.revision
+        ? entry.lastSuccessfulGeneration
+        : null;
   const unknownGeneration = generation?.status === 'unknown';
   const generationReferenceUnavailable = Boolean(entry?.latestGenerationId && !generation);
   const canStartGeneration =
@@ -222,8 +304,9 @@ function DetailContent({
   const hasUnresolvedRequest = Boolean(
     entry && !generationForCurrentRevision && hasGenerationRequest(entry),
   );
-  const comicFromPreviousRevision =
-    generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
+  const comicFromPreviousRevision = Boolean(
+    displayedGeneration && displayedGeneration.entryRevision < (entry?.revision ?? 0),
+  );
   const showGenerationAction = Boolean(
     !pending &&
     !unknownGeneration &&
@@ -249,26 +332,35 @@ function DetailContent({
               : null;
   const statusTitle =
     statusKind === 'queued' || statusKind === 'running'
-      ? '漫画をつくっています'
+      ? generationForCurrentRevision
+        ? '漫画をつくっています'
+        : '編集前の生成を処理しています'
       : statusKind === 'unknown'
-        ? '生成結果を確認中'
+        ? !generation || generationForCurrentRevision
+          ? '生成結果を確認中'
+          : '編集前の生成結果を確認中'
         : statusKind === 'failed'
-          ? '漫画を生成できませんでした'
+          ? generationForCurrentRevision
+            ? '漫画を生成できませんでした'
+            : '編集前の生成に失敗しました'
           : statusKind === 'cancelled'
-            ? '生成を終了しました'
+            ? generationForCurrentRevision
+              ? '生成を終了しました'
+              : '編集前の生成を終了しました'
             : '';
   const statusView = Boolean(statusKind && !editing);
   const detailPageClass = [
     'detail-page',
     statusView && 'is-status',
     statusView && statusKind && `is-${statusKind}`,
+    statusView && displayedGeneration && 'has-saved-comic',
     !statusView &&
       (draftSavedConfirmation ||
-        (generation?.status === 'succeeded' && generationForCurrentRevision)) &&
+        (displayedGeneration?.id === generation?.id && generationForCurrentRevision)) &&
       'is-saved',
     !statusView &&
       !draftSavedConfirmation &&
-      !(generation?.status === 'succeeded' && generationForCurrentRevision) &&
+      !(displayedGeneration?.id === generation?.id && generationForCurrentRevision) &&
       'is-draft',
   ]
     .filter(Boolean)
@@ -291,34 +383,85 @@ function DetailContent({
   }, [editFormVisible, error, validationFailureCount]);
 
   async function readLatestEntry(): Promise<EntryDetail> {
+    const readVersion = detailReadVersionRef.current;
+    const startingEntry = entryRef.current;
     let latest = await getEntry(id);
+    const currentAfterEntry = entryRef.current;
+    if (
+      readVersion !== detailReadVersionRef.current ||
+      (startingEntry &&
+        currentAfterEntry &&
+        (startingEntry.revision !== currentAfterEntry.revision ||
+          startingEntry.latestGenerationId !== currentAfterEntry.latestGenerationId))
+    )
+      return currentAfterEntry ?? latest;
     if (latest.latestGenerationId) {
       const currentGeneration = await getGeneration(latest.latestGenerationId).catch(() => null);
-      if (currentGeneration) latest = { ...latest, latestGeneration: currentGeneration };
+      const currentAfterGeneration = entryRef.current;
+      if (
+        readVersion !== detailReadVersionRef.current ||
+        (startingEntry &&
+          currentAfterGeneration &&
+          (startingEntry.revision !== currentAfterGeneration.revision ||
+            startingEntry.latestGenerationId !== currentAfterGeneration.latestGenerationId))
+      )
+        return currentAfterGeneration ?? latest;
+      if (
+        currentGeneration?.id === latest.latestGenerationId &&
+        currentGeneration.entryId === latest.id &&
+        currentGeneration.entryRevision <= latest.revision
+      ) {
+        latest = {
+          ...latest,
+          latestGeneration: currentGeneration,
+          lastSuccessfulGeneration:
+            currentGeneration.status === 'succeeded'
+              ? currentGeneration
+              : latest.lastSuccessfulGeneration,
+        };
+      }
     }
+    entryRef.current = latest;
+    detailReadVersionRef.current++;
     return latest;
   }
 
   function applyGeneration(currentGeneration: Generation) {
+    const current = entryRef.current;
+    if (!current) return;
+    if (
+      currentGeneration.entryId !== current.id ||
+      currentGeneration.entryRevision > current.revision ||
+      current.latestGenerationId !== currentGeneration.id
+    )
+      return;
+    const updated = {
+      ...current,
+      latestGenerationId: currentGeneration.id,
+      latestGeneration: currentGeneration,
+      lastSuccessfulGeneration:
+        currentGeneration.status === 'succeeded'
+          ? currentGeneration
+          : current.lastSuccessfulGeneration,
+    };
+    entryRef.current = updated;
+    detailReadVersionRef.current++;
     setActiveGeneration(currentGeneration);
-    setEntry((current) =>
-      current
-        ? {
-            ...current,
-            latestGenerationId: currentGeneration.id,
-            latestGeneration: currentGeneration,
-          }
-        : current,
-    );
+    setEntry(updated);
   }
 
   async function receiveGenerationReceipt(receipt: Awaited<ReturnType<typeof generate>>) {
     if (!activeRef.current) return;
     setGenerationCaptchaOpen(false);
     try {
-      const currentGeneration = await getGeneration(receipt.generationId);
+      const latest = await readLatestEntry();
       if (!activeRef.current) return;
-      applyGeneration(currentGeneration);
+      if (latest.latestGenerationId === receipt.generationId && latest.latestGeneration)
+        applyGeneration(latest.latestGeneration);
+      else {
+        entryRef.current = latest;
+        setEntry(latest);
+      }
       setReceiptUncertain(false);
       setGenerationCaptchaRetry(false);
       setError('');
@@ -524,7 +667,7 @@ function DetailContent({
       )}
       {entry ? (
         <>
-          {!editing && !statusView && !draftSavedConfirmation && (
+          {!editing && (!statusView || displayedGeneration) && !draftSavedConfirmation && (
             <div className="detail-date-row">
               <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>
             </div>
@@ -590,29 +733,37 @@ function DetailContent({
                   {canStartGeneration && <p>続けて4コマにできます。</p>}
                 </section>
               )}
-              {generation?.status === 'succeeded' && (
+              {displayedGeneration && (
                 <SavedComic
-                  key={generation.id}
-                  comic={generation.comic}
-                  hideTitle={generationForCurrentRevision}
+                  key={displayedGeneration.id}
+                  comic={displayedGeneration.comic}
+                  hideTitle={displayedGeneration.entryRevision === entry.revision}
                 />
               )}
               <GenerationStatusCard
                 generation={generation}
                 referenceUnavailable={generationReferenceUnavailable}
+                isCurrentRevision={generationForCurrentRevision}
               />
-              {!generation && !generationReferenceUnavailable && !draftSavedConfirmation && (
-                <>
-                  <section className="entry-draft-card">
-                    <p className="diary">{entry.body}</p>
-                  </section>
-                  <button className="button button-secondary" type="button" onClick={beginEditing}>
-                    <Icon name="edit" size={18} />
-                    日記を編集
-                  </button>
-                </>
-              )}
-              {generation && !pending && !unknownGeneration && (
+              {!generation &&
+                !displayedGeneration &&
+                !generationReferenceUnavailable &&
+                !draftSavedConfirmation && (
+                  <>
+                    <section className="entry-draft-card">
+                      <p className="diary">{entry.body}</p>
+                    </section>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={beginEditing}
+                    >
+                      <Icon name="edit" size={18} />
+                      日記を編集
+                    </button>
+                  </>
+                )}
+              {(generation || displayedGeneration) && !pending && !unknownGeneration && (
                 <details
                   id="original-diary"
                   className="original-diary"

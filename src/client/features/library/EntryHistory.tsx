@@ -60,22 +60,24 @@ function EntryHistoryItem({
   backTo?: string;
 }) {
   const preview = useEntryPreview(entry);
-  const staleLabel =
-    preview.generation?.status === 'succeeded'
-      ? '編集前の漫画'
-      : preview.generation
-        ? `${generationLabel(preview.generation.status) ?? '状態未確認'}（編集前）`
-        : '編集済み';
+  const currentGeneration =
+    preview.generation?.entryRevision === entry.revision ? preview.generation : null;
+  const staleLabel = preview.comicGeneration ? '編集前の漫画' : '編集済み';
   const statusLabel = showStatus
     ? preview.isStale
-      ? staleLabel
-      : preview.generation
-        ? generationLabel(preview.generation.status)
+      ? currentGeneration
+        ? `${generationLabel(currentGeneration.status) ?? '状態未確認'}・編集前の漫画あり`
+        : staleLabel
+      : currentGeneration
+        ? generationLabel(currentGeneration.status)
         : entry.latestGenerationId
-          ? (preview.error ?? '状態未確認')
+          ? preview.error
+            ? '状態を確認できません'
+            : '状態を確認しています'
           : '下書き'
     : null;
-  const previewError = preview.generation && preview.error ? preview.error : null;
+  const previewError =
+    preview.error && (preview.generation || preview.comicGeneration) ? preview.error : null;
 
   return (
     <li className="entry-history-item">
