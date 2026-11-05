@@ -118,6 +118,7 @@ class FakeSaveBackend implements GenerationSaveBackend {
   readonly uploadPaths: string[] = [];
   failCompleteCount = 0;
   failUploadCount = 0;
+  uploadFailure: GenerationSaveDependencyError | undefined;
   recoveryStatus: 'claimed' | 'pending' | 'failed' | 'cancelled' = 'claimed';
   recoveryTask: unknown;
   saveTask: ReturnType<typeof taskFromBegin> | undefined;
@@ -181,6 +182,7 @@ class FakeSaveBackend implements GenerationSaveBackend {
 
   async upload(path: string, bytes: Uint8Array): Promise<void> {
     this.uploadPaths.push(path);
+    if (this.uploadFailure) throw this.uploadFailure;
     if (this.failUploadCount > 0) {
       this.failUploadCount -= 1;
       throw new GenerationSaveDependencyError('storage', 503);
@@ -291,6 +293,42 @@ describe('private comic save runtime', () => {
     expect(backend.calls.some((call) => call.name === 'fail_comic_save')).toBe(false);
   });
 
+  it.each(['429', '503'])(
+    'keeps an HTTP 400 upload pending when Storage statusCode is %s',
+    async (innerStatus) => {
+      backend.uploadFailure = new GenerationSaveDependencyError('storage', 400, innerStatus);
+      await expect(runtimeFor(backend).saveGeneratedComic(saveInput(), context())).rejects.toThrow(
+        'GENERATION_SAVE_PENDING',
+      );
+      expect(backend.uploadPaths).toHaveLength(2);
+      expect(backend.calls.map((call) => call.name)).toEqual(['begin_comic_save_task']);
+    },
+  );
+
+  it.each([
+    ['missing bucket', new GenerationSaveDependencyError('storage', 404, 'NoSuchBucket')],
+    ['gateway 404', new GenerationSaveDependencyError('storage', 404, 'GatewayNotFound')],
+    ['numeric 404 without object code', new GenerationSaveDependencyError('storage', 400, '404')],
+  ])('keeps %s during recovery pending instead of consuming the job', async (_label, error) => {
+    backend.recoveryTask = taskFromBegin({
+      p_asset_metadata: [1, 2, 3, 4].map((index) => ({
+        index,
+        media_type: 'image/png',
+        byte_size: png.byteLength,
+        width: 1,
+        height: 1,
+        sha256: 'a'.repeat(64),
+      })),
+    });
+    backend.download = async () => {
+      throw error;
+    };
+
+    const result = await runtimeFor(backend).recoverGeneratedComic(generationId, context());
+    expect(result).toEqual({ generationId, status: 'pending' });
+    expect(backend.calls.some((call) => call.name === 'fail_comic_save')).toBe(false);
+  });
+
   it('recognizes Supabase Storage NoSuchKey when HTTP status is 400', async () => {
     const environment: Environment = {
       ...mockEnvironment,
@@ -315,9 +353,34 @@ describe('private comic save runtime', () => {
       service.download(`${ownerId}/${generationId}/${assetIds[0]}.png`),
     ).rejects.toMatchObject({
       kind: 'storage',
-      status: 400,
+      status: 404,
       serviceCode: 'NoSuchKey',
     });
+  });
+
+  it('prioritizes numeric Storage statusCode from an HTTP 400 response', async () => {
+    const environment: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'staging',
+      DATA_MODE: 'live',
+      AI_MODE: 'live',
+      SUPABASE_URL: 'https://save-runtime-test.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      SUPABASE_SECRET_KEY: 'sb_secret_test',
+    };
+    const fetcher: typeof fetch = async () =>
+      Response.json(
+        { statusCode: '503', message: 'Storage unavailable', code: 'SlowDown' },
+        { status: 400 },
+      );
+    const service = createSupabaseGenerationSaveBackend(
+      environment,
+      new AbortController().signal,
+      fetcher,
+    );
+    await expect(
+      service.upload(`${ownerId}/${generationId}/${assetIds[0]}.png`, png, 'image/png'),
+    ).rejects.toMatchObject({ kind: 'storage', status: 503, serviceCode: 'SlowDown' });
   });
 
   it('uses a service-only client and upserts the same object path with the original content', async () => {
