@@ -359,6 +359,7 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   });
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
+  await page.clock.install();
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('通信に失敗しました');
@@ -374,7 +375,9 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   await expect.poll(() => generationReads).toBe(2);
 
   const readsAfterUnknown = generationReads;
-  await page.waitForTimeout(5200);
+  await page.clock.runFor(5200);
+  // 仮想タイマーが発行した通信の通知も観測してから、リクエスト数を検査する。
+  await page.waitForTimeout(500);
   expect(generationRequests).toHaveLength(2);
   expect(generationReads).toBe(readsAfterUnknown);
   await expect(page.getByRole('button', { name: '新しい確認を取得' })).toHaveCount(0);
