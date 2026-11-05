@@ -417,6 +417,9 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
                 value={date}
                 max={jstToday()}
                 onChange={(event) => setDate(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') event.preventDefault();
+                }}
                 required
               />
             </div>
@@ -572,7 +575,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         )}
         {!online ? null : (
           <>
-            {import.meta.env.PROD && config.dataMode === 'live' && config.generationAvailable && (
+            {import.meta.env.PROD && config.dataMode === 'live' && canGenerate && (
               <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
             )}
             <div className="primary-action-dock">
