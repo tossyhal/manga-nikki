@@ -526,6 +526,7 @@ test('別の日記の通信失敗後に元の日記を再送しても重複作�
   expect(requestIds[0]).not.toBe(requestIds[1]);
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
   await page.getByRole('tab', { name: 'リスト' }).click();
-  await expect(page.locator('.entry-history-card')).toHaveCount(1);
-  await expect(page.locator('.entry-history-card')).toContainText(firstBody);
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.locator('.entry-history-card')).toHaveCount(1);
+  await expect(listPanel.locator('.entry-history-card')).toContainText(firstBody);
 });

@@ -207,7 +207,9 @@ test('primary routeは共通ヘッダーを表示せず、見出しとmain・下
       await expect(tabs).toBeVisible();
       snapshots.push(await shellGeometry(page));
       await listTab.click();
-      await expect(page.locator('.entry-history-card')).toHaveCount(1);
+      await expect(
+        page.getByRole('tabpanel', { name: 'リスト' }).locator('.entry-history-card'),
+      ).toHaveCount(1);
       snapshots.push(await shellGeometry(page));
     } else {
       snapshots.push(await shellGeometry(page));
@@ -286,7 +288,9 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
         await expect(diary).toBeVisible();
         await diary.fill(longBody);
       } else if (path === '/library') {
-        await expect(page.locator('.entry-history-card')).toHaveCount(1);
+        await expect(
+          page.getByRole('tabpanel', { name: 'カレンダー' }).locator('.entry-history-card'),
+        ).toHaveCount(1);
       } else {
         await expect(page.locator('.entry-draft-card .diary')).toBeVisible();
       }
@@ -358,15 +362,17 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
         expect(await gapAboveBottomNav(cta)).toBeGreaterThanOrEqual(14);
       }
       if (path === '/library') {
-        const calendarPager = page.getByRole('navigation', {
+        const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+        const calendarPager = calendarPanel.getByRole('navigation', {
           name: '選択日の記録のページ送り',
         });
         await expect(calendarPager).toBeVisible();
         expect(await gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
         await page.getByRole('tab', { name: 'リスト' }).click();
-        await expect(page.locator('.entry-history-card')).toHaveCount(3);
+        const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+        await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
         await expectNoPrimaryScroll();
-        const listPager = page.getByRole('navigation', { name: '記録一覧のページ送り' });
+        const listPager = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
         await expect(listPager).toBeVisible();
         expect(await gapAboveBottomNav(listPager)).toBeGreaterThanOrEqual(14);
       }
@@ -421,7 +427,8 @@ test('オフライン通知と拡大表示がある短い画面でも記録ペ�
   await page.goto('/library');
   await expect(page.getByRole('table')).toBeVisible();
   await page.getByRole('tab', { name: 'リスト' }).click();
-  await expect(page.locator('.entry-history-card')).toHaveCount(3);
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
   await page.context().setOffline(true);
   await expect(page.getByRole('status').filter({ hasText: 'オフラインです。' })).toBeVisible();
   await page.evaluate(() => document.body.style.setProperty('zoom', '1.5'));

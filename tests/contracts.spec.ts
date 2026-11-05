@@ -224,20 +224,20 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
   await expect(page.getByRole('heading', { name: '記録', exact: true })).toHaveClass(/sr-only/);
   await expect(page.getByRole('table')).toBeVisible();
   await page.getByRole('tab', { name: 'リスト' }).click();
-  const pageControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
-  await expect(page.locator('.entry-history-summary')).toHaveCount(3);
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  const pageControls = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
+  const listSummaries = listPanel.locator('.entry-history-summary');
+  await expect(listSummaries).toHaveCount(3);
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 7; index++) {
-    const summaries = await page.locator('.entry-history-summary').allTextContents();
-    expect(summaries).toHaveLength(index < 6 ? 3 : 2);
+    const summaries = await listSummaries.allTextContents();
+    expect(summaries).toHaveLength(3);
     summaries.forEach((summary) => visibleSummaries.add(summary));
     if (index < 6) await pageControls.getByRole('button', { name: '次へ' }).click();
   }
   await expect(pageControls).toContainText('7ページ目');
-  await pageControls.getByRole('button', { name: '次へ' }).click();
-  await expect(page.locator('.entry-history-summary')).toHaveCount(3);
-  const finalPageSummaries = await page.locator('.entry-history-summary').allTextContents();
-  finalPageSummaries.forEach((summary) => visibleSummaries.add(summary));
+  await expect(listSummaries).toHaveCount(3);
+  await expect(pageControls.getByRole('button', { name: '次へ' })).toBeDisabled();
   expect(visibleSummaries.size).toBe(21);
   for (let index = 1; index <= 21; index++) {
     expect(visibleSummaries).toContain(`架空の履歴${index}件目`);
@@ -293,8 +293,9 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   await expect(page.locator('.entry-draft-card .diary')).toHaveText('保存だけ成功した架空の日記');
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
   await page.getByRole('tab', { name: 'リスト' }).click();
-  await expect(page.locator('.entry-history-card')).toHaveCount(1);
-  await expect(page.getByRole('link', { name: /保存だけ成功した架空の日記/ })).toBeVisible();
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.locator('.entry-history-card')).toHaveCount(1);
+  await expect(listPanel.getByRole('link', { name: /保存だけ成功した架空の日記/ })).toBeVisible();
 });
 
 test('390px幅の履歴では200文字の日記を40文字の要約で表示する', async ({ page }) => {
@@ -312,7 +313,9 @@ test('390px幅の履歴では200文字の日記を40文字の要約で表示す�
   await expect(page.locator('.draft-saved-original .diary')).toHaveText(body);
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
   await page.getByRole('tab', { name: 'リスト' }).click();
-  await expect(page.locator('.entry-history-summary')).toHaveText(summary);
+  await expect(
+    page.getByRole('tabpanel', { name: 'リスト' }).locator('.entry-history-summary'),
+  ).toHaveText(summary);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

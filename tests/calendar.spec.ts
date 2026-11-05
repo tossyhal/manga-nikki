@@ -68,15 +68,17 @@ test('同じ日の21件目まで取得して、正確な件数と記録を表示
 
   await page.goto('/library');
 
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
   const { month, day } = parts(today);
-  const selectedDayHeading = page.locator('.library-day-heading');
+  const selectedDayHeading = calendarPanel.locator('.library-day-heading');
   await expect(selectedDayHeading).toBeVisible();
   await expect(selectedDayHeading).toContainText(`${month}月${day}日`);
   await expect(selectedDayHeading).toContainText('21件');
-  const dayControls = page.getByRole('navigation', { name: '選択日の記録のページ送り' });
+  const dayControls = calendarPanel.getByRole('navigation', { name: '選択日の記録のページ送り' });
+  const daySummaries = calendarPanel.locator('.entry-history-summary');
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 11; index++) {
-    const summaries = await page.locator('.entry-history-summary').allTextContents();
+    const summaries = await daySummaries.allTextContents();
     expect(summaries).toHaveLength(index < 10 ? 2 : 1);
     summaries.forEach((summary) => visibleSummaries.add(summary));
     if (index < 10) await dayControls.getByRole('button', { name: '次へ' }).click();
@@ -97,7 +99,7 @@ test('同じ日の21件目まで取得して、正確な件数と記録を表示
     await dayControls.getByRole('button', { name: '前へ' }).click();
   }
   await expect(dayControls).toContainText('1ページ目');
-  await expect(page.getByRole('link', { name: /同日の最初の架空日記/ })).toBeVisible();
+  await expect(calendarPanel.getByRole('link', { name: /同日の最初の架空日記/ })).toBeVisible();
 });
 
 test('カレンダーの月範囲を確定し、一覧の続きをカーソルで取得する', async ({ page }) => {
@@ -128,25 +130,34 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
   });
 
   await page.goto('/library');
-  await expect(page.getByRole('link', { name: /今月に書いた架空日記/ })).toBeVisible();
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  await expect(calendarPanel.getByRole('link', { name: /今月に書いた架空日記/ })).toBeVisible();
   await expect(
-    page.getByRole('heading', { name: `${parts(today).year}年${parts(today).month}月` }),
+    calendarPanel.getByRole('heading', {
+      name: `${parts(today).year}年${parts(today).month}月`,
+    }),
   ).toBeVisible();
   expect(requestedCursors.filter(Boolean)).toEqual([]);
 
   await page.getByRole('tab', { name: 'リスト' }).click();
-  const listControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  const listControls = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
+  const listSummaries = listPanel.locator('.entry-history-summary');
   for (let index = 0; index < 6; index++) {
     await listControls.getByRole('button', { name: '次へ' }).click();
   }
-  await expect(page.locator('.entry-history-summary')).toHaveCount(2);
-  await listControls.getByRole('button', { name: '次へ' }).click();
-  await expect(page.getByRole('link', { name: /ページをまたいだ架空日記/ })).toBeVisible();
-  await expect(page.locator('.entry-history-summary')).toHaveCount(3);
+  await expect(listControls).toContainText('7ページ目');
+  await expect(listSummaries).toHaveText([
+    '先月の架空日記18',
+    '先月の架空日記19',
+    'ページをまたいだ架空日記',
+  ]);
+  await expect(listPanel.getByRole('link', { name: /ページをまたいだ架空日記/ })).toBeVisible();
+  await expect(listControls.getByRole('button', { name: '次へ' })).toBeDisabled();
   expect(requestedCursors.filter(Boolean)).toEqual(['fixture-cursor-20']);
   await listControls.getByRole('button', { name: '前へ' }).click();
   await expect(listControls).toContainText('6ページ目');
-  await expect(page.locator('.entry-history-summary')).toHaveText([
+  await expect(listSummaries).toHaveText([
     '先月の架空日記15',
     '先月の架空日記16',
     '先月の架空日記17',
@@ -230,18 +241,24 @@ test('詳細から戻る・下部ナビ・ブラウザ戻るで記録のURL状�
 
   const expectRestoredList = async () => {
     await expect(page).toHaveURL(libraryUrl);
+    const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
     await expect(page.getByRole('tab', { name: 'リスト' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
-    await expect(page.locator('.entry-history-card')).toHaveCount(3);
-    await expect(page.getByRole('navigation', { name: '記録一覧のページ送り' })).toContainText(
+    await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
+    await expect(listPanel.getByRole('navigation', { name: '記録一覧のページ送り' })).toContainText(
       '2ページ目',
     );
-    await expect(page.getByRole('link', { name: /2ページ目から開いた架空の記録/ })).toBeVisible();
+    await expect(
+      listPanel.getByRole('link', { name: /2ページ目から開いた架空の記録/ }),
+    ).toBeVisible();
   };
   const openEntry = async () => {
-    await page.getByRole('link', { name: /2ページ目から開いた架空の記録/ }).click();
+    await page
+      .getByRole('tabpanel', { name: 'リスト' })
+      .getByRole('link', { name: /2ページ目から開いた架空の記録/ })
+      .click();
     await expect(page).toHaveURL(`/entries/${entryId}`);
   };
 
@@ -262,13 +279,13 @@ test('詳細から戻る・下部ナビ・ブラウザ戻るで記録のURL状�
     .click();
   await expectRestoredList();
   await page.getByRole('tab', { name: 'カレンダー' }).click();
-  await expect(page.getByRole('button', { name: `${dateLabel(today)}、記録7件` })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await expect(page.getByRole('navigation', { name: '選択日の記録のページ送り' })).toContainText(
-    '3ページ目',
-  );
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  await expect(
+    calendarPanel.getByRole('button', { name: `${dateLabel(today)}、記録7件` }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    calendarPanel.getByRole('navigation', { name: '選択日の記録のページ送り' }),
+  ).toContainText('3ページ目');
 });
 
 test('前月の全件取得中は空日として表示せず、6週分のカレンダーを保つ', async ({ page }) => {
