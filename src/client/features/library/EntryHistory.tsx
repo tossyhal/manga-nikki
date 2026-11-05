@@ -7,12 +7,14 @@ import './library.css';
 
 type EntryHistoryProps = {
   entries: Entry[];
+  backTo?: string;
   nextCursor?: string | null;
   onLoadMore?: () => void;
   busy?: boolean;
   monthHeadings?: boolean;
   compact?: boolean;
   showDate?: boolean;
+  showStatus?: boolean;
 };
 
 function formatMonth(date: string) {
@@ -48,21 +50,32 @@ function EntryHistoryItem({
   entry,
   compact,
   showDate,
+  showStatus,
+  backTo,
 }: {
   entry: Entry;
   compact: boolean;
   showDate: boolean;
+  showStatus: boolean;
+  backTo?: string;
 }) {
   const preview = useEntryPreview(entry);
-  const statusLabel = (() => {
-    if (preview.generation?.status === 'succeeded') return showDate ? null : '4コマ漫画';
-    if (preview.generation) return generationLabel(preview.generation.status);
-    return showDate || entry.latestGenerationId ? null : '下書き';
-  })();
+  const statusLabel = showStatus
+    ? preview.generation
+      ? generationLabel(preview.generation.status)
+      : entry.latestGenerationId
+        ? (preview.error ?? '状態未確認')
+        : '下書き'
+    : null;
+  const previewError = preview.generation && preview.error ? preview.error : null;
 
   return (
     <li className="entry-history-item">
-      <Link className="entry-history-card" to={`/entries/${entry.id}`}>
+      <Link
+        className="entry-history-card"
+        to={`/entries/${entry.id}`}
+        state={backTo ? { backTo } : undefined}
+      >
         <EntryThumbnail
           preview={preview}
           className="entry-history-art"
@@ -73,6 +86,7 @@ function EntryHistoryItem({
           <span className="entry-history-meta">
             {showDate && <time dateTime={entry.diaryDate}>{formatDate(entry.diaryDate)}</time>}
             {statusLabel && <span>{statusLabel}</span>}
+            {previewError && <span className="entry-history-preview-error">{previewError}</span>}
           </span>
         </span>
         <Icon name="chevron-right" size={20} />
@@ -83,12 +97,14 @@ function EntryHistoryItem({
 
 export function EntryHistory({
   entries,
+  backTo,
   nextCursor = null,
   onLoadMore,
   busy = false,
   monthHeadings = false,
   compact = false,
   showDate = true,
+  showStatus = !showDate,
 }: EntryHistoryProps) {
   const groups = entries.reduce<Array<{ month: string; items: Entry[] }>>((result, entry) => {
     const month = entry.diaryDate.slice(0, 7);
@@ -113,6 +129,8 @@ export function EntryHistory({
                   entry={entry}
                   compact={compact}
                   showDate={showDate}
+                  showStatus={showStatus}
+                  backTo={backTo}
                   key={entry.id}
                 />
               ))}

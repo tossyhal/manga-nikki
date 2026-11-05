@@ -14,8 +14,63 @@
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  overflow-x: hidden;
   overflow-y: auto;
+}
+
+.library-view-tabs {
+  display: grid;
+  width: min(100%, 232px);
+  min-height: 50px;
+  flex: 0 0 50px;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  align-self: center;
+  margin: 0 auto 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #f2f2f2;
+}
+
+.library-view-tab {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: #555555;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.library-view-tab[aria-selected='true'] {
+  background: #ffffff;
+  color: #252525;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.library-view-tab:focus-visible {
+  outline: 2px solid #222222;
+  outline-offset: 2px;
+}
+
+.library-tab-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 0 auto;
+  flex-direction: column;
+}
+
+.library-tab-panel[hidden] {
+  display: none;
 }
 
 .library-calendar-view,
@@ -28,7 +83,6 @@
   overflow: visible;
 }
 
-.library-view-toggle,
 .library-month-button {
   display: inline-grid;
   width: 40px;
@@ -43,12 +97,11 @@
   cursor: pointer;
 }
 
-.library-view-toggle:hover,
+.library-view-tab:hover:not([aria-selected='true']),
 .library-month-button:hover:not(:disabled) {
   background: #f6f6f6;
 }
 
-.library-view-toggle:focus-visible,
 .library-month-button:focus-visible,
 .library-day-button:focus-visible,
 .library-primary-link:focus-visible,
@@ -181,6 +234,14 @@
   background: #ebebeb;
 }
 
+.library-day-button--future {
+  color: #a0a0a0;
+}
+
+.library-day-button[aria-current='date'] span:first-child {
+  font-weight: 700;
+}
+
 .library-day-button:disabled {
   color: #b5b5b5;
   cursor: default;
@@ -193,6 +254,10 @@
   flex: 0 0 5px;
   border-radius: 50%;
   background: #222222;
+}
+
+.library-day-dot--empty {
+  visibility: hidden;
 }
 
 .library-day-button:disabled .library-day-dot {
@@ -295,7 +360,7 @@
   flex: 0 0 44px;
   grid-template-columns: minmax(64px, 1fr) auto minmax(64px, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   margin-top: auto;
 }
 
@@ -323,10 +388,6 @@
   white-space: nowrap;
 }
 
-.library-page-controls--placeholder {
-  visibility: hidden;
-}
-
 .library-list-view {
   gap: 0;
 }
@@ -350,6 +411,49 @@
   flex: 1 0 auto;
   place-items: center;
   color: #858585;
+  font-size: 14px;
+  text-align: center;
+}
+
+.library-list-empty-state {
+  display: flex;
+  min-height: 220px;
+  flex: 1 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+}
+
+.library-list-empty-state > svg:first-child {
+  margin-bottom: 16px;
+  color: #858585;
+}
+
+.library-list-empty-state h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.library-list-empty-state p {
+  margin: 8px 0 16px;
+  color: #6f6f6f;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.library-list-empty-state .library-primary-link {
+  width: 100%;
+}
+
+.library-list-loading {
+  display: grid;
+  min-height: 120px;
+  flex: 1 0 auto;
+  place-items: center;
+  color: #6f6f6f;
   font-size: 14px;
   text-align: center;
 }
@@ -542,8 +646,9 @@
 .entry-history-meta {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
   color: #858585;
   font-size: 12px;
   line-height: 1.35;
@@ -554,9 +659,11 @@
 }
 
 .entry-history-meta span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.entry-history-preview-error {
+  color: #6f6f6f;
 }
 
 .entry-history-card > svg:last-child {
@@ -608,13 +715,10 @@
 }
 
 @media (max-width: 360px) {
-  .library-page {
-    width: calc(100% + 32px);
-    margin-inline: -16px;
-  }
-
   .library-calendar {
-    width: 100%;
+    width: calc(100% + 28px);
+    max-width: none;
+    margin-inline: -14px;
   }
 
   .entry-history-card {
@@ -656,7 +760,7 @@
   .library-primary-link,
   .library-day-create-link,
   .entry-history-card,
-  .library-view-toggle,
+  .library-view-tab,
   .library-month-button,
   .library-page-controls button {
     transition:
