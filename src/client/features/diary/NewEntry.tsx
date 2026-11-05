@@ -1,3 +1,5 @@
+import { DiaryDateField } from './DiaryDateField';
+import { DiaryBodyField } from './DiaryBodyField';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
@@ -34,23 +36,6 @@ function generationIsAvailable(quota: GenerationQuota | null): boolean {
     quota.remainingToday > 0 &&
     quota.activeGenerationId === null,
   );
-}
-
-function formatDiaryDate(date: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '日付を選択';
-  const value = new Date(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(value.valueOf()) || value.toISOString().slice(0, 10) !== date)
-    return '日付を選択';
-  const monthDay = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    month: 'long',
-    day: 'numeric',
-  }).format(value);
-  const weekday = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    weekday: 'long',
-  }).format(value);
-  return `${monthDay} ${weekday}`;
 }
 
 export function NewEntry({ config, onActivityChange }: NewEntryProps) {
@@ -406,25 +391,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         <h1 className="sr-only">日記を書く</h1>
         <fieldset disabled={busy || saved !== null} className="entry-form-fields">
           <div className="date-row">
-            <div className="date-control">
-              <label className="date-display" htmlFor="date">
-                <time dateTime={date}>{formatDiaryDate(date)}</time>
-                <Icon name="calendar" size={20} />
-              </label>
-              <input
-                id="date"
-                aria-label="日付"
-                className="date-picker-input"
-                type="date"
-                value={date}
-                max={jstToday()}
-                onChange={(event) => setDate(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') event.preventDefault();
-                }}
-                required
-              />
-            </div>
+            <DiaryDateField id="date" value={date} onChange={setDate} />
             <button
               className="button-text"
               disabled={busy || saved !== null || !online}
@@ -434,28 +401,19 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               下書き保存
             </button>
           </div>
-          <div className="entry-editor-card">
-            <label className="entry-editor-title" htmlFor="body">
-              今日はどんな日だった？
-            </label>
-            <textarea
-              id="body"
-              rows={8}
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-              placeholder="今日のできごとを書いてみよう。"
-              required
-              aria-describedby="count summary-preview"
-            />
-            <div className="entry-editor-footer">
+          <DiaryBodyField
+            id="body"
+            countId="count"
+            value={body}
+            onChange={setBody}
+            placeholder="今日のできごとを書いてみよう。"
+            descriptionId="summary-preview"
+            footer={
               <p id="summary-preview" className="summary-preview sr-only">
                 {body.trim() ? `見出し：${summarizeDiary(body)}` : '見出しは本文から自動で作ります'}
               </p>
-              <p id="count" className="character-count">
-                {[...body.trim()].length} / 1,000
-              </p>
-            </div>
-          </div>
+            }
+          />
         </fieldset>
         {online && quota && showQuotaStatus && (
           <div className="quota-limit-card">

@@ -1,3 +1,6 @@
+import { DiaryDateField } from '../diary/DiaryDateField';
+import { DiaryBodyField } from '../diary/DiaryBodyField';
+import { formatDiaryDate } from '../../lib/diaryDate';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
@@ -64,23 +67,6 @@ function generationStageMessage(generation: Generation): string {
   if (generation.stage === 'script') return '構成（脚本）を作成しています。';
   if (generation.stage === 'images') return '画像を描いています。';
   return '漫画を保存しています。';
-}
-
-function formatEntryDate(date: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '日付を選択';
-  const value = new Date(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(value.valueOf()) || value.toISOString().slice(0, 10) !== date)
-    return '日付を選択';
-  const monthDay = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    month: 'long',
-    day: 'numeric',
-  }).format(value);
-  const weekday = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    weekday: 'long',
-  }).format(value);
-  return `${monthDay} ${weekday}`;
 }
 
 function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
@@ -897,12 +883,12 @@ function DetailContent({
         <>
           {!editing && !statusView && !draftSavedConfirmation && (
             <div className="detail-date-row">
-              <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
+              <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>
             </div>
           )}
           {!editing && draftSavedConfirmation && (
             <time className="detail-draft-saved-date" dateTime={entry.diaryDate}>
-              {formatEntryDate(entry.diaryDate)}
+              {formatDiaryDate(entry.diaryDate)}
             </time>
           )}
           {comicFromPreviousRevision && !statusView && (
@@ -917,46 +903,15 @@ function DetailContent({
             >
               <fieldset disabled={busy} className="entry-form-fields">
                 <div className="date-row">
-                  <div className="date-control">
-                    <label className="date-display" htmlFor="edit-date">
-                      <time dateTime={draftDate}>{formatEntryDate(draftDate)}</time>
-                      <Icon name="calendar" size={20} />
-                    </label>
-                    <input
-                      id="edit-date"
-                      aria-label="日付"
-                      className="date-picker-input"
-                      type="date"
-                      value={draftDate}
-                      max={jstToday()}
-                      onChange={(event) => setDraftDate(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') event.preventDefault();
-                      }}
-                      required
-                    />
-                  </div>
+                  <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
                 </div>
-                <div className="entry-editor-card">
-                  <label className="entry-editor-title" htmlFor="edit-body">
-                    今日はどんな日だった？
-                  </label>
-                  <textarea
-                    id="edit-body"
-                    rows={8}
-                    value={draftBody}
-                    onChange={(event) => setDraftBody(event.target.value)}
-                    placeholder="今日はどんな日だった？"
-                    required
-                    aria-describedby="edit-count"
-                  />
-                  <div className="entry-editor-footer">
-                    <span />
-                    <p id="edit-count" className="character-count">
-                      {[...draftBody.trim()].length} / 1,000
-                    </p>
-                  </div>
-                </div>
+                <DiaryBodyField
+                  id="edit-body"
+                  countId="edit-count"
+                  value={draftBody}
+                  onChange={setDraftBody}
+                  placeholder="今日はどんな日だった？"
+                />
               </fieldset>
               {editErrorStatus === 409 && (
                 <button
@@ -1174,7 +1129,7 @@ function DetailContent({
           {statusView && (
             <aside className="detail-meta-note">
               <div className="detail-date-row">
-                <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
+                <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>
               </div>
             </aside>
           )}

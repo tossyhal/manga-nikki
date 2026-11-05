@@ -1,3 +1,4 @@
+import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { jstToday, type Entry, type Generation } from '../../../shared/schemas';
@@ -123,17 +124,7 @@ export function Home({
   const [sampleOpen, setSampleOpen] = useState(false);
   const [today] = useState(() => {
     const date = jstToday();
-    const value = new Date(`${date}T00:00:00.000Z`);
-    const monthDay = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'UTC',
-      month: 'long',
-      day: 'numeric',
-    }).format(value);
-    const weekday = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'UTC',
-      weekday: 'long',
-    }).format(value);
-    return { date, label: `${monthDay} ${weekday}` };
+    return { date, label: formatDiaryDate(date) };
   });
 
   if (showSample && sampleOpen) {
