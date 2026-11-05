@@ -8,6 +8,7 @@ export type EntryPreviewOptions = { eager?: boolean };
 export type EntryPreview = {
   imageUrl: string | null;
   generation: Generation | null;
+  isStale: boolean;
   isLoading: boolean;
   error?: string;
   observeRef: RefCallback<HTMLElement>;
@@ -28,6 +29,7 @@ export function useEntryPreview(
     key: null,
     imageUrl: null,
     generation: null,
+    isStale: false,
     isLoading: false,
   });
   const observeRef = useCallback<RefCallback<HTMLElement>>(
@@ -50,7 +52,7 @@ export function useEntryPreview(
     const loadPreview = async () => {
       if (started) return;
       started = true;
-      setResult({ key, imageUrl: null, generation: null, isLoading: true });
+      setResult({ key, imageUrl: null, generation: null, isStale: false, isLoading: true });
 
       let detail: EntryDetail;
       try {
@@ -61,6 +63,7 @@ export function useEntryPreview(
             key,
             imageUrl: null,
             generation: null,
+            isStale: false,
             isLoading: false,
             error: '記録の状態を確認できません。',
           });
@@ -76,14 +79,19 @@ export function useEntryPreview(
         detail.latestGenerationId !== generationId ||
         generation.id !== generationId ||
         generation.entryId !== entryId ||
-        generation.entryRevision !== revision
+        generation.entryRevision > revision
       ) {
-        setResult({ key, imageUrl: null, generation: null, isLoading: false });
+        setResult({ key, imageUrl: null, generation: null, isStale: false, isLoading: false });
+        return;
+      }
+
+      if (generation.entryRevision < revision) {
+        setResult({ key, imageUrl: null, generation, isStale: true, isLoading: false });
         return;
       }
 
       if (generation.status !== 'succeeded') {
-        setResult({ key, imageUrl: null, generation, isLoading: false });
+        setResult({ key, imageUrl: null, generation, isStale: false, isLoading: false });
         return;
       }
 
@@ -91,16 +99,18 @@ export function useEntryPreview(
         generation.comic.visual.kind === 'page'
           ? generation.comic.visual.assetId
           : generation.comic.visual.assetIds[0];
-      setResult({ key, imageUrl: null, generation, isLoading: true });
+      setResult({ key, imageUrl: null, generation, isStale: false, isLoading: true });
       try {
         const asset = await getAssetUrl(assetId);
-        if (active) setResult({ key, imageUrl: asset.url, generation, isLoading: false });
+        if (active)
+          setResult({ key, imageUrl: asset.url, generation, isStale: false, isLoading: false });
       } catch {
         if (active) {
           setResult({
             key,
             imageUrl: null,
             generation,
+            isStale: false,
             isLoading: false,
             error: '画像を表示できません。',
           });
@@ -159,6 +169,7 @@ export function useEntryPreview(
           key,
           imageUrl: null,
           generation: null,
+          isStale: false,
           isLoading: Boolean(eager && entryId && generationId),
         };
   return { ...current, observeRef };
