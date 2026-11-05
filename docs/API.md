@@ -428,7 +428,7 @@ const saveGeneratedComic: SaveGeneratedComic = saveRuntime.saveGeneratedComic;
 const recoverGeneratedComic: RecoverGeneratedComic = saveRuntime.recoverGeneratedComic;
 ```
 
-`createGenerationSaveRuntime`は`src/server/comic-save-runtime.ts`の実装で、default Workerからも使用されます。`begin_comic_save_task`が返すasset manifest・owner・generation・entry・revision・profile・scriptを厳密検証し、各画像のsignature・MIME・寸法・size・SHA-256を確認します。Storage uploadとDB完了RPCが両方成功した場合だけ`succeeded`を返します。保存途中の依存障害ではConsumerが`GenerationSavePendingError`として扱い、Queueをackして`stage=saving`を維持します。
+`createGenerationSaveRuntime`は`src/server/comic-save-runtime.ts`の実装で、default Workerからも使用されます。`begin_comic_save_task`が返すasset manifest・owner・generation・entry・revision・profile・scriptを厳密検証し、各画像のsignature・MIME・寸法・size・SHA-256を確認します。PNGは各chunk CRCとIENDまで、JPEGはSOS以降のscan dataとEOIまでを検査します。Storage uploadとDB完了RPCが両方成功した場合だけ`succeeded`を返します。保存途中の依存障害ではConsumerが`GenerationSavePendingError`として扱い、Queueをackして`stage=saving`を維持します。
 
 `RecoverGeneratedComic(generationId, { environment, signal })`は保存taskをIDで再開するcallbackで、結果は`{ generationId, status: 'pending' | 'succeeded' | 'failed' | 'cancelled' }`です。復旧処理は`claim_comic_save_recovery`で新しいsave leaseを取得し、durableなscript/asset/task情報からStorage objectを順にdownloadして、metadata・signature・寸法・size・SHA-256を再検証します。完了確定のみ行いAI providerは呼びません。必要なobjectが欠損・不正なら`fail_comic_save`でfailed / consumedまたはcancelledを確定し、一時障害なら`pending`を返します。`pending`は`stage=saving`を維持します。
 
