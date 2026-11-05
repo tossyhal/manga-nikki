@@ -1,1 +1,1 @@
-export type DiaryActivity = { dirty: boolean; busy: boolean };
+export type DiaryActivity = { dirty: boolean; busy: boolean; failed: boolean };
