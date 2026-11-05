@@ -60,7 +60,7 @@
 - `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。demoは3値すべてが必須で、未設定なら停止します。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
 - Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。専用demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue binding / Cronを定義しますが、実Queue・Supabase・Worker Secretsはまだ設定していません。Workers.devとpreview URLは無効で、routeも設定していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
 - release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
-- 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式またはJWTの`role=service_role`が見つかった場合に停止します。これは既知のSupabaseサーバー専用キー形式の誤設定対策であり、他の秘密情報形式まで検出する保証ではありません。
+- 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式、OpenAI APIキーの`sk-`形式、またはJWTの`role=service_role`が見つかった場合に停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出する保証ではありません。demo buildでは`VITE_SUPABASE_URL`に有効なHTTPS URLも必須です。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー。OpenAIを使う場合は`OPENAI_API_KEY`）を配置します。例ファイルは空値やplaceholderのみです。
 - local-connectedの例は`dev.vars.local-connected.example`です。値を設定して`.dev.vars.local-connected`へコピーし、`CLOUDFLARE_ENV=local-connected pnpm dev`で開発環境を選びます。`TURNSTILE_SECRET_KEY`と`TURNSTILE_ALLOWED_HOSTNAMES`がない場合、生成受付は停止します。例に含まれるSupabase URLはplaceholderで、実接続情報や秘密値はGitへ入れません。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
@@ -153,14 +153,16 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
 
 ### 実デモ用live-demoを準備する手順
 
-`wrangler.jsonc`には独立した`demo` targetを追加しています。staging / productionのsample設定は変えていません。demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、専用Queue名とCron、Workers.dev / preview URL無効で、実資源・秘密情報・routeは未設定です。`pnpm build:demo`は成果物を作るだけです。この準備はDB接続・日記CRUDの公開・実AIの課金を許可するものではありません。日記が実保存されるlive modeのため、隔離DB・RLS・認証・公開範囲を確認し、公開前に別途承認を得てください。
+`wrangler.jsonc`には独立した`demo` targetを追加しています。staging / productionのsample設定は変えていません。現在のdemo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、専用Queue名とCronを定義し、Workers.dev / preview URLを無効にしてrouteを設定していません。`pnpm build:demo`はローカルで成果物を作成・検査するだけで、Cloudflareへ接続・公開しません。この設定にはHTTPの検証先がないため、公開routeを追加した別承認・別PRより前にlive HTTP検証を行える状態ではありません。実資源の準備と公開hostnameの決定にはそれぞれ別途承認が必要です。Turnstile widgetは承認されたhostnameだけを許可し、routeの追加は別PRで行います。
 
-1. 架空日記専用のSupabase demo projectを用意し、匿名Authを設定します。`supabase/migrations/`のレビュー済みmigrationを順番に適用し、`supabase/storage/comics-bucket.sql`でprivate `comics` bucketを設定します。migrationとbucket設定は管理roleで適用し、Worker用secret keyをDDL実行に使いません。
-2. `pnpm build:demo`でWorker設定と成果物をレビューします。browser build側は`.env.demo.example`を`.env.demo.local`へコピーし、公開値の`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを設定します。staging用のsample Worker設定とproduction環境は変更しません。
-3. 別途承認を得た後、架空日記専用Supabase project、private Storage、migration、専用Cloudflare Queueを用意し、Worker側に`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`、`OPENAI_API_KEY`を設定します。秘密値はWorker Secretsへ置きます。`GENERATION_ENABLED=false`と初期DB policy disabled / 予算0を維持します。Queue作成、DB適用、Secrets登録はこの設定追加では実行していません。
-4. `GENERATION_ENABLED=false`かつDB policy disabledのまま、匿名Auth・日記CRUD・Queue binding・cleanup・private Storage保存/署名/削除とowner拒否を検証します。実AIを試す前に費用負担者、最大費用`Cmax`、日次/全期間枠、モデル利用権限を承認記録へ記し、隔離環境で検証します。その承認後だけDB policyとWorker flagを両方有効にし、承認された少数の架空日記で計測します。
+1. **実資源準備と公開hostnameの別途承認を得た後**、架空日記専用のSupabase demo projectと、そのhostnameだけを許可したTurnstile widgetを用意し、匿名Authを設定します。`supabase/migrations/`のレビュー済みmigrationを順番に適用し、`supabase/storage/comics-bucket.sql`でprivate `comics` bucketを設定します。migrationとbucket設定は管理roleで適用し、Worker用secret keyをDDL実行に使いません。専用Cloudflare Queueもこの承認後に作成します。共有DBや参加者データは使いません。
+2. `.env.demo.example`を`.env.demo.local`へコピーし、ブラウザへ公開する`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを設定します。`VITE_SUPABASE_URL`はHTTPSの有効なURLにします。Supabase secret key、Turnstile検証用secret、AI API keyをこのファイルへ入れません。
+3. `pnpm build:demo`を実行し、Worker設定と成果物をローカルで確認します。staging用のsample Worker設定とproduction環境は変更しません。demo buildは公開値3つが必要で、既知のSupabase / OpenAIサーバー専用キー形式を拒否します。現在のbuild検査はdemoのrouteが未設定であることを期待します。
+4. **HTTP検証へ進む前に、公開routeについて別途承認を得ます。**その後、demo用routeとbuild検査の期待値を同じ別PRで変更・確認し、Turnstile widgetとWorker Secretsのhostnameを承認済みhostnameに揃えます。routeがない現設定ではWorkers.devとpreview URLも無効なため、HTTPのlive検証はできません。現設定をデプロイしてHTTP接続を試したり、検査を無効にしたりしません。
+5. routeの別PRとデプロイの別途承認が揃った後、Worker側の6値`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`、`OPENAI_API_KEY`をWorker Secretsとして管理します。費用承認前は最初の5値だけを設定し、`OPENAI_API_KEY`は実AI費用の別承認後に追加します。`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`はブラウザから秘密にできる値という意味ではありません。Workerの平文`vars`はbuild検査で4項目に固定しており、Wrangler deployは設定ファイルにないダッシュボード上の平文変数を上書きするため、これらもWorker Secretsへ置きます。`APP_ENV`、`DATA_MODE`、`AI_MODE`、`GENERATION_ENABLED`は引き続き`wrangler.jsonc`の4つの`vars`で管理します。key登録と`GENERATION_ENABLED` / DB policyの有効化は別承認・別PRにします。
+6. `GENERATION_ENABLED=false`かつDB policy disabledのまま、匿名Auth・日記CRUD・Queue binding・cleanup・private Storage保存/署名/削除とowner拒否を、隔離demo環境で検証します。実AIを試す前に費用負担者、最大費用`Cmax`、日次/全期間枠、モデル利用権限を承認記録へ記し、その別承認後に限ってflagとDB policyの有効化を別PRで扱います。
 
-この設定追加ではWorker設定ファイルに専用targetとbuild検査を用意しましたが、共有DBへのmigration適用、Worker Secrets登録、Queue作成、公開route設定、deploy、DB policy / `GENERATION_ENABLED`の有効化、実AI呼出しは行っていません。公開先のURL、利用者データの保存、匿名Auth等の有効化、実AI費用上限・少数課金試験はそれぞれ別承認の対象です。
+この作業では共有DBへのmigration適用、Turnstile widget / Queue作成、Worker Secrets登録、route追加、deploy、DB policy / `GENERATION_ENABLED`の有効化、実AI呼出しを行っていません。公開先のURL、利用者データの保存、匿名Auth等の有効化、実AI費用上限・少数課金試験はそれぞれ別承認の対象です。
 
 ---
 
@@ -235,6 +237,7 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
   - [Supabase APIキーの扱い](https://supabase.com/docs/guides/getting-started/api-keys)
   - [Cloudflare Turnstileサーバーサイド検証](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)
   - [Cloudflare Workers Secrets管理](https://developers.cloudflare.com/workers/configuration/secrets/)
+  - [Cloudflare Workers Wrangler設定](https://developers.cloudflare.com/workers/wrangler/configuration/)
   - [Cloudflare Workers Vite pluginの環境選択](https://developers.cloudflare.com/workers/vite-plugin/reference/cloudflare-environments/)
   - [Cloudflare Workers Vite pluginのbuild成果物とdeploy](https://developers.cloudflare.com/workers/vite-plugin/reference/migrating-from-wrangler-dev/)
 - 利用枠・料金プラン

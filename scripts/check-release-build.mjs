@@ -71,8 +71,8 @@ assert.deepEqual(workerConfig.config.vars, expectedVars);
 if (target === 'demo') {
   assert.equal(workerConfig.config.workers_dev, false);
   assert.equal(workerConfig.config.preview_urls, false);
+  assert.equal(workerConfig.config.route, undefined);
   assert.equal(workerConfig.config.routes, undefined);
-  assert.equal(workerConfig.config.domains, undefined);
   assert.deepEqual(workerConfig.config.queues, {
     producers: [{ binding: 'GENERATION_QUEUE', queue: 'manga-nikki-generations-demo' }],
     consumers: [

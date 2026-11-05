@@ -72,10 +72,7 @@ async function assertPublicConfigRejected(args, env, variable, sentinels) {
     .filter((part) => typeof part === 'string')
     .join('\n');
   assert.ok(output.includes(variable), '拒否メッセージに変数名がありません。');
-  assert.ok(
-    output.includes('Supabaseサーバー専用キー形式'),
-    '拒否理由が固定メッセージにありません。',
-  );
+  assert.ok(output.includes('サーバー専用キー形式'), '拒否理由が固定メッセージにありません。');
   for (const sentinel of sentinels) {
     assert.ok(!output.includes(sentinel), '拒否メッセージに公開設定値が含まれています。');
   }
@@ -292,6 +289,27 @@ try {
     'secret形式の拒否後にclient成果物が作られています。',
   );
 
+  const demoOpenAiKey = 'sk-proj-demo-build-sentinel';
+  await writeFile(
+    path.join(fixtureRoot, '.env.demo.local'),
+    [
+      'VITE_SUPABASE_URL=https://demo-public-sentinel.invalid',
+      `VITE_SUPABASE_PUBLISHABLE_KEY=${demoOpenAiKey}`,
+      'VITE_TURNSTILE_SITE_KEY=demo-sitekey-sentinel',
+    ].join('\n'),
+  );
+  await assertPublicConfigRejected(
+    ['scripts/build-environment.mjs', 'demo'],
+    childEnvironment,
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    [demoOpenAiKey],
+  );
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'OpenAI secret形式の拒否後にclient成果物が作られています。',
+  );
+
   const demoServerSecret = 'demo-server-secret-sentinel';
   await writeFile(
     path.join(fixtureRoot, '.env.demo.local'),
@@ -339,6 +357,28 @@ try {
   }
 
   const demoArtifactFiles = await collectFiles(path.join(fixtureRoot, 'dist'));
+  const demoWorkerConfigPath = demoArtifactFiles.find(
+    (file) => path.basename(file) === 'wrangler.json',
+  );
+  assert.ok(demoWorkerConfigPath, 'demo Worker設定が成果物にありません。');
+  const validDemoWorkerConfig = await readFile(demoWorkerConfigPath, 'utf8');
+  const routedDemoWorkerConfig = JSON.parse(validDemoWorkerConfig);
+  routedDemoWorkerConfig.route = 'demo.example.invalid/*';
+  await writeFile(demoWorkerConfigPath, JSON.stringify(routedDemoWorkerConfig));
+  let unexpectedRouteFailure;
+  try {
+    await execFileAsync(process.execPath, ['scripts/check-release-build.mjs'], {
+      cwd: fixtureRoot,
+      env: { ...childEnvironment, MANGA_NIKKI_RELEASE_TARGET: 'demo' },
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (error) {
+    unexpectedRouteFailure = error;
+  } finally {
+    await writeFile(demoWorkerConfigPath, validDemoWorkerConfig);
+  }
+  assert.ok(unexpectedRouteFailure, 'route単数形があるdemo設定を受け付けてしまいました。');
+
   const demoArtifactContents = await Promise.all(demoArtifactFiles.map((file) => readFile(file)));
   const demoArtifactText = Buffer.concat(demoArtifactContents).toString('utf8');
   for (const sentinel of [
