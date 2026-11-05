@@ -161,7 +161,7 @@ a {
   min-height: calc(100svh - 64px);
   margin: 0 auto;
   padding: calc(16px + env(safe-area-inset-top, 0px)) 24px
-    calc(76px + 54px + 14px + 12px + env(safe-area-inset-bottom, 0px) + 24px);
+    calc(68px + 54px + 14px + 12px + env(safe-area-inset-bottom, 0px) + 24px);
 }
 
 .app-main-home {
@@ -173,7 +173,7 @@ a {
   width: 100%;
   min-width: 0;
   min-height: 0;
-  padding: 8px 20px 0;
+  padding: 8px 20px 14px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -811,7 +811,7 @@ p {
 .offline-recheck-action {
   position: fixed;
   z-index: 15;
-  bottom: calc(76px + 14px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(68px + 14px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   width: min(382px, calc(100vw - 48px));
   min-height: 54px;
@@ -1002,7 +1002,7 @@ p {
 .primary-action-dock {
   position: fixed;
   z-index: 15;
-  bottom: calc(76px + 12px + 14px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(68px + 12px + 14px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   width: min(382px, calc(100vw - 48px));
   transform: translateX(-50%);
@@ -1796,7 +1796,7 @@ p {
   left: 50%;
   display: grid;
   width: min(398px, calc(100vw - 32px));
-  height: 76px;
+  height: 68px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
   transform: translateX(-50%);
@@ -1851,7 +1851,7 @@ p {
   bottom: auto;
   left: auto;
   width: calc(100% - 40px);
-  height: 76px;
+  height: 68px;
   margin: 0 auto calc(12px + env(safe-area-inset-bottom, 0px));
   padding-bottom: 0;
   transform: none;

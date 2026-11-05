@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
 import { clickEntryMenuItem } from './fixtures/ui';
@@ -83,6 +83,14 @@ async function shellGeometry(page: Page) {
       main: bounds(document.querySelector('#main')),
       nav: bounds(document.querySelector('.bottom-nav')),
     };
+  });
+}
+
+async function gapAboveBottomNav(target: Locator) {
+  return target.evaluate((element) => {
+    const nav = document.querySelector('.bottom-nav');
+    if (!nav) throw new Error('下部ナビがありません');
+    return nav.getBoundingClientRect().top - element.getBoundingClientRect().bottom;
   });
 }
 
@@ -268,20 +276,43 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
         const scroll = await page.evaluate(() => {
           const main = document.querySelector('#main');
           if (!main) throw new Error('本文領域がありません');
+          const overflow = (selector: string) => {
+            const element = document.querySelector(selector);
+            return element ? element.scrollHeight - element.clientHeight : 0;
+          };
           return {
             document: document.documentElement.scrollHeight - window.innerHeight,
             main: main.scrollHeight - main.clientHeight,
+            libraryPage: overflow('.library-page'),
+            dayRecords: overflow('.library-day-records'),
+            listRecords: overflow('.library-list-records'),
           };
         });
         expect(scroll.document).toBeLessThanOrEqual(1);
         expect(scroll.main).toBeLessThanOrEqual(1);
+        expect(scroll.libraryPage).toBeLessThanOrEqual(1);
+        expect(scroll.dayRecords).toBeLessThanOrEqual(1);
+        expect(scroll.listRecords).toBeLessThanOrEqual(1);
       };
 
       await expectNoPrimaryScroll();
+      if (path === '/new') {
+        const cta = page.locator('.primary-action-dock > .button');
+        await expect(cta).toBeVisible();
+        expect(await gapAboveBottomNav(cta)).toBeGreaterThanOrEqual(14);
+      }
       if (path === '/library') {
+        const calendarPager = page.getByRole('navigation', {
+          name: '選択日の記録のページ送り',
+        });
+        await expect(calendarPager).toBeVisible();
+        expect(await gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
         await page.getByRole('button', { name: '一覧で見る' }).click();
         await expect(page.locator('.entry-history-card')).toHaveCount(3);
         await expectNoPrimaryScroll();
+        const listPager = page.getByRole('navigation', { name: '記録一覧のページ送り' });
+        await expect(listPager).toBeVisible();
+        expect(await gapAboveBottomNav(listPager)).toBeGreaterThanOrEqual(14);
       }
     }
   }
