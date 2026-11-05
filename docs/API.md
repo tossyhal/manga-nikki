@@ -57,7 +57,7 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
 | `GET /me/quota` | 必須 | 自分の`remainingToday`、`activeGenerationId`、JST基準の`resetAt`、`generationAvailable` |
 | `POST /entries` | 必須 | `{ createRequestId, diaryDate, body, consentVersion }` → `201` Entry |
 | `GET /entries?cursor=...&limit=20` | 必須 | `{ items, nextCursor }`（`limit`は最大50） |
-| `GET /entries/:entryId` | 必須 | Entry＋`latestGeneration`＋表示可能な生成結果 |
+| `GET /entries/:entryId` | 必須 | Entry＋最新jobの`latestGeneration`＋最後に成功・保存した`lastSuccessfulGeneration` |
 | `PATCH /entries/:entryId` | 必須 | `{ expectedRevision, diaryDate, body }` → 更新後のEntry |
 | `DELETE /entries/:entryId` | 必須 | 論理削除の受付 → `202` `{ deletionAccepted: true }` |
 | `POST /entries/:entryId/generations` | 必須 | ヘッダー`Idempotency-Key`、本文`{ expectedRevision, captchaToken }` → `202` GenerationReceipt |
@@ -72,6 +72,8 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
 - 409 Conflict：
   - 自分の日記に対する更新・生成で`expectedRevision`が一致しない場合は`409`を返します。
   - 下書き作成（`POST /entries`）で同じ`createRequestId`が送られた場合、本文や日付が同じなら既存のEntryを返し（冪等）、異なる内容なら`409`を返します。
+- 429 Too Many Requests：
+  - 未生成下書き20件の`DRAFT_LIMIT_REACHED`に加え、`ENTRY_CREATE_RATE_LIMIT_REACHED`（JST日次の作成頻度）と`ENTRY_RETAINED_LIMIT_REACHED`（未回収行の保持上限）を返します。どの上限に達したかは本文の一般化したmessageで案内し、SQLエラーやcounter値は返しません。
 
 ---
 
@@ -87,6 +89,8 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
   - ロケール（言語）・画風・AIモデル・解像度はユーザー入力では選択させず、サーバー側のMVP設定に固定します。
 - 下書き上限と編集競合
   - 未生成の下書きは1ユーザーあたり最大20件まで。
+  - 新しい`createRequestId`による作成はownerあたりJST日次50件、全体JST日次1,000件までです。削除済み・期限切れでも物理回収前のentryは保持件数に含み、ownerあたり100件、全体5,000件を超える新規作成を拒否します。通常の論理削除は制限せず、作成頻度counterは戻しません。
+  - 同じowner・`createRequestId`・作成時日付/本文/同意versionの再送は既存entryを返し、編集後も作成時fingerprintを照合します。冪等再送は頻度・保持上限へ新規計上しません。削除済み・期限切れ・tombstone済みの要求は`NOT_FOUND`となり、別の作成要求での再作成だけが新規枠を使います。
   - 日記の更新には`expectedRevision`の一致が必須です。
   - `queued`または`running`（生成待ち・生成中）のジョブが存在する日記は、本文の変更を`409 ENTRY_BUSY`で拒否します。
   - 生成完了後に日記を編集した場合は`revision`を`+1`増やし、古い漫画を表示する際には画面上で「編集前の日記から生成」と明示します。
@@ -178,7 +182,7 @@ type ComicDocument = {
 - `status`（6種類）：`queued` | `running` | `succeeded` | `failed` | `unknown` | `cancelled`
 - `stage`（進行段階）：`script`（脚本作成中） | `images`（画像描画中） | `saving`（保存中） | `null`
 
-共有型は`src/shared/schemas.ts`の`Generation`です。すべてのGenerationレスポンスには生成時の日記改訂番号`entryRevision`を含めます。これは漫画生成時点のEntryの`revision`で、後から日記を編集しても変わりません。HTTP v1のリクエスト契約は変更せず、このレスポンス項目を追加します。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。画面は状態を確認してから漫画を参照し、succeededの`entryRevision`が現在のEntryの`revision`より小さい場合は「編集前の日記から生成された漫画です。」と表示します。画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId, entryRevision = 1)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
+共有型は`src/shared/schemas.ts`の`Generation`です。すべてのGenerationレスポンスには生成時の日記改訂番号`entryRevision`を含めます。これは漫画生成時点のEntryの`revision`で、後から日記を編集しても変わりません。HTTP v1のリクエスト契約は変更せず、このレスポンス項目を追加します。`succeeded`だけが`comic`を持ち、`failed` / `unknown`は一般化した`error: { code, message, retryable }`を持ちます。Entry detailは最新jobを`latestGeneration`、最後に成功・保存済みの漫画を`lastSuccessfulGeneration`として別々に返します。後者は追加のnullable項目で、現行revision以下の本人entryに属する`succeeded`だけを`created_at desc, id desc`で選びます。最新job自体が`succeeded`ならその結果を優先します。予約時に更新する`latestGenerationId`は変更せず、receipt・quota・polling・unknown/heldの根拠として維持します。画面は進行・失敗状態を`latestGeneration`から表示し、最後の保存済み漫画はqueued/running/failed/cancelled/unknownの間も保持します。成功かつ保存完了した新しい生成に切り替わったときだけ表示漫画を更新します。succeededの`entryRevision`が現在のEntryの`revision`より小さい場合は「編集前の日記から生成された漫画です。」と表示します。画像は`visual`のasset IDからURL取得APIで解決します。`src/shared/fixtures.ts`の`generationFixtures(entryId, generationId, entryRevision = 1)`で待機・実行・成功・失敗・結果不明・中止を再現できます（通常のモックAPIは即時成功）。
 
 ### ポーリングと`unknown`状態の扱い
 
@@ -215,6 +219,8 @@ type ComicDocument = {
 | `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
 | `413` | `INPUT_TOO_LARGE` | 入力サイズの削減を案内 |
 | `429` | `DRAFT_LIMIT_REACHED` | 下書き上限。不要な記録の削除を案内 |
+| `429` | `ENTRY_CREATE_RATE_LIMIT_REACHED` | 日記の作成頻度上限。JST翌日以降の再操作を案内 |
+| `429` | `ENTRY_RETAINED_LIMIT_REACHED` | 物理回収前の保持件数上限。削除済み記録の回収後に再操作を案内 |
 | `429` | `USER_LIMIT_REACHED` / `GLOBAL_LIMIT_REACHED` / `TOO_MANY_ACTIVE` | 新規生成を停止。架空サンプルや保存済み履歴の閲覧は引き続き利用可能と案内 |
 | `503` | `GENERATION_DISABLED` / `DEPENDENCY_UNAVAILABLE` | サービス停止中または一時障害を表示し、ボタンを繰り返し連打させない |
 
@@ -267,7 +273,7 @@ type ComicDocument = {
 
 | RPC名 | 呼び出し元 | 処理内容・保証する条件 |
 |---|---|---|
-| `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き件数上限と本文を検証 |
+| `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き20件・owner retained100件・global retained5,000件・JST日次owner50件/global1,000件と本文を検証 |
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
@@ -291,7 +297,7 @@ type ComicDocument = {
 | `finalize_retention_cleanup` | 日次cleanup service | Storage削除成功後だけ実行する。lease/token・期限・active jobなし・claim時点と同じasset path集合を再確認して台帳をprivateへ移し、asset→job→entryを削除する。quota counterは変更しない |
 | `fail_or_hold_generation` | Consumer / 定期照合 | `p_generation_id uuid`, `p_claim_token uuid`（queued jobは`null`）, `p_terminal_status text`（`failed` / `cancelled`）。未送信が証明できる場合だけreservationをreleaseし、結果不明はjob `unknown` / reservation `held`、結果既知は最大予約額を`consumed` |
 
-- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- デッドロック防止のロック順序：`create_entry`はgeneration / purgeと共通のpolicy用advisory transaction lock `(20261103, 10001)`→owner advisory lockの順に取り、冪等性確認・active draft・保持件数・日次counter・INSERTを1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCは同じpolicy lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
 - 物理削除のfinalizeもpolicy advisory lock→owner advisory lock→entry→jobの順で処理します。期限切れ/削除済みentryにqueued / running jobがあればcleanup claimから除外し、Queue側の`fail_or_hold_generation`によるcancel・精算が終わるまでmetadataを保持します。
 - APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して、local-connectedでは`reserve_mock_generation`、live-demoでは`reserve_openai_generation`を呼びます。各wrapperはpolicy更新用lockを保持し、指定されたmockまたは固定OpenAI profileだけを既存予約RPCへ渡します。新規live-demo予約は、環境flag・OpenAI key・Queue・Turnstile・保存handler・復旧callbackの設定もそろわなければ拒否します。保存系handlerが不足して新規受付が止まっても、既存queued jobのreservationは`reserved`のまま保持し、自動releaseしません。既存jobはready条件が戻った後にreconcileからQueueへ再送します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
@@ -428,7 +434,7 @@ const saveGeneratedComic: SaveGeneratedComic = saveRuntime.saveGeneratedComic;
 const recoverGeneratedComic: RecoverGeneratedComic = saveRuntime.recoverGeneratedComic;
 ```
 
-`createGenerationSaveRuntime`は`src/server/comic-save-runtime.ts`の実装で、default Workerからも使用されます。`begin_comic_save_task`が返すasset manifest・owner・generation・entry・revision・profile・scriptを厳密検証し、各画像のsignature・MIME・寸法・size・SHA-256を確認します。Storage uploadとDB完了RPCが両方成功した場合だけ`succeeded`を返します。保存途中の依存障害ではConsumerが`GenerationSavePendingError`として扱い、Queueをackして`stage=saving`を維持します。
+`createGenerationSaveRuntime`は`src/server/comic-save-runtime.ts`の実装で、default Workerからも使用されます。`begin_comic_save_task`が返すasset manifest・owner・generation・entry・revision・profile・scriptを厳密検証し、各画像のsignature・MIME・寸法・size・SHA-256を確認します。PNGは各chunk CRCとIENDまで、JPEGはSOS以降のscan dataとEOIまでを検査します。Storage uploadとDB完了RPCが両方成功した場合だけ`succeeded`を返します。保存途中の依存障害ではConsumerが`GenerationSavePendingError`として扱い、Queueをackして`stage=saving`を維持します。
 
 `RecoverGeneratedComic(generationId, { environment, signal })`は保存taskをIDで再開するcallbackで、結果は`{ generationId, status: 'pending' | 'succeeded' | 'failed' | 'cancelled' }`です。復旧処理は`claim_comic_save_recovery`で新しいsave leaseを取得し、durableなscript/asset/task情報からStorage objectを順にdownloadして、metadata・signature・寸法・size・SHA-256を再検証します。完了確定のみ行いAI providerは呼びません。必要なobjectが欠損・不正なら`fail_comic_save`でfailed / consumedまたはcancelledを確定し、一時障害なら`pending`を返します。`pending`は`stage=saving`を維持します。
 

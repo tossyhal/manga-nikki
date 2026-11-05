@@ -20,11 +20,16 @@ export function createMockEntry(
   owner: string,
   input: z.infer<typeof createEntrySchema>,
 ) {
+  const requestKey = `${owner}:${input.createRequestId}`;
+  if (repository.entryTombstones.has(requestKey)) throw new ApiError(404, 'NOT_FOUND');
   const existing = [...repository.entries.values()].find(
     (x) => x.owner === owner && x.requestId === input.createRequestId,
   );
   if (existing) {
-    if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
+    if (
+      existing.createFingerprint !==
+      JSON.stringify([input.diaryDate, input.body, input.consentVersion])
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     return existing.entry;
   }
@@ -43,7 +48,12 @@ export function createMockEntry(
     createdAt: now,
     updatedAt: now,
   };
-  repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
+  repository.entries.set(entry.id, {
+    owner,
+    requestId: input.createRequestId,
+    createFingerprint: JSON.stringify([input.diaryDate, input.body, input.consentVersion]),
+    entry,
+  });
   return entry;
 }
 
@@ -70,6 +80,34 @@ export function getMockEntry(repository: MockRepository, id: string, owner: stri
   const found = repository.entries.get(id);
   if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
   return found;
+}
+
+export function getMockEntryDetail(repository: MockRepository, id: string, owner: string) {
+  const found = getMockEntry(repository, id, owner);
+  const latestStored = found.entry.latestGenerationId
+    ? repository.generations.get(found.entry.latestGenerationId)
+    : null;
+  const latestGeneration =
+    latestStored?.owner === owner && latestStored.generation.entryId === found.entry.id
+      ? latestStored.generation
+      : null;
+  const queriedLastSuccessfulGeneration = [...repository.generations.values()]
+    .reverse()
+    .find(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === found.entry.id &&
+        stored.generation.entryRevision <= found.entry.revision &&
+        stored.generation.status === 'succeeded',
+    )?.generation;
+  const lastSuccessfulGeneration =
+    latestGeneration?.status === 'succeeded' ? latestGeneration : queriedLastSuccessfulGeneration;
+
+  return {
+    ...found.entry,
+    latestGeneration,
+    lastSuccessfulGeneration: lastSuccessfulGeneration ?? null,
+  };
 }
 
 export function reserveMockGeneration(

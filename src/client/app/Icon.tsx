@@ -16,7 +16,8 @@ export type IconName =
   | 'book'
   | 'wifi-off'
   | 'settings'
-  | 'close';
+  | 'close'
+  | 'refresh';
 
 export function Icon({ name, size = 24 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
@@ -73,6 +74,12 @@ export function Icon({ name, size = 24 }: { name: IconName; size?: number }) {
       </>
     ),
     close: <path d="m6 6 12 12M18 6 6 18" />,
+    refresh: (
+      <>
+        <path d="M20 7v5h-5M4 17v-5h5" />
+        <path d="M5.6 9A7 7 0 0 1 17 6l3 6M4 12l3 6a7 7 0 0 0 11.4-3" />
+      </>
+    ),
   };
 
   return (
