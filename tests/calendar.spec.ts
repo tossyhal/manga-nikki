@@ -78,6 +78,7 @@ test('同じ日の21件目まで取得して、正確な件数と記録を表示
   const daySummaries = calendarPanel.locator('.entry-history-summary');
   const visibleSummaries = new Set<string>();
   for (let index = 0; index < 11; index++) {
+    await expect(dayControls).toContainText(`${index + 1}ページ目`);
     const summaries = await daySummaries.allTextContents();
     expect(summaries).toHaveLength(index < 10 ? 2 : 1);
     summaries.forEach((summary) => visibleSummaries.add(summary));
@@ -404,6 +405,7 @@ test('月移動と空日の作成日付、未来日の制約を保つ', async ({
 });
 
 test('記録全体が空なら新規作成への導線を表示する', async ({ page }) => {
+  const today = jstToday();
   await useMockConfig(page);
   await page.route('**/api/v1/entries**', (route) =>
     route.fulfill({ json: { items: [], nextCursor: null } }),
@@ -411,9 +413,17 @@ test('記録全体が空なら新規作成への導線を表示する', async ({
 
   await page.goto('/library');
 
-  const library = page.getByRole('region', { name: '記録' });
-  await expect(library.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
-  await expect(library.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  await expect(calendarPanel.getByRole('table')).toBeVisible();
+  await expect(calendarPanel.getByRole('link', { name: 'この日の日記を書く' })).toHaveAttribute(
+    'href',
+    `/new?date=${today}`,
+  );
+
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
+  await expect(listPanel.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
 });
 
 test('セッションを失った記録一覧は以前の記録にアクセスできない状態を説明する', async ({ page }) => {
@@ -435,8 +445,9 @@ test('セッションを失った記録一覧は以前の記録にアクセス�
   await page.goto('/library');
 
   await expect(page.getByRole('heading', { name: '記録を表示できません' })).toBeVisible();
-  await expect(page.getByText('以前の記録にはアクセスできない状態です。')).toBeVisible();
-  await expect(page.getByRole('link', { name: '新しい日記を書く' })).toHaveAttribute(
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  await expect(calendarPanel.getByText('以前の記録にはアクセスできない状態です。')).toBeVisible();
+  await expect(calendarPanel.getByRole('link', { name: '新しい日記を書く' })).toHaveAttribute(
     'href',
     '/new',
   );

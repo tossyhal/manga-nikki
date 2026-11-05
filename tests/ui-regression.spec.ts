@@ -499,11 +499,12 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   await clickEntryMenuItem(page, '日記を編集');
   await page.getByLabel('日付', { exact: true }).focus();
   const detailDateRow = page.locator('.detail-edit-form .date-row');
-  await expect(detailDateRow).toHaveCSS('outline-style', 'solid');
-  await expect(detailDateRow).toHaveCSS('outline-width', '2px');
-  await expect(detailDateRow).toHaveCSS('outline-color', 'rgb(85, 85, 85)');
-  const editDateControl = await detailDateRow.locator('.date-control').boundingBox();
-  expect(editDateControl?.height ?? 0).toBeGreaterThanOrEqual(44);
+  const editDateControl = detailDateRow.locator('.date-control');
+  await expect(editDateControl).toHaveCSS('outline-style', 'solid');
+  await expect(editDateControl).toHaveCSS('outline-width', '2px');
+  await expect(editDateControl).toHaveCSS('outline-color', 'rgb(85, 85, 85)');
+  const editDateControlBounds = await editDateControl.boundingBox();
+  expect(editDateControlBounds?.height ?? 0).toBeGreaterThanOrEqual(44);
 
   await page.setViewportSize({ width: 320, height: 480 });
   await page.goto('/new');
