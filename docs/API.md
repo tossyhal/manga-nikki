@@ -336,7 +336,7 @@ interface ImageProvider {
   - 送信後timeoutや通信切断は`unknown`として保持し、provider SDKの自動再送を無効にします。成功HTTP応答後のJSON・スキーマ・画像デコード失敗は外部呼出し成功として台帳へ記録し、別のAPI呼出しに置き換えません。
   - 個人の日記・画像を扱うOpenAI SDK clientは`logLevel: 'off'`を指定し、`OPENAI_LOG`環境設定でrequest詳細が出ないようにします。
   - 保存service側が`RenderedComic`の画像をStorageへ保存して`assetId`に変換し、最終的な`ComicDocument`を組み立てます。
-  - 巨大な画像Base64データをHTTPのJSONレスポンスやDBの`comic_json`カラムへ直接埋め込んではいけません。
+  - 画像bytesやBase64はアプリのHTTP JSON body / responseやDBの`comic_json`カラムへ埋め込みません。Providerと保存handler内部ではbinaryで受け渡し、保存後の画像はasset IDに対応する専用URLから配信します。
   - AIプロバイダが画像バイナリではなく一時URLを返す場合のダウンロード制約は、[OPERATIONS.md](OPERATIONS.md)のセキュリティ規則に従います。
 
 
@@ -408,7 +408,7 @@ OpenAI SDKの自動再送は無効です。SDK responseから安全なrequest ID
 5. scriptと4枚の画像が検証済みになった後、`mark_generation_saving`でstageを`saving`へ進めます。これは画像保存や成功確定を行いません。
 6. 保存handlerがprivate Storageへ画像を保存し、assets・`comic_json`を登録して完了を確定した後だけ、generation IDと`succeeded`を返します。保存完了までConsumerは`succeeded`を報告しません。
 
-`unknown`のattemptは自動再実行せず、予約枠をheldにします。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、QueueにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。画像bytesやBase64はQueue、HTTP body/response、`comic_json`へ載せません。
+`unknown`のattemptは自動再実行せず、予約枠をheldにします。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、Queue messageにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。画像bytesやBase64はアプリのJSON API body/responseや`comic_json`へ埋め込みません。Provider・保存handler内ではbinaryとして受け渡し、画像配信はasset ID用の専用URLを使います。
 
 ### 保存担当が接続するhandler
 
