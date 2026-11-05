@@ -556,16 +556,17 @@ describe('generation queue consumer', () => {
           return stage === 'saving'
             ? [{ generation_id: generationId, action: 'recover-saving' }]
             : [];
+        if (name === 'begin_generation_save_recovery') return true;
         throw new Error(`unexpected rpc: ${name}`);
       }, calls);
       const saveGeneratedComic = vi.fn<SaveGeneratedComic>(async () => {
         if (saveOutcome === 'throws') throw new Error('temporary completion database outage');
         return { generationId: '99999999-9999-4999-8999-999999999999', status: 'succeeded' };
       });
-      const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>(async (requestedId) => ({
-        generationId: requestedId,
-        status: 'pending',
-      }));
+      const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>(async (requestedId) => {
+        expect(calls.at(-1)?.name).toBe('begin_generation_save_recovery');
+        return { generationId: requestedId, status: 'pending' };
+      });
       const createScriptProvider = vi.fn((_apiKey: string) => providers.scriptProvider);
       const createImageProvider = vi.fn((_apiKey: string) => providers.imageProvider);
       const message = queueMessage({ generationId });
@@ -604,6 +605,7 @@ describe('generation queue consumer', () => {
         ]).flat(),
         'mark_generation_saving',
         'list_generation_reconcile_candidates_v2',
+        'begin_generation_save_recovery',
       ]);
     },
   );
@@ -785,12 +787,14 @@ describe('generation queue consumer', () => {
     expect(queue.send).toHaveBeenCalledExactlyOnceWith({ generationId });
     expect(calls.map((call) => call.name)).toEqual([
       'list_generation_reconcile_candidates_v2',
+      'fail_or_hold_generation',
+      'fail_or_hold_generation',
       'mark_generation_enqueued',
-      'fail_or_hold_generation',
-      'fail_or_hold_generation',
     ]);
     expect(calls[0]?.body).toEqual({ p_limit: 25 });
-    expect(calls.slice(2).map((call) => call.body)).toEqual([
+    expect(
+      calls.filter((call) => call.name === 'fail_or_hold_generation').map((call) => call.body),
+    ).toEqual([
       {
         p_generation_id: '77777777-7777-4777-8777-777777777777',
         p_claim_token: null,
@@ -901,6 +905,7 @@ describe('generation queue consumer', () => {
     const fetcher = rpcFetcher((name) => {
       if (name === 'list_generation_reconcile_candidates_v2')
         return [{ generation_id: recoveryId, action: 'recover-saving' }];
+      if (name === 'begin_generation_save_recovery') return true;
       throw new Error(`unexpected rpc: ${name}`);
     }, calls);
     const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>(async (requestedId, context) => {
@@ -921,7 +926,172 @@ describe('generation queue consumer', () => {
     expect(recoverGeneratedComic).toHaveBeenCalledWith(recoveryId, expect.any(Object));
     expect(createScriptProvider).not.toHaveBeenCalled();
     expect(createImageProvider).not.toHaveBeenCalled();
-    expect(calls.map((call) => call.name)).toEqual(['list_generation_reconcile_candidates_v2']);
+    expect(calls.map((call) => call.name)).toEqual([
+      'list_generation_reconcile_candidates_v2',
+      'begin_generation_save_recovery',
+    ]);
+  });
+
+  it('skips saving recovery when another worker holds the recovery lease', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const stoppedDemo: Environment = {
+      ...environment(),
+      APP_ENV: 'production',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'false',
+      OPENAI_API_KEY: undefined,
+      GENERATION_QUEUE: undefined,
+    };
+    const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>();
+    const fetcher = rpcFetcher((name) => {
+      if (name === 'list_generation_reconcile_candidates_v2')
+        return [{ generation_id: generationId, action: 'recover-saving' }];
+      if (name === 'begin_generation_save_recovery') return false;
+      throw new Error(`unexpected rpc: ${name}`);
+    }, calls);
+
+    await reconcileGenerationQueue(stoppedDemo, fetcher, { recoverGeneratedComic });
+
+    expect(recoverGeneratedComic).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.name)).toEqual([
+      'list_generation_reconcile_candidates_v2',
+      'begin_generation_save_recovery',
+    ]);
+  });
+
+  it('orders settlement and enqueue before recovery, times out hung recovery, and runs at most three', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: { name: string; body: Record<string, unknown> }[] = [];
+      const events: string[] = [];
+      const firstRecoveryId = generationId;
+      const secondRecoveryId = '77777777-7777-4777-8777-777777777777';
+      const thirdRecoveryId = '88888888-8888-4888-8888-888888888888';
+      const fourthRecoveryId = '99999999-9999-4999-8999-999999999999';
+      const enqueueId = '55555555-5555-4555-8555-555555555555';
+      const cancelledId = '66666666-6666-4666-8666-666666666666';
+      const queue = {
+        send: vi.fn(async () => {
+          events.push('enqueue');
+          return undefined;
+        }),
+      };
+      const liveDemo: Environment = {
+        ...environment(queue),
+        AI_MODE: 'live',
+        GENERATION_ENABLED: 'true',
+        OPENAI_API_KEY: 'provider-key-for-test-only',
+      };
+      let recoveryStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        recoveryStarted = resolve;
+      });
+      let firstSignal: AbortSignal | undefined;
+      const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>(async (requestedId, context) => {
+        events.push(`recover:${requestedId}`);
+        if (requestedId === firstRecoveryId) {
+          firstSignal = context.signal;
+          recoveryStarted();
+          return new Promise<Awaited<ReturnType<RecoverGeneratedComic>>>(() => {});
+        }
+        return { generationId: requestedId, status: 'pending' };
+      });
+      const fetcher = rpcFetcher((name, body) => {
+        if (name === 'list_generation_reconcile_candidates_v2') {
+          events.push('list');
+          return [
+            { generation_id: firstRecoveryId, action: 'recover-saving' },
+            { generation_id: secondRecoveryId, action: 'recover-saving' },
+            { generation_id: thirdRecoveryId, action: 'recover-saving' },
+            { generation_id: fourthRecoveryId, action: 'recover-saving' },
+            { generation_id: enqueueId, action: 'enqueue' },
+            { generation_id: cancelledId, action: 'cancel' },
+          ];
+        }
+        if (name === 'begin_generation_save_recovery') {
+          events.push(`lease:${String(body.p_generation_id)}`);
+          return true;
+        }
+        if (name === 'fail_or_hold_generation') {
+          events.push(`cancel:${String(body.p_generation_id)}`);
+          return { generation_id: body.p_generation_id, status: 'cancelled' };
+        }
+        if (name === 'mark_generation_enqueued') {
+          events.push(`marked:${String(body.p_generation_id)}`);
+          return true;
+        }
+        throw new Error(`unexpected rpc: ${name}`);
+      }, calls);
+      const reconciliation = reconcileGenerationQueue(liveDemo, fetcher, {
+        saveGeneratedComic: vi.fn<SaveGeneratedComic>(),
+        recoverGeneratedComic,
+      });
+      const reconciliationExpectation = expect(reconciliation).rejects.toThrow(
+        'GENERATION_RECONCILE_FAILED',
+      );
+
+      await started;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await reconciliationExpectation;
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(recoverGeneratedComic).toHaveBeenCalledTimes(3);
+      expect(calls.filter((call) => call.name === 'begin_generation_save_recovery')).toHaveLength(
+        3,
+      );
+      expect(queue.send).toHaveBeenCalledOnce();
+      expect(events).toEqual([
+        'list',
+        `cancel:${cancelledId}`,
+        'enqueue',
+        `marked:${enqueueId}`,
+        `lease:${firstRecoveryId}`,
+        `recover:${firstRecoveryId}`,
+        `lease:${secondRecoveryId}`,
+        `recover:${secondRecoveryId}`,
+        `lease:${thirdRecoveryId}`,
+        `recover:${thirdRecoveryId}`,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues after a recovery callback throws while retaining the retry marker', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const secondRecoveryId = '77777777-7777-4777-8777-777777777777';
+    const stoppedDemo: Environment = {
+      ...environment(),
+      APP_ENV: 'production',
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'false',
+      OPENAI_API_KEY: undefined,
+      GENERATION_QUEUE: undefined,
+    };
+    const fetcher = rpcFetcher((name) => {
+      if (name === 'list_generation_reconcile_candidates_v2')
+        return [
+          { generation_id: generationId, action: 'recover-saving' },
+          { generation_id: secondRecoveryId, action: 'recover-saving' },
+        ];
+      if (name === 'begin_generation_save_recovery') return true;
+      throw new Error(`unexpected rpc: ${name}`);
+    }, calls);
+    const recoverGeneratedComic = vi.fn<RecoverGeneratedComic>(async (requestedId) => {
+      if (requestedId === generationId) throw new Error('temporary storage outage');
+      return { generationId: requestedId, status: 'pending' };
+    });
+
+    await expect(
+      reconcileGenerationQueue(stoppedDemo, fetcher, { recoverGeneratedComic }),
+    ).rejects.toThrow('GENERATION_RECONCILE_FAILED');
+
+    expect(recoverGeneratedComic).toHaveBeenCalledTimes(2);
+    expect(calls.map((call) => call.name)).toEqual([
+      'list_generation_reconcile_candidates_v2',
+      'begin_generation_save_recovery',
+      'begin_generation_save_recovery',
+    ]);
   });
 
   it('rejects a recovery result for another generation without settling the candidate', async () => {
@@ -937,6 +1107,7 @@ describe('generation queue consumer', () => {
     const fetcher = rpcFetcher((name) => {
       if (name === 'list_generation_reconcile_candidates_v2')
         return [{ generation_id: generationId, action: 'recover-saving' }];
+      if (name === 'begin_generation_save_recovery') return true;
       throw new Error(`unexpected rpc: ${name}`);
     }, calls);
     const recoverGeneratedComic: RecoverGeneratedComic = async () => ({
@@ -948,7 +1119,10 @@ describe('generation queue consumer', () => {
       reconcileGenerationQueue(stoppedDemo, fetcher, { recoverGeneratedComic }),
     ).rejects.toThrow('GENERATION_RECONCILE_FAILED');
 
-    expect(calls.map((call) => call.name)).toEqual(['list_generation_reconcile_candidates_v2']);
+    expect(calls.map((call) => call.name)).toEqual([
+      'list_generation_reconcile_candidates_v2',
+      'begin_generation_save_recovery',
+    ]);
   });
 
   it('retries queue delivery if an RPC dependency fails before claiming', async () => {

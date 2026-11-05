@@ -56,6 +56,8 @@ const recoverResultSchema = z.strictObject({
   generationId: z.uuid(),
   status: z.enum(['pending', 'succeeded', 'failed', 'cancelled']),
 });
+const maxSaveRecoveriesPerRun = 3;
+const saveRecoveryTimeoutMs = 120_000;
 
 export interface GenerationQueueMessage {
   readonly body: unknown;
@@ -297,7 +299,13 @@ export async function reconcileGenerationQueue(
   if (!parsed.success) throw new Error('GENERATION_RECONCILE_RESULT_INVALID');
 
   let candidateFailed = false;
-  for (const candidate of parsed.data) {
+  let recoveryCount = 0;
+  const actionPriority = (action: (typeof parsed.data)[number]['action']) =>
+    action === 'enqueue' ? 1 : action === 'recover-saving' ? 2 : 0;
+  const candidates = [...parsed.data].sort(
+    (left, right) => actionPriority(left.action) - actionPriority(right.action),
+  );
+  for (const candidate of candidates) {
     try {
       if (candidate.action === 'enqueue') {
         if (!queue) continue;
@@ -310,9 +318,20 @@ export async function reconcileGenerationQueue(
         continue;
       }
       if (candidate.action === 'recover-saving') {
-        if (currentMode !== 'live-demo' || !runtime.recoverGeneratedComic) continue;
+        if (
+          currentMode !== 'live-demo' ||
+          !runtime.recoverGeneratedComic ||
+          recoveryCount >= maxSaveRecoveriesPerRun
+        )
+          continue;
+        const recoveryClaimed = await rpc(environment, fetcher, 'begin_generation_save_recovery', {
+          p_generation_id: candidate.generation_id,
+        });
+        if (recoveryClaimed === false) continue;
+        if (recoveryClaimed !== true) throw new Error('GENERATION_RECOVERY_LEASE_INVALID');
+        recoveryCount += 1;
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120_000);
+        const timeout = setTimeout(() => controller.abort(), saveRecoveryTimeoutMs);
         let abortListener: (() => void) | undefined;
         const aborted = new Promise<never>((_, reject) => {
           abortListener = () => reject(new Error('GENERATION_RECOVERY_TIMEOUT'));
