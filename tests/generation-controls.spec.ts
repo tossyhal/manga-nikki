@@ -125,7 +125,6 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   const supabaseRequests: string[] = [];
   const entryPosts: Array<{ body: string; consentVersion: string }> = [];
   const generationRequests: Array<{ token: string; key: string; body: unknown }> = [];
-  const generationMockFlags: boolean[] = [];
   let quotaRequests = 0;
   let generation: Generation | null = null;
   const entryDetail: EntryDetail = { ...draftEntryDetailFixture };
@@ -152,7 +151,6 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
     });
     order.push('generation-requested');
     generation = generationFixtures(entryId, generationId).succeeded;
-    generationMockFlags.push(generation.mock);
     return route.fulfill({
       status: 202,
       json: {
@@ -229,7 +227,6 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   expect(entryPosts).toMatchObject([
     { body: '入力内容を反映しない架空の日記', consentVersion: 'v1' },
   ]);
-  expect(generationMockFlags).toEqual([true]);
   expect(order.indexOf('anonymous-session-created')).toBeLessThan(order.indexOf('entry-saved'));
   expect(order.indexOf('entry-saved')).toBeLessThan(order.indexOf('generation-requested'));
   expect(generationRequests).toHaveLength(1);

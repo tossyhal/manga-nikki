@@ -12,7 +12,6 @@ const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 test('mock設定では生成API経由で固定漫画を表示する', async ({ page }) => {
   let generation: Generation | null = null;
-  const generationMockFlags: boolean[] = [];
   let generationRequests = 0;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', (route) =>
@@ -35,9 +34,7 @@ test('mock設定では生成API経由で固定漫画を表示する', async ({ p
   });
   await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
     generationRequests++;
-    const succeededGeneration = generationFixtures(entryId, generationId).succeeded;
-    generation = succeededGeneration;
-    generationMockFlags.push(succeededGeneration.mock);
+    generation = generationFixtures(entryId, generationId).succeeded;
     return route.fulfill({
       status: 202,
       json: {
@@ -67,7 +64,6 @@ test('mock設定では生成API経由で固定漫画を表示する', async ({ p
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
   expect(generationRequests).toBe(1);
-  expect(generationMockFlags).toEqual([true]);
 });
 
 test('live設定では認証済み記録を表示し、生成利用不可を保つ', async ({ page }) => {
