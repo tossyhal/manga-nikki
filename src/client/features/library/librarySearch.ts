@@ -1,3 +1,5 @@
+import { isValidMonth, daysInMonth, moveDateToMonth } from './libraryCalendar';
+
 export type LibraryView = 'calendar' | 'list';
 
 export type LibrarySearchState = {
@@ -11,23 +13,6 @@ export type LibrarySearchState = {
 export const maxListRestoreRequests = 50;
 
 const allowedKeys = new Set(['view', 'month', 'day', 'listPage', 'dayPage']);
-
-function isValidMonth(value: string): boolean {
-  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(value);
-  return Boolean(match && Number(match[1]) > 0);
-}
-
-function daysInMonth(month: string): number {
-  const [yearText = '0', monthText = '0'] = month.split('-');
-  const year = Number(yearText);
-  const monthNumber = Number(monthText);
-  if (!isValidMonth(month)) return 0;
-  if (monthNumber === 2) {
-    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-    return leapYear ? 29 : 28;
-  }
-  return [4, 6, 9, 11].includes(monthNumber) ? 30 : 31;
-}
 
 function isValidDay(value: string): boolean {
   const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(value);
@@ -79,12 +64,6 @@ export function parseLibrarySearch(search: string, today: string): LibrarySearch
     listPage,
     dayPage,
   };
-}
-
-function moveDateToMonth(value: string, targetMonth: string): string {
-  const day = Number(value.slice(-2));
-  const lastDay = daysInMonth(targetMonth);
-  return `${targetMonth}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
 }
 
 export function defaultLibrarySearch(today: string): LibrarySearchState {

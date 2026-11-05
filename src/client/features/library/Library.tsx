@@ -1,229 +1,29 @@
+import { useLibraryEntries } from './useLibraryEntries';
 import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react';
+  dateParts,
+  monthTitle,
+  shiftMonth,
+  moveDateToMonth,
+  calendarDays,
+} from './libraryCalendar';
+import { hasMonthCoverage, targetEntryCount, listPageSize, dayPageSize } from './libraryCoverage';
+import { PageControls } from './LibraryPageControls';
+import { LibraryViewTabs } from './LibraryViewTabs';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import type { Entry } from '../../../shared/schemas';
 import { jstToday } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
-import { ApiClientError, getEntries } from '../../lib/api';
 import { EntryHistory } from './EntryHistory';
 import {
   defaultLibrarySearch,
-  maxListRestoreRequests,
   parseLibrarySearch,
   serializeLibrarySearch,
   type LibrarySearchState,
-  type LibraryView,
 } from './librarySearch';
 
-const pageSize = 20;
-const listPageSize = 3;
-const dayPageSize = 2;
 const weekDays = ['日', '月', '火', '水', '木', '金', '土'];
 const firstMonth = '0001-01';
 const lastMonth = '9999-12';
-
-type EntryPage = { entries: Entry[]; cursor: string | null };
-type ListCoverage = EntryPage & { reachedTarget: boolean };
-
-function dateParts(value: string) {
-  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
-  return { year, month, day };
-}
-
-function monthTitle(value: string) {
-  const { year, month } = dateParts(`${value}-01`);
-  return `${year}年${month}月`;
-}
-
-function shiftMonth(value: string, amount: number) {
-  const { year, month } = dateParts(`${value}-01`);
-  const totalMonths = year * 12 + month - 1 + amount;
-  const nextYear = Math.floor(totalMonths / 12);
-  if (nextYear < 1 || nextYear > 9999) return value;
-  const nextMonth = (totalMonths % 12) + 1;
-  return `${String(nextYear).padStart(4, '0')}-${String(nextMonth).padStart(2, '0')}`;
-}
-
-function moveDateToMonth(value: string, targetMonth: string) {
-  const lastDay = daysInMonth(targetMonth);
-  const day = Math.min(dateParts(value).day, lastDay);
-  return `${targetMonth}-${String(day).padStart(2, '0')}`;
-}
-
-function daysInMonth(value: string) {
-  const { year, month } = dateParts(`${value}-01`);
-  if (month === 2) {
-    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-    return leapYear ? 29 : 28;
-  }
-  return [4, 6, 9, 11].includes(month) ? 30 : 31;
-}
-
-function calendarDays(value: string) {
-  const { year, month } = dateParts(`${value}-01`);
-  const firstDay = new Date(0);
-  firstDay.setUTCFullYear(year, month - 1, 1);
-  firstDay.setUTCHours(0, 0, 0, 0);
-  const offset = firstDay.getUTCDay();
-  const count = daysInMonth(value);
-  return Array.from({ length: 42 }, (_, index) => {
-    const day = index - offset + 1;
-    return day < 1 || day > count ? null : `${value}-${String(day).padStart(2, '0')}`;
-  });
-}
-
-function mergeEntries(current: Entry[], next: Entry[]) {
-  const seen = new Set(current.map((entry) => entry.id));
-  return [...current, ...next.filter((entry) => !seen.has(entry.id))];
-}
-
-function hasMonthCoverage(entries: Entry[], cursor: string | null, month: string) {
-  if (!cursor) return true;
-  const oldest = entries.at(-1);
-  return oldest !== undefined && oldest.diaryDate < `${month}-01`;
-}
-
-async function fetchMonthCoverage(
-  initialEntries: Entry[] | null,
-  initialCursor: string | null,
-  targetMonth: string,
-  shouldContinue: () => boolean,
-) {
-  let entries = initialEntries;
-  let cursor = initialCursor;
-
-  if (entries === null) {
-    const firstPage = await getEntries({ limit: pageSize });
-    if (!shouldContinue()) return null;
-    entries = firstPage.items;
-    cursor = firstPage.nextCursor;
-  }
-
-  const visitedCursors = new Set<string>();
-  while (!hasMonthCoverage(entries, cursor, targetMonth) && cursor) {
-    if (visitedCursors.has(cursor)) {
-      throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
-    }
-    visitedCursors.add(cursor);
-    const previousCursor = cursor;
-    const page = await getEntries({ cursor, limit: pageSize });
-    if (!shouldContinue()) return null;
-    if (page.nextCursor === previousCursor) {
-      throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
-    }
-    entries = mergeEntries(entries, page.items);
-    cursor = page.nextCursor;
-  }
-
-  return { entries, cursor };
-}
-
-function targetEntryCount(page: number) {
-  return page > Math.floor(Number.MAX_SAFE_INTEGER / listPageSize)
-    ? Number.MAX_SAFE_INTEGER
-    : page * listPageSize;
-}
-
-async function fetchListCoverage(
-  initialEntries: Entry[],
-  initialCursor: string | null,
-  targetPage: number,
-  shouldContinue: () => boolean,
-  requestLimit = maxListRestoreRequests,
-): Promise<ListCoverage | null> {
-  let entries = initialEntries;
-  let cursor = initialCursor;
-  let requests = 0;
-  const visitedCursors = new Set<string>();
-  const neededEntries = targetEntryCount(targetPage);
-
-  while (entries.length < neededEntries && cursor && requests < requestLimit) {
-    if (visitedCursors.has(cursor)) {
-      throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
-    }
-    visitedCursors.add(cursor);
-    const previousCursor = cursor;
-    const page = await getEntries({ cursor, limit: pageSize });
-    if (!shouldContinue()) return null;
-    if (page.nextCursor === previousCursor) {
-      throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
-    }
-    entries = mergeEntries(entries, page.items);
-    cursor = page.nextCursor;
-    requests += 1;
-  }
-
-  return {
-    entries,
-    cursor,
-    reachedTarget: entries.length >= neededEntries || cursor === null,
-  };
-}
-
-function isSessionUnavailable(error: unknown) {
-  return (
-    error instanceof ApiClientError &&
-    (error.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'AUTH_EXPIRED')
-  );
-}
-
-function ListViewIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      focusable="false"
-    >
-      <path d="M9 6h11M9 12h11M9 18h11" />
-      <circle cx="4" cy="6" r=".6" fill="currentColor" />
-      <circle cx="4" cy="12" r=".6" fill="currentColor" />
-      <circle cx="4" cy="18" r=".6" fill="currentColor" />
-    </svg>
-  );
-}
-
-function PageControls({
-  page,
-  canGoPrevious,
-  canGoNext,
-  busy,
-  label,
-  onPrevious,
-  onNext,
-}: {
-  page: number;
-  canGoPrevious: boolean;
-  canGoNext: boolean;
-  busy: boolean;
-  label: string;
-  onPrevious: () => void;
-  onNext: () => void;
-}) {
-  return (
-    <nav className="library-page-controls" aria-label={label}>
-      <button type="button" disabled={!canGoPrevious || busy} onClick={onPrevious}>
-        前へ
-      </button>
-      <span aria-live="polite">{page}ページ目</span>
-      <button type="button" disabled={!canGoNext || busy} onClick={onNext}>
-        次へ
-      </button>
-    </nav>
-  );
-}
 
 export function Library() {
   const [today] = useState(() => jstToday());
@@ -240,16 +40,19 @@ export function Library() {
   const canonicalSearch = serializeLibrarySearch(searchState);
   const latestSearchRef = useRef(searchState);
   const initialSearchRef = useRef(searchState);
-  const [entries, setEntries] = useState<Entry[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState('');
-  const [sessionUnavailable, setSessionUnavailable] = useState(false);
-  const entriesRef = useRef<Entry[] | null>(null);
-  const cursorRef = useRef<string | null>(null);
-  const loadingRef = useRef(false);
-  const mountedRef = useRef(true);
   const attemptedListRestoreRef = useRef<number | null>(null);
+  const {
+    entries,
+    nextCursor,
+    busy,
+    error,
+    sessionUnavailable,
+    setError,
+    setSessionUnavailable,
+    loadThroughMonth,
+    loadThroughListPage,
+    mountedRef,
+  } = useLibraryEntries(initialSearchRef.current.month);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
 
   useLayoutEffect(() => {
@@ -269,114 +72,6 @@ export function Library() {
     if (location.pathname !== '/library' || location.search === canonicalSearch) return;
     navigate({ pathname: '/library', search: canonicalSearch }, { replace: true });
   }, [canonicalSearch, location.pathname, location.search, navigate]);
-
-  const syncEntries = useCallback((items: Entry[], cursor: string | null) => {
-    entriesRef.current = items;
-    cursorRef.current = cursor;
-    setEntries(items);
-    setNextCursor(cursor);
-  }, []);
-
-  const loadThroughMonth = useCallback(
-    async (targetMonth: string) => {
-      if (loadingRef.current) return;
-      loadingRef.current = true;
-      setBusy(true);
-
-      try {
-        const result = await fetchMonthCoverage(
-          entriesRef.current,
-          cursorRef.current,
-          targetMonth,
-          () => mountedRef.current,
-        );
-        if (!result || !mountedRef.current) return;
-        syncEntries(result.entries, result.cursor);
-      } catch (failure) {
-        if (!mountedRef.current) return;
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
-        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
-      } finally {
-        loadingRef.current = false;
-        if (mountedRef.current) setBusy(false);
-      }
-    },
-    [syncEntries],
-  );
-
-  const loadThroughListPage = useCallback(
-    async (targetPage: number, requestLimit = maxListRestoreRequests) => {
-      const current = entriesRef.current;
-      const cursor = cursorRef.current;
-      if (!current) return null;
-      if (current.length >= targetEntryCount(targetPage) || !cursor) {
-        return {
-          entries: current,
-          cursor,
-          reachedTarget: current.length >= targetEntryCount(targetPage) || cursor === null,
-        };
-      }
-      if (loadingRef.current) return null;
-
-      loadingRef.current = true;
-      setBusy(true);
-      setError('');
-      setSessionUnavailable(false);
-      try {
-        const result = await fetchListCoverage(
-          current,
-          cursor,
-          targetPage,
-          () => mountedRef.current,
-          requestLimit,
-        );
-        if (!result || !mountedRef.current) return null;
-        syncEntries(result.entries, result.cursor);
-        return result;
-      } catch (failure) {
-        if (!mountedRef.current) return null;
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
-        setError(failure instanceof Error ? failure.message : '記録の続きを取得できませんでした。');
-        return null;
-      } finally {
-        loadingRef.current = false;
-        if (mountedRef.current) setBusy(false);
-      }
-    },
-    [syncEntries],
-  );
-
-  useEffect(() => {
-    let active = true;
-    mountedRef.current = true;
-    loadingRef.current = true;
-
-    async function loadInitialEntries() {
-      try {
-        const result = await fetchMonthCoverage(
-          null,
-          null,
-          initialSearchRef.current.month,
-          () => active,
-        );
-        if (!active || !result) return;
-        syncEntries(result.entries, result.cursor);
-      } catch (failure) {
-        if (!active) return;
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
-        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
-      } finally {
-        loadingRef.current = false;
-        if (active) setBusy(false);
-      }
-    }
-
-    void loadInitialEntries();
-    return () => {
-      active = false;
-      mountedRef.current = false;
-    };
-  }, [syncEntries]);
 
   const entriesByDate = useMemo(() => {
     const counts = new Map<string, number>();
@@ -512,7 +207,7 @@ export function Library() {
   function retry() {
     setError('');
     setSessionUnavailable(false);
-    if (view === 'list' && entriesRef.current && cursorRef.current) {
+    if (view === 'list' && entries && nextCursor) {
       attemptedListRestoreRef.current = null;
       void loadThroughListPage(Math.max(1, listPage));
     } else {
@@ -524,25 +219,6 @@ export function Library() {
     const { month, day } = dateParts(selectedDate);
     return `${month}月${day}日`;
   })();
-
-  const calendarTabRef = useRef<HTMLButtonElement>(null);
-  const listTabRef = useRef<HTMLButtonElement>(null);
-
-  function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    let nextView: LibraryView | null = null;
-    const currentView = event.currentTarget.id === 'library-calendar-tab' ? 'calendar' : 'list';
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      nextView = currentView === 'calendar' ? 'list' : 'calendar';
-    } else if (event.key === 'Home') {
-      nextView = 'calendar';
-    } else if (event.key === 'End') {
-      nextView = 'list';
-    }
-    if (!nextView) return;
-    event.preventDefault();
-    updateSearch({ view: nextView });
-    (nextView === 'calendar' ? calendarTabRef : listTabRef).current?.focus();
-  }
 
   function loadStateContent() {
     if (sessionUnavailable) {
@@ -592,38 +268,7 @@ export function Library() {
         記録
       </h1>
 
-      <div className="library-view-tabs" role="tablist" aria-label="記録の表示方法">
-        <button
-          ref={calendarTabRef}
-          type="button"
-          role="tab"
-          id="library-calendar-tab"
-          className="library-view-tab"
-          aria-controls="library-calendar-panel"
-          aria-selected={view === 'calendar'}
-          tabIndex={view === 'calendar' ? 0 : -1}
-          onClick={() => updateSearch({ view: 'calendar' })}
-          onKeyDown={onTabKeyDown}
-        >
-          <Icon name="calendar" size={17} />
-          <span>カレンダー</span>
-        </button>
-        <button
-          ref={listTabRef}
-          type="button"
-          role="tab"
-          id="library-list-tab"
-          className="library-view-tab"
-          aria-controls="library-list-panel"
-          aria-selected={view === 'list'}
-          tabIndex={view === 'list' ? 0 : -1}
-          onClick={() => updateSearch({ view: 'list' })}
-          onKeyDown={onTabKeyDown}
-        >
-          <ListViewIcon />
-          <span>リスト</span>
-        </button>
-      </div>
+      <LibraryViewTabs view={view} onChange={(view) => updateSearch({ view })} />
 
       <div
         id="library-calendar-panel"
