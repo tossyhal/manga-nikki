@@ -943,7 +943,7 @@ function DetailContent({
       )}
       {entry && !editing && (
         <>
-          {statusView && (
+          {statusView && !displayedGeneration && (
             <aside className="detail-meta-note">
               <div className="detail-date-row">
                 <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>

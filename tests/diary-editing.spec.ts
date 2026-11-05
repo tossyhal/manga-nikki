@@ -224,6 +224,7 @@ test('再生成中と失敗後も最後に保存した漫画を表示し、最�
 
   await expect(page.locator('.detail-toolbar')).toContainText('漫画をつくっています');
   await expect(page.locator('.comic')).toBeVisible();
+  await expect(page.locator('.detail-date-row time')).toHaveCount(1);
   await expect.poll(() => statusRequests).toBeGreaterThan(0);
   expect(latestGeneration.status).toBe('queued');
 
@@ -287,6 +288,94 @@ test('ホームで既知の旧漫画と状態取得失敗を別々に案内す�
     .locator('.entry-history-card')
     .filter({ hasText: '状態確認に失敗した記録です。' });
   await expect(unavailableCard).toContainText('状態を確認できません');
+});
+
+test('編集後の旧generationが失敗済みなら一覧に編集済みと表示する', async ({ page }) => {
+  const oldFailure = generationFixtures(entryId, generationId, 1).failed;
+  const editedEntry: Entry = {
+    ...draftEntryDetailFixture,
+    revision: 2,
+    latestGenerationId: oldFailure.id,
+  };
+  const detail: EntryDetail = { ...editedEntry, latestGeneration: oldFailure };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [editedEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+
+  await page.goto('/');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const card = page.locator('.entry-history-card').filter({ hasText: '編集済み' });
+  await expect(card).toBeVisible();
+  await expect(card).not.toContainText('状態を確認しています');
+});
+
+test('ホームと一覧で漫画画像の取得失敗を読める', async ({ page }) => {
+  const todayGeneration = generationFixtures(entryId, generationId).succeeded;
+  const recentEntryId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const recentGenerationId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const todayEntry: Entry = {
+    ...draftEntryDetailFixture,
+    diaryDate: jstToday(),
+    latestGenerationId: todayGeneration.id,
+  };
+  const recentEntry: Entry = {
+    ...draftEntryDetailFixture,
+    id: recentEntryId,
+    diaryDate: '2026-01-01',
+    body: '画像取得に失敗した最近の記録です。',
+    latestGenerationId: recentGenerationId,
+  };
+  const recentGeneration = generationFixtures(recentEntryId, recentGenerationId).succeeded;
+  const details = new Map<string, EntryDetail>([
+    [
+      todayEntry.id,
+      {
+        ...todayEntry,
+        latestGeneration: todayGeneration,
+        lastSuccessfulGeneration: todayGeneration,
+      },
+    ],
+    [
+      recentEntry.id,
+      {
+        ...recentEntry,
+        latestGeneration: recentGeneration,
+        lastSuccessfulGeneration: recentGeneration,
+      },
+    ],
+  ]);
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [todayEntry, recentEntry], nextCursor: null } }),
+  );
+  for (const [id, entryDetail] of details) {
+    await page.route(`**/api/v1/entries/${id}`, (route) => route.fulfill({ json: entryDetail }));
+  }
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-image-request',
+          retryable: true,
+        },
+      },
+    }),
+  );
+
+  await page.goto('/');
+  await expect(page.locator('.home-today-content')).toContainText('漫画画像を表示できません。');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const recentCard = page.locator('.entry-history-card').filter({ hasText: recentEntry.body });
+  await expect(recentCard.locator('.entry-history-preview-error')).toHaveText(
+    '漫画画像を表示できません。',
+  );
 });
 
 test('保存中はヘッダーの編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {
