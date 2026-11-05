@@ -22,8 +22,11 @@ export function App() {
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
   const [configRetry, setConfigRetry] = useState(0);
-  const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
-  const [blockedActivity, setBlockedActivity] = useState<DiaryActivity | null>(null);
+  const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({
+    dirty: false,
+    busy: false,
+    failed: false,
+  });
   const diaryActivityRef = useRef(diaryActivity);
   const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
     diaryActivityRef.current = activity;
@@ -45,6 +48,9 @@ export function App() {
     [],
   );
   const blocker = useBlocker(shouldBlockNavigation);
+  const blockedActivity = blocker.state === 'blocked' ? diaryActivity : null;
+  const blockerStateRef = useRef(blocker.state);
+  const hasBlockedNavigation = useCallback(() => blockerStateRef.current !== 'unblocked', []);
   useEffect(() => {
     let active = true;
     void getClientConfig()
@@ -62,10 +68,18 @@ export function App() {
     document.title = documentTitle(location.pathname);
     mainRef.current?.focus({ preventScroll: true });
   }, [location.pathname]);
-  useEffect(() => {
-    if (blocker.state === 'blocked') setBlockedActivity(diaryActivityRef.current);
-    else setBlockedActivity(null);
+  useLayoutEffect(() => {
+    blockerStateRef.current = blocker.state;
   }, [blocker.state]);
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    if (diaryActivity.failed) {
+      if (!diaryActivity.dirty) blocker.reset();
+      return;
+    }
+    if (diaryActivity.dirty || diaryActivity.busy) return;
+    blocker.proceed();
+  }, [blocker, diaryActivity.busy, diaryActivity.dirty, diaryActivity.failed]);
   useLayoutEffect(() => {
     if (!diaryActivity.dirty && !diaryActivity.busy) return;
     const preventUnloading = (event: BeforeUnloadEvent) => {
@@ -81,8 +95,11 @@ export function App() {
     configError,
     personalDataAvailable,
     onActivityChange: reportDiaryActivity,
+    hasBlockedNavigation,
     retryConfig,
   };
+  const showBlockedDialog =
+    blocker.state === 'blocked' && (!diaryActivity.failed || diaryActivity.dirty);
   return (
     <div className={`app-shell${isPrimaryRoute ? ' primary-shell' : ''}`}>
       <a className="skip" href="#main">
@@ -105,25 +122,27 @@ export function App() {
       </main>
       <BottomNav />
       <ConfirmDialog
-        open={blockedActivity !== null && blocker.state === 'blocked'}
+        open={showBlockedDialog}
         variant={blockedActivity !== null && !blockedActivity.busy ? 'navigation-exit' : 'default'}
         icon={blockedActivity?.busy ? 'alert' : null}
         title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
         description={
           blockedActivity?.busy
-            ? '保存などの処理中です。この画面を離れると結果を確認できなくなることがあります。'
-            : 'このまま画面を離れますか？'
+            ? '保存結果が確定する前に移動します。保存に失敗すると、未保存の変更をこの画面で確認できなくなることがあります。'
+            : 'このまま画面を離れると、保存されていない変更が失われます。'
         }
         confirmLabel={blockedActivity?.busy ? '移動する' : '保存せずに離れる'}
         cancelLabel="入力に戻る"
         cancelPrimary
         destructive
         onConfirm={() => {
-          setBlockedActivity(null);
-          if (blocker.state === 'blocked') blocker.proceed();
+          if (
+            blocker.state === 'blocked' &&
+            !(diaryActivityRef.current.failed && !diaryActivityRef.current.dirty)
+          )
+            blocker.proceed();
         }}
         onCancel={() => {
-          setBlockedActivity(null);
           if (blocker.state === 'blocked') blocker.reset();
         }}
       />

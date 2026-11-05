@@ -142,6 +142,291 @@ async function generationCaptchaExecutions(page: import('@playwright/test').Page
   );
 }
 
+test('利用枠を手動更新して別job完了後の操作可否を反映し、入力を保つ', async ({ page }) => {
+  let currentQuota = availableQuota(activeGenerationId);
+  let quotaRequests = 0;
+  let releaseRefresh!: () => void;
+  let notifyRefresh!: () => void;
+  const refreshRequested = new Promise<void>((resolve) => {
+    notifyRefresh = resolve;
+  });
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', async (route) => {
+    quotaRequests++;
+    if (quotaRequests > 1) {
+      notifyRefresh();
+      await refreshGate;
+    }
+    return route.fulfill({ json: currentQuota });
+  });
+  await page.route(`**/api/v1/generations/${activeGenerationId}`, (route) =>
+    route.fulfill({ json: activeUnknownGeneration }),
+  );
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  const quotaStatus = page.getByRole('region', { name: '本日の漫画生成枠' });
+  await expect(quotaStatus).toContainText('別の漫画の結果を確認中です');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '利用枠更新中も保つ架空の日記';
+  await diary.fill(draft);
+  currentQuota = { ...availableQuota(null), remainingToday: 2 };
+
+  const refreshClick = quotaStatus.getByRole('button', { name: '利用枠を再確認' }).click();
+  await refreshRequested;
+  await expect(quotaStatus.getByRole('button', { name: '利用枠を確認しています…' })).toBeDisabled();
+  releaseRefresh();
+  await refreshClick;
+
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  await expect(page.locator('[aria-label="本日の漫画生成枠"]')).toContainText(
+    '本日の残り生成枠は2回です。',
+  );
+  expect(quotaRequests).toBe(2);
+  expect(generationPosts).toBe(0);
+});
+
+test('タブ復帰で利用枠を更新し、生成を自動で始めない', async ({ page }) => {
+  let currentQuota = availableQuota(activeGenerationId);
+  let quotaRequests = 0;
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => {
+    quotaRequests++;
+    return route.fulfill({ json: currentQuota });
+  });
+  await page.route(`**/api/v1/generations/${activeGenerationId}`, (route) =>
+    route.fulfill({ json: activeUnknownGeneration }),
+  );
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  const quotaStatus = page.getByRole('region', { name: '本日の漫画生成枠' });
+  await expect(quotaStatus).toContainText('別の漫画の結果を確認中です');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = 'タブ復帰後にも保つ架空の日記';
+  await diary.fill(draft);
+  currentQuota = availableQuota(null);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  expect(quotaRequests).toBe(2);
+  expect(generationPosts).toBe(0);
+});
+
+test('quota.resetAtの日次境界で再取得し、入力を保持する', async ({ page }) => {
+  let quotaRequests = 0;
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => {
+    quotaRequests++;
+    const quota =
+      quotaRequests === 1
+        ? {
+            remainingToday: 0,
+            activeGenerationId: null,
+            resetAt: new Date(Date.now() + 1500).toISOString(),
+            generationAvailable: true,
+          }
+        : availableQuota(null);
+    return route.fulfill({ json: quota });
+  });
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  const quotaStatus = page.getByRole('region', { name: '本日の漫画生成枠' });
+  await expect(quotaStatus).toContainText('本日の生成上限に達しています');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '日次更新後にも保つ架空の日記';
+  await diary.fill(draft);
+
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled({
+    timeout: 7000,
+  });
+  await expect(diary).toHaveValue(draft);
+  expect(quotaRequests).toBe(2);
+  expect(generationPosts).toBe(0);
+});
+
+test('日次境界前の利用枠要求が終わった後に一度だけ再取得する', async ({ page }) => {
+  const resetAt = new Date(Date.now() + 1000).toISOString();
+  const oldQuota = {
+    remainingToday: 0,
+    activeGenerationId: null,
+    resetAt,
+    generationAvailable: true,
+  };
+  let quotaRequests = 0;
+  let releaseRefresh!: () => void;
+  let notifyRefresh!: () => void;
+  const refreshRequested = new Promise<void>((resolve) => {
+    notifyRefresh = resolve;
+  });
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', async (route) => {
+    quotaRequests++;
+    if (quotaRequests === 2) {
+      notifyRefresh();
+      await refreshGate;
+      return route.fulfill({ json: oldQuota });
+    }
+    return route.fulfill({ json: quotaRequests === 1 ? oldQuota : availableQuota() });
+  });
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  const quotaStatus = page.getByRole('region', { name: '本日の漫画生成枠' });
+  await expect(quotaStatus).toContainText('本日の生成上限に達しています');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '遅れてきた日次境界の再取得後にも保つ日記';
+  await diary.fill(draft);
+  const refreshClick = quotaStatus.getByRole('button', { name: '利用枠を再確認' }).click();
+  await refreshRequested;
+  await page.waitForTimeout(2600);
+  releaseRefresh();
+  await refreshClick;
+
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  await expect(quotaStatus).toContainText('本日の残り生成枠は3回です。');
+  expect(quotaRequests).toBe(3);
+  expect(generationPosts).toBe(0);
+});
+
+test('初回の利用枠応答が日次境界を越えた場合も再取得する', async ({ page }) => {
+  const resetAt = new Date(Date.now() + 800).toISOString();
+  const oldQuota = {
+    remainingToday: 0,
+    activeGenerationId: null,
+    resetAt,
+    generationAvailable: true,
+  };
+  let quotaRequests = 0;
+  let releaseInitial!: () => void;
+  let notifyInitial!: () => void;
+  const initialRequested = new Promise<void>((resolve) => {
+    notifyInitial = resolve;
+  });
+  const initialGate = new Promise<void>((resolve) => {
+    releaseInitial = resolve;
+  });
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', async (route) => {
+    quotaRequests++;
+    if (quotaRequests === 1) {
+      notifyInitial();
+      await initialGate;
+      return route.fulfill({ json: oldQuota });
+    }
+    return route.fulfill({ json: availableQuota() });
+  });
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  await initialRequested;
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '初回応答が日次境界を越えても保持する日記';
+  await diary.fill(draft);
+  await page.waitForTimeout(1400);
+  releaseInitial();
+
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  await expect(page.getByRole('region', { name: '本日の漫画生成枠' })).toContainText(
+    '本日の残り生成枠は3回です。',
+  );
+  expect(quotaRequests).toBe(2);
+  expect(generationPosts).toBe(0);
+});
+
+test('終端polling後に返った古いactive-generation応答で成功状態を戻さない', async ({ page }) => {
+  const queued = generationFixtures(entryId, generationId).queued;
+  const running = generationFixtures(entryId, generationId).running;
+  const succeeded = generationFixtures(entryId, generationId).succeeded;
+  const detail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  let quotaRequests = 0;
+  let activateNextQuota = false;
+  let generationReads = 0;
+  let releaseActiveRead!: () => void;
+  let notifyActiveRead!: () => void;
+  const activeReadStarted = new Promise<void>((resolve) => {
+    notifyActiveRead = resolve;
+  });
+  const activeReadGate = new Promise<void>((resolve) => {
+    releaseActiveRead = resolve;
+  });
+  await page.clock.install();
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => {
+    quotaRequests++;
+    const activeGenerationId = activateNextQuota ? generationId : null;
+    activateNextQuota = false;
+    return route.fulfill({ json: availableQuota(activeGenerationId) });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1) return route.fulfill({ json: queued });
+    if (generationReads === 2) {
+      notifyActiveRead();
+      await activeReadGate;
+      return route.fulfill({ json: running });
+    }
+    return route.fulfill({ json: succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
+    }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect.poll(() => quotaRequests).toBe(1);
+  await page.clock.runFor(1200);
+  activateNextQuota = true;
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+  await activeReadStarted;
+
+  await page.clock.runFor(4000);
+  await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
+  await expect.poll(() => quotaRequests).toBe(3);
+  releaseActiveRead();
+  await expect.poll(() => generationReads).toBe(3);
+  await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toHaveCount(0);
+});
+
 test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルとして受付する', async ({ page }) => {
   await installTurnstileFake(page);
   const order: string[] = [];
@@ -357,7 +642,9 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
     route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
   );
   await page.route('**/api/v1/me/quota', (route) =>
-    route.fulfill({ json: availableQuota(generationReads > 0 ? generationId : null) }),
+    route.fulfill({
+      json: availableQuota(latestGeneration?.status === 'unknown' ? generationId : null),
+    }),
   );
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
     route.fulfill({
@@ -407,7 +694,7 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   expect(generationRequests[0]?.key).toBe(generationRequests[1]?.key);
   expect(generationRequests[0]?.captchaToken).toBe('generation-token-e2e-1');
   expect(generationRequests[1]?.captchaToken).toBe('');
-  await expect.poll(() => generationReads).toBe(2);
+  await expect.poll(() => generationReads).toBe(1);
 
   const readsAfterUnknown = generationReads;
   await page.clock.runFor(5200);
@@ -661,6 +948,38 @@ test('生成状態を参照できない間は受付せず、状態の再確認�
   expect(generationPosts).toBe(0);
   expect(await generationCaptchaExecutions(page)).toBe(0);
   expect(await page.evaluate(() => window.__e2eTurnstileEvents ?? [])).toEqual([]);
+});
+
+test('同じ記録のjobを利用枠カードで別記録として案内しない', async ({ page }) => {
+  const detail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: null,
+  };
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({ json: availableQuota(generationId) }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend generation state is unavailable',
+          requestId: 'same-entry-generation-unavailable',
+          retryable: true,
+        },
+      },
+    }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  const quotaStatus = page.getByRole('region', { name: '本日の漫画生成枠' });
+  await expect(quotaStatus).toBeVisible();
+  await expect(quotaStatus).not.toContainText('別の漫画を作成しています');
+  await expect(quotaStatus).not.toContainText('別の漫画の結果を確認中です');
 });
 
 for (const activeGenerationState of ['unknown', 'unavailable'] as const) {
