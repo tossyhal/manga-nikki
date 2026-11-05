@@ -34,6 +34,22 @@ export function createServerRpcClient(environment: Environment, fetcher?: typeof
   return { rpc: client.rpc.bind(client) };
 }
 
+export function createServerAssetMetadataClient(environment: Environment, fetcher?: typeof fetch) {
+  const secretKey = requiredKey(environment.SUPABASE_SECRET_KEY);
+  const client = createClient(supabaseUrl(environment), secretKey, {
+    auth: authOptions,
+    ...(fetcher ? { global: { fetch: fetcher } } : {}),
+  });
+  return {
+    getAsset: (assetId: string) =>
+      client
+        .from('assets')
+        .select('id,generation_id,owner_id,object_path,media_type')
+        .eq('id', assetId)
+        .maybeSingle(),
+  };
+}
+
 export function expectedSupabaseIssuer(environment: Environment): string {
   return `${supabaseUrl(environment)}/auth/v1`;
 }

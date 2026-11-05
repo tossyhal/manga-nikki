@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
-import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
+import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import {
   draftEntryDetailFixture,
   liveClientConfigFixture,
@@ -141,6 +141,152 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText(updatedBody, { exact: true })).toBeVisible();
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
+});
+
+test('再生成中と失敗後も最後に保存した漫画を表示し、最新jobの状態を併記する', async ({ page }) => {
+  const previousSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const retryId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  let latestGeneration: Generation = previousSuccess;
+  let currentDetail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: previousSuccess.id,
+    latestGeneration: previousSuccess,
+    lastSuccessfulGeneration: previousSuccess,
+  };
+  let status: 'queued' | 'failed' = 'queued';
+  let statusRequests = 0;
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      const update = route.request().postDataJSON() as {
+        expectedRevision: number;
+        diaryDate: string;
+        body: string;
+      };
+      currentDetail = {
+        ...currentDetail,
+        diaryDate: update.diaryDate,
+        body: update.body,
+        revision: currentDetail.revision + 1,
+      };
+      return route.fulfill({
+        json: {
+          id: currentDetail.id,
+          diaryDate: currentDetail.diaryDate,
+          body: currentDetail.body,
+          revision: currentDetail.revision,
+          latestGenerationId: currentDetail.latestGenerationId,
+          createdAt: currentDetail.createdAt,
+          updatedAt: currentDetail.updatedAt,
+        } satisfies Entry,
+      });
+    }
+    return route.fulfill({ json: currentDetail });
+  });
+  await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+    latestGeneration = generationFixtures(entryId, retryId, 2).queued;
+    currentDetail = {
+      ...currentDetail,
+      latestGenerationId: retryId,
+      latestGeneration,
+      lastSuccessfulGeneration: previousSuccess,
+    };
+    return route.fulfill({
+      status: 202,
+      json: {
+        generationId: retryId,
+        status: 'queued',
+        statusUrl: `/api/v1/generations/${retryId}`,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: previousSuccess }),
+  );
+  await page.route(`**/api/v1/generations/${retryId}`, (route) => {
+    statusRequests++;
+    latestGeneration =
+      status === 'failed' ? generationFixtures(entryId, retryId, 2).failed : latestGeneration;
+    return route.fulfill({ json: latestGeneration });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.comic')).toBeVisible();
+  await clickEntryMenuItem(page, '日記を編集');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('編集した日記です。');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+
+  await expect(page.locator('.detail-toolbar')).toContainText('漫画をつくっています');
+  await expect(page.locator('.comic')).toBeVisible();
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+  expect(latestGeneration.status).toBe('queued');
+
+  status = 'failed';
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect(page.getByRole('heading', { name: '日記は保存されています' })).toBeVisible();
+  await expect(page.locator('.comic')).toBeVisible();
+  await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
+});
+
+test('ホームで既知の旧漫画と状態取得失敗を別々に案内する', async ({ page }) => {
+  const oldSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const oldFailure = generationFixtures(entryId, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 1).failed;
+  const unavailableId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const editedEntry: Entry = {
+    ...draftEntryDetailFixture,
+    revision: 2,
+    latestGenerationId: oldFailure.id,
+  };
+  const unavailableEntry: Entry = {
+    ...draftEntryDetailFixture,
+    id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    body: '状態確認に失敗した記録です。',
+    latestGenerationId: unavailableId,
+  };
+  const detail: EntryDetail = {
+    ...editedEntry,
+    latestGeneration: oldFailure,
+    lastSuccessfulGeneration: oldSuccess,
+  };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [editedEntry, unavailableEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/entries/${unavailableEntry.id}`, (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request',
+          retryable: true,
+        },
+      },
+    }),
+  );
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const oldComicCard = page.locator('.entry-history-card').filter({ hasText: '編集前の漫画' });
+  await expect(oldComicCard).toBeVisible();
+  await expect(oldComicCard).not.toContainText('生成失敗');
+  await expect(oldComicCard.locator('img')).toHaveAttribute('src', '/sample-comic.svg');
+  const unavailableCard = page
+    .locator('.entry-history-card')
+    .filter({ hasText: '状態確認に失敗した記録です。' });
+  await expect(unavailableCard).toContainText('状態を確認できません');
 });
 
 test('保存中はヘッダーの編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {

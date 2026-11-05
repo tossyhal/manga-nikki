@@ -24,7 +24,7 @@ async function intercept(page: Page, getGeneration: () => Generation, revision =
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: getGeneration() }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) => {
+  await page.route('**/api/v1/assets/*/url', async (route) => {
     const id = route.request().url().split('/').at(-2);
     return route.fulfill({
       json: { url: `/sample-comic.svg?asset=${id}`, expiresAt: '2099-01-01T00:00:00Z' },
@@ -88,6 +88,93 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   }
   await expect(page.getByText('「絵がなくても残る会話」', { exact: true })).toBeVisible();
   await expect.poll(() => requestedAssetIds.size).toBe(4);
+});
+
+test('拡大画像の署名URL失効は1回だけ自動更新し、その後は手動再取得できる', async ({ page }) => {
+  await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') });
+  const comic = structuredClone(panelsComic);
+  const generation = { ...fixtures.succeeded, comic };
+  const assetUrlRequests = new Map<string, number>();
+  let holdRenewal = false;
+  let releaseRenewal!: () => void;
+  const renewalGate = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: detail(generation) }),
+  );
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: generation }),
+  );
+  await page.route('**/api/v1/assets/*/url', async (route) => {
+    const assetId = new URL(route.request().url()).pathname.split('/').at(-2);
+    if (!assetId) return route.abort();
+    const requestNumber = (assetUrlRequests.get(assetId) ?? 0) + 1;
+    assetUrlRequests.set(assetId, requestNumber);
+    if (holdRenewal) await renewalGate;
+    const browserNow = await page.evaluate(() => Date.now());
+    const url = `/sample-comic.svg?asset=${assetId}&request=${requestNumber}`;
+    return route.fulfill({
+      json: { url, expiresAt: new Date(browserNow + 60_000).toISOString() },
+    });
+  });
+  await page.route('**/sample-comic.svg?asset=*', (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('broken')) return route.fulfill({ status: 404, body: '' });
+    return route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
+    });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await expect
+    .poll(() => [...assetUrlRequests.values()].reduce((sum, count) => sum + count, 0))
+    .toBeGreaterThanOrEqual(4);
+  const comicImage = page.locator('.comic img').first();
+  await expect(comicImage).toBeVisible();
+  await expect
+    .poll(() => comicImage.evaluate((image) => (image as HTMLImageElement).naturalWidth > 0))
+    .toBe(true);
+  const initialUrlRequestCount = [...assetUrlRequests.values()].reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  await page.locator('.comic-image-button').first().click();
+  const dialog = page.getByRole('dialog', { name: '漫画画像' });
+  await expect(dialog).toBeVisible();
+
+  async function expireZoomImage(expiredAt: string) {
+    await page.clock.setFixedTime(new Date(expiredAt));
+    const zoomImage = dialog.locator('img');
+    await zoomImage.evaluate((image) => {
+      const url = new URL((image as HTMLImageElement).src);
+      url.searchParams.set('broken', '1');
+      (image as HTMLImageElement).src = url.toString();
+    });
+  }
+
+  holdRenewal = true;
+  await expireZoomImage('2100-01-01T00:00:00Z');
+  await expect(dialog.getByText('画像を読み込んでいます…')).toBeVisible();
+  await expect
+    .poll(() => [...assetUrlRequests.values()].reduce((sum, count) => sum + count, 0))
+    .toBe(initialUrlRequestCount + 4);
+  releaseRenewal();
+  await expect(dialog.locator('img')).toBeVisible();
+  expect(await dialog.isVisible()).toBe(true);
+
+  await expireZoomImage('2200-01-01T00:00:00Z');
+  await expect(dialog.getByText('漫画の画像を表示できません。')).toBeVisible();
+  await expect
+    .poll(() => [...assetUrlRequests.values()].reduce((sum, count) => sum + count, 0))
+    .toBe(initialUrlRequestCount + 4);
+  await dialog.getByRole('button', { name: '画像を再読み込み' }).click();
+  await expect
+    .poll(() => [...assetUrlRequests.values()].reduce((sum, count) => sum + count, 0))
+    .toBe(initialUrlRequestCount + 8);
+  await expect(dialog.locator('img')).toBeVisible();
+  await expect(dialog.getByText('漫画の画像を表示できません。')).toHaveCount(0);
 });
 
 test('埋め込み文字の漫画で画像取得に失敗したら脚本を一度だけ表示する', async ({ page }) => {

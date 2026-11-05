@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -369,12 +369,144 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_storage.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/entry_write_limits.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
   console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
   console.log(
     '成功: OpenAI profile allowlist・予算quota・saving開始・候補fairness/3件上限/5分backoff/24時間期限',
   );
+  console.log(
+    '成功: comic save task・lease・厳密asset/comic確定・consumed精算・retention path union',
+  );
+  console.log('成功: JST日次entry制限・保持容量上限・物理回収・counter ACL');
+
+  const comicRaceActor = 'fa000000-0000-4000-8000-000000000001';
+  const comicRaceRequest = 'fa000000-0000-4000-8000-000000000002';
+  const comicRaceIdempotency = 'fa000000-0000-4000-8000-000000000003';
+  const comicRaceProfile = JSON.stringify({
+    profile_id: 'openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1',
+    is_mock: false,
+    max_cost_micro_usd: 17,
+    max_image_calls: 4,
+    provider: 'openai',
+    script_model: 'gpt-4.1-mini-2025-04-14',
+    image_model: 'gpt-image-2.5-flare',
+    color_mode: 'monochrome',
+  });
+  const comicRaceScript = JSON.stringify({
+    title: '隔離競合用の架空漫画',
+    panels: [1, 2, 3, 4].map((index) => ({
+      index,
+      scene: `競合確認の架空scene ${index}`,
+      caption: `架空caption ${index}`,
+      dialogue: '',
+    })),
+  });
+  const comicRaceAssets = JSON.stringify(
+    [1, 2, 3, 4].map((index) => ({
+      index,
+      media_type: 'image/png',
+      byte_size: 1200,
+      width: 1024,
+      height: 1024,
+      sha256: String.fromCharCode(96 + index).repeat(64),
+    })),
+  );
+  const comicRaceAttemptSteps = [
+    { stage: 'script', index: 1 },
+    ...Array.from({ length: 4 }, (_, index) => ({ stage: 'images', index: index + 1 })),
+  ]
+    .map(
+      ({ stage, index }) => `
+select (public.begin_provider_attempt(:'race_generation'::uuid, :'race_claim'::uuid, '${stage}', ${index}, true) ->> 'attempt_id') as race_attempt \\gset
+select public.finish_provider_attempt(:'race_generation'::uuid, :'race_claim'::uuid,
+  :'race_attempt'::uuid, 'succeeded', 'fictional-save-lease-race-${stage}-${index}') as race_finished \\gset`,
+    )
+    .join('\n');
+  const comicRaceSetup = `
+begin;
+insert into auth.users(id) values ('${comicRaceActor}');
+update private.generation_policy set enabled = true, user_daily_limit = 10,
+  global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
+  model_profile_json = '${comicRaceProfile.replaceAll("'", "''")}'::jsonb where id = 1;
+set local role service_role;
+select (public.create_entry('${comicRaceActor}', '${comicRaceRequest}',
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date,
+  '保存lease競合確認用の架空日記', 'v1')).id as race_entry \\gset
+select (public.reserve_openai_generation('${comicRaceActor}', :'race_entry'::uuid, 1,
+  '${comicRaceIdempotency}', true) ->> 'generation_id') as race_generation \\gset
+select (public.claim_generation(:'race_generation'::uuid) ->> 'claim_token') as race_claim \\gset
+${comicRaceAttemptSteps}
+select public.mark_generation_saving(:'race_generation'::uuid, :'race_claim'::uuid) as race_saving \\gset
+select public.begin_comic_save_task(:'race_generation'::uuid, '${comicRaceActor}', 1,
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date, :'race_claim'::uuid,
+  'openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1',
+  '${comicRaceScript.replaceAll("'", "''")}'::jsonb,
+  '${comicRaceAssets.replaceAll("'", "''")}'::jsonb) as race_task \\gset
+reset role;
+update public.generations set deadline_at = pg_catalog.clock_timestamp() - interval '1 minute'
+where id = :'race_generation'::uuid;
+update private.comic_save_tasks set lease_expires_at = pg_catalog.clock_timestamp() - interval '1 second'
+where generation_id = :'race_generation'::uuid;
+commit;
+select :'race_generation' || '|' || :'race_claim';`;
+  const comicRaceIds = succeeded(await sql(comicRaceSetup)).split('|');
+  assert.equal(comicRaceIds.length, 2);
+  const [comicRaceGeneration, comicRaceClaim] = comicRaceIds;
+  const concurrentComicRecoveryClaims = await Promise.all(
+    Array.from({ length: 6 }, (_, index) =>
+      sql(
+        `set role service_role; select public.claim_comic_save_recovery('${comicRaceGeneration}');`,
+        `mn-db-comic-recovery-claim-${index}`,
+      ),
+    ),
+  );
+  const comicRecoveryClaims = concurrentComicRecoveryClaims.map((result) =>
+    JSON.parse(succeeded(result)),
+  );
+  const acquiredComicRecoveryClaims = comicRecoveryClaims.filter(
+    (result) => result.status === 'claimed',
+  );
+  assert.equal(acquiredComicRecoveryClaims.length, 1);
+  assert.equal(comicRecoveryClaims.filter((result) => result.status === 'pending').length, 5);
+  const comicRecoverySaveClaim = acquiredComicRecoveryClaims[0].save_claim_token;
+  const failedComicRecovery = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_comic_save('${comicRaceGeneration}', '${comicRaceClaim}', '${comicRecoverySaveClaim}');`,
+      ),
+    ),
+  );
+  assert.equal(failedComicRecovery.status, 'failed');
+  succeeded(
+    await sql(`begin;
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'global_total' and subject is null and day_key is null;
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'global_day' and subject is null
+          and day_key = (select reserved_day from private.reservations where generation_id = '${comicRaceGeneration}');
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'user_day' and subject = '${comicRaceActor}'
+          and day_key = (select reserved_day from private.reservations where generation_id = '${comicRaceGeneration}');
+      delete from private.comic_save_tasks where generation_id = '${comicRaceGeneration}';
+      delete from private.provider_attempts where generation_id = '${comicRaceGeneration}';
+      delete from private.reservations where generation_id = '${comicRaceGeneration}';
+      update public.entries set latest_generation_id = null where id = (
+        select entry_id from public.generations where id = '${comicRaceGeneration}');
+      delete from public.generations where id = '${comicRaceGeneration}';
+      delete from public.entries where owner_id = '${comicRaceActor}';
+      delete from auth.users where id = '${comicRaceActor}';
+      update private.generation_policy set enabled = false, user_daily_limit = 2,
+        global_daily_limit = 0, global_total_limit = 0, budget_micro_usd = 0,
+        model_profile_json = '{}'::jsonb where id = 1;
+      commit;`),
+  );
+  console.log('成功: 6並列保存復旧claimは1 leaseだけ取得し、他5件はpending');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));
@@ -1067,6 +1199,249 @@ try {
     [openAiQuotaBefore[0] + 1, openAiQuotaBefore[1] + 19],
   );
   console.log('成功: OpenAI wrapperの同一キー6並列予約はjob・reservation・予算計上が各1件');
+
+  const writeLimitOwner = 'e1010101-0101-4101-8101-010101010101';
+  const ownerDailyKeys = Array.from({ length: 6 }, () => randomUUID());
+  succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${writeLimitOwner}');
+      delete from private.entry_creation_owner_daily where owner_id = '${writeLimitOwner}';
+      insert into private.entry_creation_owner_daily (owner_id, day_key, creation_count)
+      values ('${writeLimitOwner}', (statement_timestamp() at time zone 'Asia/Tokyo')::date, 49);
+    `),
+  );
+  const ownerDailyRace = await runBehindLock({
+    holderName: 'mn-db-entry-owner-daily-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-entry-owner-daily-',
+    queries: ownerDailyKeys.map(
+      (key, index) =>
+        `set role service_role; ${create(writeLimitOwner, key, `owner daily parallel ${index}`)}`,
+    ),
+  });
+  const ownerDailySuccess = ownerDailyRace.findIndex((result) => result.code === 0);
+  assert.notEqual(ownerDailySuccess, -1);
+  assert.equal(ownerDailyRace.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    ownerDailyRace.filter(
+      (result) => result.code !== 0 && result.stderr.includes('ENTRY_OWNER_CREATE_LIMIT_REACHED'),
+    ).length,
+    5,
+  );
+  const ownerDailyWinnerId = succeeded(ownerDailyRace[ownerDailySuccess]);
+  assert.equal(
+    succeeded(
+      await sql(
+        `set role service_role; ${create(
+          writeLimitOwner,
+          ownerDailyKeys[ownerDailySuccess],
+          `owner daily parallel ${ownerDailySuccess}`,
+        )}`,
+      ),
+    ),
+    ownerDailyWinnerId,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select creation_count from private.entry_creation_owner_daily
+        where owner_id = '${writeLimitOwner}'
+          and day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+    ),
+    '50',
+  );
+  const ownerDailyWinnerEntry = succeeded(
+    await sql(`select id from public.entries where owner_id = '${writeLimitOwner}'
+      and create_request_id = '${ownerDailyKeys[ownerDailySuccess]}';`),
+  );
+  const ownerCountersBeforeDelete = succeeded(
+    await sql(`select creation_count from private.entry_creation_owner_daily
+      where owner_id = '${writeLimitOwner}'
+        and day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+  );
+  const globalCountersBeforeDelete = succeeded(
+    await sql(`select creation_count from private.entry_creation_global_daily
+      where day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+  );
+  succeeded(
+    await sql(
+      `set role service_role; select public.request_entry_deletion('${writeLimitOwner}','${ownerDailyWinnerEntry}');`,
+    ),
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select creation_count from private.entry_creation_owner_daily
+        where owner_id = '${writeLimitOwner}'
+          and day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+    ),
+    ownerCountersBeforeDelete,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select creation_count from private.entry_creation_global_daily
+        where day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+    ),
+    globalCountersBeforeDelete,
+  );
+  console.log('成功: ownerの日次作成最終枠は6並列でも1件だけ、冪等再送とDELETEは再計上しない');
+
+  const globalDailyActors = Array.from({ length: 6 }, () => randomUUID());
+  const globalDailyKeys = Array.from({ length: 6 }, () => randomUUID());
+  succeeded(
+    await sql(`
+      insert into auth.users(id) values ${globalDailyActors.map((id) => `('${id}')`).join(',')};
+      delete from private.entry_creation_global_daily;
+      insert into private.entry_creation_global_daily (day_key, creation_count)
+      values ((statement_timestamp() at time zone 'Asia/Tokyo')::date, 999);
+    `),
+  );
+  const globalDailyRace = await runBehindLock({
+    holderName: 'mn-db-entry-global-daily-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-entry-global-daily-',
+    queries: globalDailyActors.map(
+      (actor, index) =>
+        `set role service_role; ${create(actor, globalDailyKeys[index], `global daily parallel ${index}`)}`,
+    ),
+  });
+  const globalDailySuccess = globalDailyRace.findIndex((result) => result.code === 0);
+  assert.notEqual(globalDailySuccess, -1);
+  assert.equal(globalDailyRace.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    globalDailyRace.filter(
+      (result) => result.code !== 0 && result.stderr.includes('ENTRY_GLOBAL_CREATE_LIMIT_REACHED'),
+    ).length,
+    5,
+  );
+  const globalDailyWinnerId = succeeded(globalDailyRace[globalDailySuccess]);
+  assert.equal(
+    succeeded(
+      await sql(
+        `set role service_role; ${create(
+          globalDailyActors[globalDailySuccess],
+          globalDailyKeys[globalDailySuccess],
+          `global daily parallel ${globalDailySuccess}`,
+        )}`,
+      ),
+    ),
+    globalDailyWinnerId,
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select creation_count from private.entry_creation_global_daily
+        where day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+    ),
+    '1000',
+  );
+  console.log('成功: global JST日次作成最終枠もownerの異なる6並列要求で1件だけ');
+
+  const retainedOwner = randomUUID();
+  const retainedRequestKeys = Array.from({ length: 6 }, () => randomUUID());
+  const retainedSeedOwners = Array.from({ length: 51 }, () => randomUUID());
+  const retainedSeedArray = `array[${retainedSeedOwners.map((id) => `'${id}'`).join(',')}]::uuid[]`;
+  const existingEntryCount = Number(succeeded(await sql('select count(*) from public.entries;')));
+  assert.ok(existingEntryCount < 4999, 'retained capacity fixture has room to seed');
+  const retainedRowsToSeed = 4999 - existingEntryCount;
+  succeeded(
+    await sql(`
+      insert into auth.users(id) values ('${retainedOwner}'),
+        ${retainedSeedOwners.map((id) => `('${id}')`).join(',')};
+      delete from private.entry_creation_global_daily;
+      insert into private.entry_creation_global_daily (day_key, creation_count)
+      values ((statement_timestamp() at time zone 'Asia/Tokyo')::date, 0);
+      do $$
+      declare owners uuid[] := ${retainedSeedArray};
+      begin
+        insert into public.entries (
+          owner_id, create_request_id, create_request_hash, diary_date, body, consent_version,
+          deleted_at, expires_at
+        )
+        select owners[((series.n - 1) % pg_catalog.cardinality(owners)) + 1],
+          pg_catalog.gen_random_uuid(), pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex'),
+          (statement_timestamp() at time zone 'Asia/Tokyo')::date,
+          '未回収の架空global fixture', 'v1',
+          pg_catalog.clock_timestamp() - interval '100 years',
+          pg_catalog.clock_timestamp() - interval '1 day'
+        from pg_catalog.generate_series(1, ${retainedRowsToSeed}) as series(n);
+      end $$;
+    `),
+  );
+  assert.equal(succeeded(await sql('select count(*) from public.entries;')), '4999');
+  const retainedRace = await runBehindLock({
+    holderName: 'mn-db-entry-global-retained-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-entry-global-retained-',
+    queries: retainedRequestKeys.map(
+      (key, index) =>
+        `set role service_role; ${create(retainedOwner, key, `global retained parallel ${index}`)}`,
+    ),
+  });
+  const retainedSuccess = retainedRace.findIndex((result) => result.code === 0);
+  assert.notEqual(retainedSuccess, -1);
+  assert.equal(retainedRace.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    retainedRace.filter(
+      (result) =>
+        result.code !== 0 && result.stderr.includes('ENTRY_GLOBAL_RETAINED_LIMIT_REACHED'),
+    ).length,
+    5,
+  );
+  const retainedWinnerId = succeeded(retainedRace[retainedSuccess]);
+  assert.equal(succeeded(await sql('select count(*) from public.entries;')), '5000');
+  assert.equal(
+    succeeded(
+      await sql(
+        `set role service_role; ${create(
+          retainedOwner,
+          retainedRequestKeys[retainedSuccess],
+          `global retained parallel ${retainedSuccess}`,
+        )}`,
+      ),
+    ),
+    retainedWinnerId,
+  );
+  const retainedWinnerEntry = succeeded(
+    await sql(`select id from public.entries where owner_id = '${retainedOwner}'
+      and create_request_id = '${retainedRequestKeys[retainedSuccess]}';`),
+  );
+  const retainedGlobalCountBeforeDelete = succeeded(
+    await sql(`select creation_count from private.entry_creation_global_daily
+      where day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+  );
+  succeeded(
+    await sql(
+      `set role service_role; select public.request_entry_deletion('${retainedOwner}','${retainedWinnerEntry}');`,
+    ),
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select creation_count from private.entry_creation_global_daily
+        where day_key = (statement_timestamp() at time zone 'Asia/Tokyo')::date;`),
+    ),
+    retainedGlobalCountBeforeDelete,
+  );
+  const retentionClaims = JSON.parse(
+    succeeded(await sql('set role service_role; select public.claim_retention_cleanup(10);')),
+  );
+  const seedOwnerSet = new Set(retainedSeedOwners);
+  const seedClaim = retentionClaims.find((claim) => seedOwnerSet.has(claim.owner_id));
+  assert.ok(seedClaim?.claim_token);
+  assert.equal(
+    succeeded(
+      await sql(`set role service_role; select public.finalize_retention_cleanup(
+        '${seedClaim.entry_id}', '${seedClaim.claim_token}', true);`),
+    ),
+    't',
+  );
+  const afterPurgeRequest = randomUUID();
+  assert.ok(
+    succeeded(
+      await sql(
+        `set role service_role; ${create(retainedOwner, afterPurgeRequest, '回収後の作成')}`,
+      ),
+    ),
+  );
+  assert.equal(succeeded(await sql('select count(*) from public.entries;')), '5000');
+  console.log('成功: global retained最終枠は6並列でも1件だけ、purgeが1行回収すると再作成可能');
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);

@@ -17,15 +17,24 @@
   overflow: visible;
 }
 
+.library-view-toolbar {
+  display: grid;
+  min-height: 50px;
+  flex: 0 0 50px;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  margin: 0 0 2px;
+}
+
 .library-view-tabs {
   display: grid;
   width: min(100%, 232px);
   min-height: 50px;
-  flex: 0 0 50px;
+  grid-column: 2;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
-  align-self: center;
-  margin: 0 auto 2px;
+  justify-self: center;
+  margin: 0;
   padding: 3px;
   border-radius: 999px;
   background: #f2f2f2;
@@ -54,6 +63,20 @@
   color: #252525;
   font-weight: 700;
   box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.library-refresh-button {
+  display: grid;
+  width: 40px;
+  height: 44px;
+  grid-column: 3;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #252525;
+  cursor: pointer;
 }
 
 .library-view-tab:focus-visible {
@@ -98,11 +121,13 @@
 }
 
 .library-view-tab:hover:not([aria-selected='true']),
-.library-month-button:hover:not(:disabled) {
+.library-month-button:hover:not(:disabled),
+.library-refresh-button:hover:not(:disabled) {
   background: #f6f6f6;
 }
 
 .library-month-button:focus-visible,
+.library-refresh-button:focus-visible,
 .library-day-button:focus-visible,
 .library-primary-link:focus-visible,
 .library-day-create-link:focus-visible,

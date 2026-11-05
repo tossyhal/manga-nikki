@@ -44,6 +44,10 @@ const rpcFailures: Record<string, { status: LiveEntryError['status']; code: stri
   REVISION_CONFLICT: { status: 409, code: 'REVISION_CONFLICT' },
   ENTRY_BUSY: { status: 409, code: 'ENTRY_BUSY' },
   DRAFT_LIMIT_REACHED: { status: 429, code: 'DRAFT_LIMIT_REACHED' },
+  ENTRY_OWNER_CREATE_LIMIT_REACHED: { status: 429, code: 'ENTRY_CREATE_RATE_LIMIT_REACHED' },
+  ENTRY_GLOBAL_CREATE_LIMIT_REACHED: { status: 429, code: 'ENTRY_CREATE_RATE_LIMIT_REACHED' },
+  ENTRY_OWNER_RETAINED_LIMIT_REACHED: { status: 429, code: 'ENTRY_RETAINED_LIMIT_REACHED' },
+  ENTRY_GLOBAL_RETAINED_LIMIT_REACHED: { status: 429, code: 'ENTRY_RETAINED_LIMIT_REACHED' },
 };
 
 function unavailable(): LiveEntryError {
@@ -124,7 +128,24 @@ function decodeCursor(value: string): z.infer<typeof cursorSchema> {
 
 function mapGeneration(value: unknown, entry: Entry): Generation {
   const generation = parseGenerationRow(value);
-  if (!generation || generation.entryId !== entry.id || generation.id !== entry.latestGenerationId)
+  if (
+    !generation ||
+    generation.entryId !== entry.id ||
+    generation.id !== entry.latestGenerationId ||
+    generation.entryRevision > entry.revision
+  )
+    throw unavailable();
+  return generation;
+}
+
+function mapLastSuccessfulGeneration(value: unknown, entry: Entry): Generation {
+  const generation = parseGenerationRow(value);
+  if (
+    !generation ||
+    generation.entryId !== entry.id ||
+    generation.status !== 'succeeded' ||
+    generation.entryRevision > entry.revision
+  )
     throw unavailable();
   return generation;
 }
@@ -204,18 +225,39 @@ export async function getLiveEntryDetail(
   if (error) readError(error);
   if (!data) return null;
   const entry = mapEntry(data);
-  if (!entry.latestGenerationId) return { ...entry, latestGeneration: null };
 
-  const generation = await client
-    .from('generations')
-    .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
-    .eq('id', entry.latestGenerationId)
-    .eq('entry_id', entry.id)
-    .eq('owner_id', context.owner)
-    .maybeSingle();
-  if (generation.error) readError(generation.error);
-  if (!generation.data) throw unavailable();
-  return { ...entry, latestGeneration: mapGeneration(generation.data, entry) };
+  const [latestResult, successfulResult] = await Promise.all([
+    entry.latestGenerationId
+      ? client
+          .from('generations')
+          .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
+          .eq('id', entry.latestGenerationId)
+          .eq('entry_id', entry.id)
+          .eq('owner_id', context.owner)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    client
+      .from('generations')
+      .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
+      .eq('entry_id', entry.id)
+      .eq('owner_id', context.owner)
+      .eq('status', 'succeeded')
+      .lte('entry_revision', entry.revision)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (latestResult.error) readError(latestResult.error);
+  if (successfulResult.error) readError(successfulResult.error);
+  const latestGeneration = latestResult.data ? mapGeneration(latestResult.data, entry) : null;
+  const queriedLastSuccessfulGeneration = successfulResult.data
+    ? mapLastSuccessfulGeneration(successfulResult.data, entry)
+    : null;
+  if (entry.latestGenerationId && !latestGeneration) throw unavailable();
+  const lastSuccessfulGeneration =
+    latestGeneration?.status === 'succeeded' ? latestGeneration : queriedLastSuccessfulGeneration;
+  return { ...entry, latestGeneration, lastSuccessfulGeneration };
 }
 
 export async function updateLiveEntry(

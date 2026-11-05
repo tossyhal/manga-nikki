@@ -4,6 +4,7 @@ import {
   createMockEntry,
   listMockEntries,
   getMockEntry,
+  getMockEntryDetail,
   reserveMockGeneration,
 } from './repositories/mock-service';
 import { Hono } from 'hono';
@@ -239,13 +240,7 @@ export function createApp(
       if (!detail) throw new ApiError(404, 'NOT_FOUND');
       return c.json(detail);
     }
-    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
-    return c.json({
-      ...entry,
-      latestGeneration: entry.latestGenerationId
-        ? (getRepository().generations.get(entry.latestGenerationId)?.generation ?? null)
-        : null,
-    });
+    return c.json(getMockEntryDetail(getRepository(), c.req.param('id'), c.get('owner')));
   });
   app.patch('/api/v1/entries/:id', async (c) => {
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));
@@ -264,10 +259,12 @@ export function createApp(
   app.delete('/api/v1/entries/:id', async (c) => {
     if (mode(c.env) !== 'local-mock')
       return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
-    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
-    getRepository().entries.delete(entry.id);
-    for (const [key, job] of getRepository().generations)
-      if (job.generation.entryId === entry.id) getRepository().generations.delete(key);
+    const repository = getRepository();
+    const { entry, requestId } = getMockEntry(repository, c.req.param('id'), c.get('owner'));
+    repository.entryTombstones.add(`${c.get('owner')}:${requestId}`);
+    repository.entries.delete(entry.id);
+    for (const [key, job] of repository.generations)
+      if (job.generation.entryId === entry.id) repository.generations.delete(key);
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
@@ -309,7 +306,7 @@ export function createApp(
   });
   app.get('/api/v1/assets/:id/url', async (c) => {
     const current = mode(c.env);
-    if (current === 'local-connected') {
+    if (current === 'local-connected' || current === 'live-demo') {
       const asset = await getLiveMockAssetUrl(liveContext(c), c.req.param('id'));
       if (!asset) throw new ApiError(404, 'NOT_FOUND');
       return c.json(asset);
