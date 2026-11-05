@@ -402,6 +402,8 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     expect(calendar).not.toBeNull();
     expect(selectedDay).not.toBeNull();
     expect((calendar?.x ?? 0) + (calendar?.width ?? 0)).toBeLessThan(selectedDay?.x ?? 0);
+    expect(calendar?.height).toBeLessThanOrEqual(320);
+    expect(selectedDay?.height).toBeLessThanOrEqual(360);
     await expectMainToFit(page);
 
     await page.getByRole('tab', { name: 'リスト' }).click();
@@ -453,6 +455,54 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(1280);
+});
+
+test('960x540の保存エラー時は本文をスクロールできCTAと下部ナビを離す', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request-id',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 960, height: 540 });
+  await page.goto('/new');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('短い画面で保存エラーを確認する日記。');
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  const errorCard = page.locator('.save-error-card');
+  const retry = page.getByRole('button', { name: 'もう一度保存' });
+  await expect(errorCard).toBeVisible();
+  await expect(retry).toBeEnabled();
+  await errorCard.scrollIntoViewIfNeeded();
+  await expect(errorCard).toBeInViewport();
+  await retry.scrollIntoViewIfNeeded();
+  await expect(retry).toBeInViewport();
+
+  const layout = await page.evaluate(() => {
+    const main = document.querySelector('#main');
+    const action = document.querySelector('.primary-action-row > .button');
+    const nav = document.querySelector('.bottom-nav');
+    if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement) || !nav)
+      throw new Error('本文領域、保存操作、または下部ナビがありません');
+    return {
+      mainOverflow: main.scrollHeight - main.clientHeight,
+      actionBottom: action.getBoundingClientRect().bottom,
+      navTop: nav.getBoundingClientRect().top,
+    };
+  });
+  expect(layout.mainOverflow).toBeGreaterThan(0);
+  expect(layout.navTop - layout.actionBottom).toBeGreaterThanOrEqual(23.5);
 });
 
 test('通常の高さではHome・入力・6週カレンダー・20件一覧にスクロールを出さない', async ({
