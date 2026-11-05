@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const releaseTargets = new Set(['staging', 'production']);
+const releaseTargets = new Set(['staging', 'production', 'demo']);
 const publicVariables = new Set([
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
@@ -16,7 +16,7 @@ const publicVariables = new Set([
 ]);
 const target = process.argv[2];
 
-assert(releaseTargets.has(target), '対象はstagingまたはproductionを指定してください。');
+assert(releaseTargets.has(target), '対象はstaging、productionまたはdemoを指定してください。');
 
 function saveEnvironment(keys) {
   return new Map([...keys].map((key) => [key, process.env[key]]));
@@ -86,6 +86,13 @@ try {
   for (const key of environmentKeys) delete process.env[key];
 
   const publicValues = await loadPublicVariables();
+  if (target === 'demo') {
+    const missing = [...publicVariables].filter((key) => !publicValues[key]?.trim());
+    assert(
+      missing.length === 0,
+      `.env.demo.localに公開設定の3変数を設定してください: ${missing.join(', ')}`,
+    );
+  }
   Object.assign(process.env, publicValues);
   process.env.NODE_ENV = 'production';
   process.env.CLOUDFLARE_ENV = target;

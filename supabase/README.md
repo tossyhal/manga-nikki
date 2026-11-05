@@ -2,7 +2,7 @@
 
 基盤はPR#29まで`main`へ統合済みです。OpenAI画像保存・復旧のDB migrationはこのbranchへ追加しましたが、共有DBへは適用していません。段階ごとの詳細は[開発計画](../docs/PLAN.md)を参照してください。
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。`20261105000000_openai_generation_saving.sql`は固定OpenAI profile allowlist、OpenAI専用の原子的予約、対応profileのquota評価、claimの日記日付、保存開始ゲート、保存復旧の5分backoff・24時間期限・候補fairnessを追加します。`20261106000000_comic_storage.sql`はprivate save task、独立した120秒save lease、deterministic asset manifest、succeeded確定RPC、taskとassetsを合わせたretention path snapshot、purge後にStorage pathだけを保持する削除outboxを追加します。local-connectedの受付API・固定mock Queue Consumer・期限削除Scheduled handlerを実装済みです。実API課金・共有DBへのmigration適用・実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。過去の隔離環境で一部のAuth / CRUD / 固定mock Queue / Storage削除service / bucket RLSを確認していますが、最新branchの全経路を確認したものではありません。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。`20261105000000_openai_generation_saving.sql`は固定OpenAI profile allowlist、OpenAI専用の原子的予約、対応profileのquota評価、claimの日記日付、保存開始ゲート、保存復旧の5分backoff・24時間期限・候補fairnessを追加します。`20261106000000_comic_storage.sql`はprivate save task、独立した120秒save lease、deterministic asset manifest、succeeded確定RPC、taskとassetsを合わせたretention path snapshot、purge後にStorage pathだけを保持する削除outboxを追加します。`20261106010000_entry_write_limits.sql`は新規日記作成のowner/global日次counterと、JST日次頻度・論理削除を含む未回収行の上限を追加します。local-connectedの受付API・固定mock Queue Consumerと期限削除Scheduled handlerを実装済みです。実API課金・共有DBへのmigration適用・実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。過去の隔離環境で一部のAuth / CRUD / 固定mock Queue / Storage削除service / bucket RLSを確認していますが、最新branchの全経路を確認したものではありません。
 
 ## 検証
 
@@ -21,16 +21,16 @@ pnpm test:db
 - `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・receipt照会の副作用がないこと・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
 - `tests/generation_queue.sql`は停止中のmock専用予約・実profile拒否・fixture完了とconsumed台帳・未送信release・削除/期限照合・未配送再送抑止・unknown/heldとRPC権限を検証します。実AIや外部Queueは呼び出しません。
 - `tests/openai_generation.sql`は固定OpenAI profile allowlist・環境/DB停止・非mock quota・費用/全体枠・所有者分離・claim日付・5 attempt完了・保存開始前の削除/期限・冪等なsaving再送・候補fairness・最大3件の保存復旧・5分backoff・24時間期限後のconsumed精算・RPC/column権限を検証します。実AIや画像保存は呼び出しません。
-- `tests/comic_storage.sql`はprivate task/RPC ACL・owner/revision/date/profile/claim検査・UUID version/variant形式のdeterministic asset path・sha256/media/dimension/byte上限・Comic/asset順序一致・成功再送・5 attempt再検査・取消/期限・24時間上限・画像欠損のconsumed精算・lease重複claim・retention path union・purgeとoutbox登録の原子性・GC ACLとmarker再照合を検証します。実Storageや画像bytesは使いません。
+- `tests/comic_storage.sql`はprivate task/RPC ACL・owner/revision/date/profile/claim検査・UUID version/variant形式のdeterministic asset path・sha256/media/dimension/byte上限・Comic/asset順序一致・成功再送・5 attempt再検査・取消/期限・24時間上限・画像欠損のconsumed精算・lease重複claim・retention path unionを検証します。実Storageや画像bytesは使いません。
+- `tests/entry_write_limits.sql`はJST日付、冪等再送・削除を二重計上しないこと、owner/globalの日次・保持上限、Storage-first purge後の容量回復、counterのprivate ACLと古い行の回収を検証します。`scripts/test-db.mjs`は別接続の並列要求も実行します。
 - `tests/retention.sql`はasset owner/effective-entry RLS、path制約、active job待ち、stale lease、Storage成功後のfinalize、held台帳・provider ID保持、counter不変、tombstoneを検証します。Storageの独立API・RLSは対象外です。
-- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算、およびowner advisory lock下のpurge/create replay競合を検証します。
+- 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、owner/globalの日次作成最終枠、owner/global retained最終枠、物理purge後の再作成、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算、およびglobal→owner advisory lock下のpurge/create replay競合を検証します。
 - 実SupabaseのAuth・PostgREST・Storageを経由するテストは別途必要です。この検証はPostgreSQLの制約・RLS・RPCを対象にします。
 - 実行スクリプトは復旧claim 6並列も実行し、同じsaving jobのsave leaseを1件だけ発行します。
-- 実行スクリプトはStorage削除outboxの40件上限、安定したpath順、ロック中の`SKIP LOCKED`、複数batchの重複なしを隔離DBで検証します。
 
 ## 保存API担当との接続契約
 
-書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。server-only RPCの実行権限は`service_role`だけに付与し、通常のRPCは`SECURITY INVOKER`・空の`search_path`で動作します。save task RPCはtask表とquotaのDMLを直接grantしないため、所有者・job・revision・date・profile・attempt・reservationを関数内で確認する狭い`SECURITY DEFINER`関数です。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERT・`state`列UPDATEできます。provider attempt ledgerはSELECT・INSERTでき、UPDATEは`state`・`request_id`・`finished_at`列に限定します。`public.generations`はSELECT・INSERTでき、UPDATEはjob lifecycle列と`save_recovery_retry_at`に限られます。private save taskへの直接アクセスは全roleで禁止します。table-level UPDATE、profile snapshot、`is_mock`のUPDATEは許可しません。どちらのprivate ledgerもDELETE権限はありません。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
+書き込みはWorker内のサーバー専用Supabaseクライアントから呼び出します。`p_actor_id`には、Workerが署名・issuer・audience・期限を検証し、Authから現在のユーザーも確認したJWTの`sub`だけを渡してください。本文中の所有者指定は使いません。server-only RPCの実行権限は`service_role`だけに付与します。通常RPCは`SECURITY INVOKER`・空の`search_path`で動作します。`create_entry`とsave task RPCはprivate counter / task表のDMLを直接grantしないため、所有者や上限・job・revision・date・profile・attempt・reservationを関数内で確認する狭い`SECURITY DEFINER`関数です。これらは空の`search_path`と完全修飾名を使い、`PUBLIC`・`anon`・`authenticated`から実行権限を剥奪します。`service_role`はpolicyをSELECTのみ、quota counterをSELECT・INSERT・UPDATE、reservation ledgerをSELECT・INSERT・`state`列UPDATEできます。provider attempt ledgerはSELECT・INSERTでき、UPDATEは`state`・`request_id`・`finished_at`列に限定します。`public.generations`はSELECT・INSERTでき、UPDATEはjob lifecycle列と`save_recovery_retry_at`に限られます。private save taskとentry write counterへの直接アクセスは全roleで禁止します。table-level UPDATE、profile snapshot、`is_mock`のUPDATEは許可しません。どちらのprivate ledgerもDELETE権限はありません。一般ユーザーの権限はなく、アプリの通常経路はRPC専用client factoryに限定します。
 
 | RPC | 引数 | 戻り値 |
 |---|---|---|
@@ -73,6 +73,8 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 | `NOT_FOUND` | 404 |
 | `IDEMPOTENCY_CONFLICT` / `REVISION_CONFLICT` / `ENTRY_BUSY` | 409 |
 | `DRAFT_LIMIT_REACHED` | 429 |
+| `ENTRY_OWNER_CREATE_LIMIT_REACHED` / `ENTRY_GLOBAL_CREATE_LIMIT_REACHED` | 429 |
+| `ENTRY_OWNER_RETAINED_LIMIT_REACHED` / `ENTRY_GLOBAL_RETAINED_LIMIT_REACHED` | 429 |
 | `USER_LIMIT_REACHED` / `GLOBAL_LIMIT_REACHED` / `TOO_MANY_ACTIVE` | 429 |
 | `GENERATION_DISABLED` | 503 |
 
@@ -123,7 +125,6 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - `comic_save_tasks`はprivate・RLS有効で、service_roleにもtable DMLをgrantしません。taskには脚本、完成漫画draft、ordered asset manifest、hashとStorage pathを保存し、image bytesは保存しません。asset IDはgeneration IDとpanel indexから決定し、UUIDのversion/variant bitを固定します。Storage pathは`<owner>/<generation>/<asset>.png|jpg|webp`です。各画像はPNG/JPEG/WebP、8MiB以下、幅/高さ2048以下・1画像4,194,304画素以下で、4枚合計16MiB・16,777,216画素以下です。Workerは実bytesのmagic/MIME・寸法・SHA-256を検証し、DBはplanned manifestと完了入力の一致を確認します。
 - `begin_comic_save_task`と`claim_comic_save_recovery`はprovider `claim_token`を変えず、別のsave tokenと最長120秒のleaseを持ちます。recovery leaseは元claimの24時間境界を越えません。画像保存後にDB確定が失敗した場合はtask manifestの既存Storage objectから再開し、AIを呼び直しません。taskがない、必要な画像が欠損、期限/cancelに該当する場合は安全に終端化し、5回の成功attempt分を`consumed`に残します。
 - 未完了taskのpathはStorage削除対象の一部として`claim_retention_cleanup`が`public.assets` pathとunionでsnapshotします。active save lease中はcleanup claim/finalizeを拒否します。`finalize_retention_cleanup`は同じunionが残ることとStorage削除成功を確認し、assets/jobとtaskを削除します。成功時はasset metadataとcomic JSONを確定したtransaction内でtaskを消し、path/hashを`public.assets`に残します。authenticated asset RLSはgeneration `succeeded`後だけasset IDを返し、owner/pathは公開しません。
-- purgeはtaskのplanned pathと`public.assets` pathを同一transactionのprivate `storage_deletion_outbox`へ移します。tableは直接読書きできず、`claim_storage_deletion_cleanup` / `finalize_storage_deletion_cleanup`だけをservice_roleへ許可します。claimは最大40pathを15分leaseで取得し、runtimeはStorage `remove`後の`list`不在を確認してから次回確認時刻を設定します。absence確認後もpath markerは削除せず、遅延uploadが同じobjectを再作成した場合に次の日次照合で再削除します。
 - `list_generation_reconcile_candidates`は旧action (`cancel` / `expire` / `enqueue`) と戻りshapeを維持します。`list_generation_reconcile_candidates_v2`は通常精算を先にし、`retry_at`まで待機していない有効saving復旧を最大3件（enqueue候補があれば残枠の半分以下）、残りをenqueueとして返します。これでpending/例外のsavingが毎回先頭を占めず、後続savingとQueue再送も進みます。復旧対象は未削除・期限内でownerが一致するentry、`cancel_requested=false`、`is_mock=false`、固定OpenAI profile、`reserved`予約、期限切れ後24時間以内の`running`/`saving`です。削除/期限切れ・取消済み・mock・未対応profile・期限切れ後24時間超は通常の`expire`精算へ回します。保存復旧で画像生成を再実行せず、callback未設定時はsaving・予約を変更しません。復旧callback前に`begin_generation_save_recovery`を呼ぶことで同時実行を直列化し、pendingや例外後の再試行を5分止めます。
 
 ## 適用と後続作業

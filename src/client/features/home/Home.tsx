@@ -2,7 +2,6 @@ import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { type Entry, type Generation } from '../../../shared/schemas';
-import { jstToday } from '../../../shared/date';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
 import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
@@ -13,6 +12,7 @@ import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { AppStateCard, configUnavailableMessage } from '../../app/AppStateCard';
 import { useHomeRecords } from './useHomeRecords';
+import { useJstToday } from '../../lib/useJstToday';
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
   return (
@@ -133,15 +133,11 @@ export function Home({
   const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
-  const currentDay = jstToday();
-  const todayEntries = entries.filter((entry) => entry.diaryDate === currentDay);
+  const today = useJstToday();
+  const todayEntries = entries.filter((entry) => entry.diaryDate === today);
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
   const [sampleOpen, setSampleOpen] = useState(false);
-  const [today] = useState(() => {
-    const date = jstToday();
-    return { date, label: formatDiaryDate(date) };
-  });
 
   if (showSample && sampleOpen) {
     return (
@@ -175,11 +171,9 @@ export function Home({
 
   return (
     <div className="home-page">
-      {today && (
-        <time className="home-date" dateTime={today.date}>
-          {today.label}
-        </time>
-      )}
+      <time className="home-date" dateTime={today}>
+        {formatDiaryDate(today)}
+      </time>
       <section className="today-section" aria-labelledby="today-heading">
         <h1 id="today-heading" className={showSample && !configError ? undefined : 'sr-only'}>
           {showSample && !configError ? 'サンプル' : '今日の記録'}

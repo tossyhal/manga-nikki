@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { publicConfigGuard } from './src/build/public-config-guard';
 
-const isReleaseBuild = ['staging', 'production'].includes(
+const isReleaseBuild = ['staging', 'production', 'demo'].includes(
   process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
 );
 const isPlaywrightE2e = process.env.MANGA_NIKKI_E2E === '1';

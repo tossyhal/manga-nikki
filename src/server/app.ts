@@ -259,10 +259,12 @@ export function createApp(
   app.delete('/api/v1/entries/:id', async (c) => {
     if (mode(c.env) !== 'local-mock')
       return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
-    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
-    getRepository().entries.delete(entry.id);
-    for (const [key, job] of getRepository().generations)
-      if (job.generation.entryId === entry.id) getRepository().generations.delete(key);
+    const repository = getRepository();
+    const { entry, requestId } = getMockEntry(repository, c.req.param('id'), c.get('owner'));
+    repository.entryTombstones.add(`${c.get('owner')}:${requestId}`);
+    repository.entries.delete(entry.id);
+    for (const [key, job] of repository.generations)
+      if (job.generation.entryId === entry.id) repository.generations.delete(key);
     return c.json({ deletionAccepted: true }, 202);
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {

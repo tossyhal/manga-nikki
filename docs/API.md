@@ -72,6 +72,8 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
 - 409 Conflict：
   - 自分の日記に対する更新・生成で`expectedRevision`が一致しない場合は`409`を返します。
   - 下書き作成（`POST /entries`）で同じ`createRequestId`が送られた場合、本文や日付が同じなら既存のEntryを返し（冪等）、異なる内容なら`409`を返します。
+- 429 Too Many Requests：
+  - 未生成下書き20件の`DRAFT_LIMIT_REACHED`に加え、`ENTRY_CREATE_RATE_LIMIT_REACHED`（JST日次の作成頻度）と`ENTRY_RETAINED_LIMIT_REACHED`（未回収行の保持上限）を返します。どの上限に達したかは本文の一般化したmessageで案内し、SQLエラーやcounter値は返しません。
 
 ---
 
@@ -87,6 +89,8 @@ liveのブラウザは`/config`をstrict schemaで検証し、Supabase JS SDKに
   - ロケール（言語）・画風・AIモデル・解像度はユーザー入力では選択させず、サーバー側のMVP設定に固定します。
 - 下書き上限と編集競合
   - 未生成の下書きは1ユーザーあたり最大20件まで。
+  - 新しい`createRequestId`による作成はownerあたりJST日次50件、全体JST日次1,000件までです。削除済み・期限切れでも物理回収前のentryは保持件数に含み、ownerあたり100件、全体5,000件を超える新規作成を拒否します。通常の論理削除は制限せず、作成頻度counterは戻しません。
+  - 同じowner・`createRequestId`・作成時日付/本文/同意versionの再送は既存entryを返し、編集後も作成時fingerprintを照合します。冪等再送は頻度・保持上限へ新規計上しません。削除済み・期限切れ・tombstone済みの要求は`NOT_FOUND`となり、別の作成要求での再作成だけが新規枠を使います。
   - 日記の更新には`expectedRevision`の一致が必須です。
   - `queued`または`running`（生成待ち・生成中）のジョブが存在する日記は、本文の変更を`409 ENTRY_BUSY`で拒否します。
   - 生成完了後に日記を編集した場合は`revision`を`+1`増やし、古い漫画を表示する際には画面上で「編集前の日記から生成」と明示します。
@@ -215,6 +219,8 @@ type ComicDocument = {
 | `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
 | `413` | `INPUT_TOO_LARGE` | 入力サイズの削減を案内 |
 | `429` | `DRAFT_LIMIT_REACHED` | 下書き上限。不要な記録の削除を案内 |
+| `429` | `ENTRY_CREATE_RATE_LIMIT_REACHED` | 日記の作成頻度上限。JST翌日以降の再操作を案内 |
+| `429` | `ENTRY_RETAINED_LIMIT_REACHED` | 物理回収前の保持件数上限。削除済み記録の回収後に再操作を案内 |
 | `429` | `USER_LIMIT_REACHED` / `GLOBAL_LIMIT_REACHED` / `TOO_MANY_ACTIVE` | 新規生成を停止。架空サンプルや保存済み履歴の閲覧は引き続き利用可能と案内 |
 | `503` | `GENERATION_DISABLED` / `DEPENDENCY_UNAVAILABLE` | サービス停止中または一時障害を表示し、ボタンを繰り返し連打させない |
 
@@ -267,7 +273,7 @@ type ComicDocument = {
 
 | RPC名 | 呼び出し元 | 処理内容・保証する条件 |
 |---|---|---|
-| `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き件数上限と本文を検証 |
+| `create_entry` | Worker（Supabase secret keyを使うclientのみ） | `actorId`は検証済みJWT由来。同一`createRequestId`は冪等に処理し、下書き20件・owner retained100件・global retained5,000件・JST日次owner50件/global1,000件と本文を検証 |
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
@@ -291,7 +297,7 @@ type ComicDocument = {
 | `finalize_retention_cleanup` | 日次cleanup service | Storage削除成功後だけ実行する。lease/token・期限・active jobなし・claim時点と同じasset path集合を再確認して台帳をprivateへ移し、asset→job→entryを削除する。quota counterは変更しない |
 | `fail_or_hold_generation` | Consumer / 定期照合 | `p_generation_id uuid`, `p_claim_token uuid`（queued jobは`null`）, `p_terminal_status text`（`failed` / `cancelled`）。未送信が証明できる場合だけreservationをreleaseし、結果不明はjob `unknown` / reservation `held`、結果既知は最大予約額を`consumed` |
 
-- デッドロック防止のロック順序：`reserve_generation` RPCは、冪等性確認・枠確保・金額予約・job作成・pointer更新を1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCはpolicy用2整数advisory transaction lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
+- デッドロック防止のロック順序：`create_entry`はgeneration / purgeと共通のpolicy用advisory transaction lock `(20261103, 10001)`→owner advisory lockの順に取り、冪等性確認・active draft・保持件数・日次counter・INSERTを1トランザクションで処理します。quota lockを取るreserve/claim/attempt/settlement RPCは同じpolicy lock→global total→global day→user day→entry→job→attemptの固定順序を守ります。削除受付はentry/jobだけをロックしてcancel flagを立て、同じtransaction内ではquotaを触りません。policy更新triggerも同じadvisory lockを取るため、運用者はpolicy変更を単独の短いtransactionで行い、すぐcommitします。
 - 物理削除のfinalizeもpolicy advisory lock→owner advisory lock→entry→jobの順で処理します。期限切れ/削除済みentryにqueued / running jobがあればcleanup claimから除外し、Queue側の`fail_or_hold_generation`によるcancel・精算が終わるまでmetadataを保持します。
 - APIはTurnstile検証前に`find_generation_receipt`を呼び、receiptがあれば返します。`null`の場合だけCAPTCHAを検証して、local-connectedでは`reserve_mock_generation`、live-demoでは`reserve_openai_generation`を呼びます。各wrapperはpolicy更新用lockを保持し、指定されたmockまたは固定OpenAI profileだけを既存予約RPCへ渡します。新規live-demo予約は、環境flag・OpenAI key・Queue・Turnstile・保存handler・復旧callbackの設定もそろわなければ拒否します。保存系handlerが不足して新規受付が止まっても、既存queued jobのreservationは`reserved`のまま保持し、自動releaseしません。既存jobはready条件が戻った後にreconcileからQueueへ再送します。
 - `find_generation_receipt`は有効な本人entryを確認し、既存jobの有無を返す読み取りRPCです。停止中も使え、日記の現在revision一致は要求しません。未登録キーは`null`、別entry/revisionで同じキーを使った場合は`IDEMPOTENCY_CONFLICT`、他人・削除済み・期限切れentryは`NOT_FOUND`です。`reserve_generation`も既存キーを返す前にentryの所有者・未削除・期限内を確認します。
@@ -440,7 +446,7 @@ Worker entrypointは`src/server/index.ts`の`createWorker`で、runtime default�
 
 ### 実効ready条件
 
-- `/config.generationAvailable`はlive-demoで、新規生成用の`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handler、復旧callbackがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。default exportには保存handlerが注入済みですが、staging/productionの現在設定はsample mode・Queue未設定・実AI無効のためfalseです。
+- `/config.generationAvailable`はlive-demoで、新規生成用の`GENERATION_ENABLED=true`、サーバー側`OPENAI_API_KEY`、Queue、許可hostnameを伴うTurnstile secret、保存handler、復旧callbackがそろった場合だけtrueです。keyやsecretはブラウザ設定へ出しません。default exportには保存handlerが注入済みですが、staging/productionの現在設定はsample mode・Queue未設定・実AI無効であり、demo targetも初期`GENERATION_ENABLED=false`のため新規生成は停止します。
 - `GET /me/quota.generationAvailable`はこれらの実行設定に加え、DB policyがenabled、固定profileと予算・全体枠・ユーザー枠が利用可能であることを確認します。画面はconfigとquotaの両方が利用可能な場合だけ「4コマにする」を有効にします。
 - live-demoの保存復旧用Cronは`recoverGeneratedComic`が設定されていれば、`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存のeligibleなsaving jobを回復できます。DBの候補選択順は通常精算→保存復旧→enqueueで、復旧候補は最大3件かつenqueueがあれば残枠のおよそ半分までに制限されます。Runtimeの実行順は通常精算→enqueue→保存復旧で、Queue送信の枠を先に確保します。復旧開始RPCがfalseなら別workerが取得済みまたは不適格としてcallbackを呼びません。成功時はDB状態を再検査し、nullableな`save_recovery_retry_at`を5分先へ進めてからcallbackを呼びます。worker一回のCronでcallbackは最大3回、各最大120秒です。次の保存復旧は元のprovider claim `deadline_at`から24時間以内に限られます。5分backoff中はcandidateから外し、通常expireにも落としません。24時間を超えたsaving jobは通常expireで`failed` / `consumed`として精算し、reservationをreleaseせずAI再実行もしません。新しいAI生成は開始しません。
 - initial DB policyは停止、全体枠・総予算は0です。共有DB migrationを適用していないため、実環境でのready状態・課金品質・利用可能なアカウント権限は未確認です。実AI利用は通常開発やCIでは行いません。

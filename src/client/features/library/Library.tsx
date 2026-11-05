@@ -9,10 +9,10 @@ import {
 import { hasMonthCoverage, targetEntryCount, listPageSize, dayPageSize } from './libraryCoverage';
 import { PageControls } from './LibraryPageControls';
 import { LibraryViewTabs } from './LibraryViewTabs';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { jstToday } from '../../../shared/date';
 import { Icon } from '../../app/Icon';
+import { useJstToday } from '../../lib/useJstToday';
 import { EntryHistory } from './EntryHistory';
 import {
   defaultLibrarySearch,
@@ -26,7 +26,7 @@ const firstMonth = '0001-01';
 const lastMonth = '9999-12';
 
 export function Library() {
-  const [today] = useState(() => jstToday());
+  const today = useJstToday();
   const location = useLocation();
   const navigate = useNavigate();
   const parsedSearch = useMemo(
@@ -50,6 +50,7 @@ export function Library() {
     setSessionUnavailable,
     loadThroughMonth,
     loadThroughListPage,
+    refreshEntries,
     mountedRef,
   } = useLibraryEntries(searchState.month);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
@@ -225,6 +226,12 @@ export function Library() {
     }
   }
 
+  function refresh() {
+    attemptedListRestoreRef.current = null;
+    updateSearch({ listPage: 1, dayPage: 1 });
+    void refreshEntries(visibleMonth);
+  }
+
   const selectedLabel = (() => {
     const { month, day } = dateParts(selectedDate);
     return `${month}月${day}日`;
@@ -278,7 +285,18 @@ export function Library() {
         記録
       </h1>
 
-      <LibraryViewTabs view={view} onChange={(view) => updateSearch({ view })} />
+      <div className="library-view-toolbar">
+        <LibraryViewTabs view={view} onChange={(view) => updateSearch({ view })} />
+        <button
+          type="button"
+          className="library-refresh-button"
+          aria-label="記録を再読み込み"
+          aria-busy={busy}
+          onClick={refresh}
+        >
+          <Icon name="refresh" size={20} />
+        </button>
+      </div>
 
       <div
         id="library-calendar-panel"

@@ -136,6 +136,43 @@ describe('API error guidance', () => {
     });
   });
 
+  it('explains entry creation rate and retention limits without exposing backend details', async () => {
+    for (const [code, message] of [
+      [
+        'ENTRY_CREATE_RATE_LIMIT_REACHED',
+        '本日の記録作成上限に達しています。明日以降にお試しください。',
+      ],
+      [
+        'ENTRY_RETAINED_LIMIT_REACHED',
+        '未回収の記録が上限に達しています。削除済みの記録が回収された後にお試しください。',
+      ],
+    ]) {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(() =>
+          Promise.resolve(
+            Response.json(
+              {
+                error: {
+                  code,
+                  message: 'private SQL detail',
+                  requestId: 'limit-request',
+                  retryable: false,
+                },
+              },
+              { status: 429 },
+            ),
+          ),
+        ),
+      );
+      await expect(api('/entries')).rejects.toMatchObject({
+        status: 429,
+        code,
+        message,
+      });
+    }
+  });
+
   it('keeps the mock bearer behavior and generation request', async () => {
     const request = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ ok: true })));
     vi.stubGlobal('fetch', mockFetch(request));
