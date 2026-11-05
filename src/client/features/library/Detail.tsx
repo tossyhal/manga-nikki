@@ -6,7 +6,15 @@ import { DetailToolbar } from './DetailToolbar';
 import { DiaryDateField } from '../diary/DiaryDateField';
 import { DiaryBodyField } from '../diary/DiaryBodyField';
 import { formatDiaryDate } from '../../lib/diaryDate';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { type EntryDetail, type Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
@@ -27,6 +35,7 @@ import { GenerationQuotaStatus } from '../diary/GenerationQuotaStatus';
 import { RegistrationCaptcha } from '../diary/RegistrationCaptcha';
 import { ConfirmDialog } from '../../app/ConfirmDialog';
 import { Icon } from '../../app/Icon';
+import { mergeEntryGenerationProgress } from './generationProgress';
 
 function generationActionErrorMessage(failure: unknown, fallback: string): string {
   if (failure instanceof ApiClientError && failure.code === 'DEPENDENCY_UNAVAILABLE') {
@@ -39,10 +48,12 @@ function DetailContent({
   id,
   config,
   onActivityChange,
+  hasBlockedNavigation,
 }: {
   id: string;
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
+  hasBlockedNavigation: () => boolean;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -60,6 +71,12 @@ function DetailContent({
     draftSavedNavigation ? id : null,
   );
   const [entry, setEntry] = useState<EntryDetail | null>(null);
+  const setEntrySafely: Dispatch<SetStateAction<EntryDetail | null>> = useCallback((update) => {
+    setEntry((current) => {
+      const incoming = typeof update === 'function' ? update(current) : update;
+      return incoming && current ? mergeEntryGenerationProgress(current, incoming) : incoming;
+    });
+  }, []);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [generationCaptchaOpen, setGenerationCaptchaOpen] = useState(false);
@@ -83,14 +100,14 @@ function DetailContent({
       location.state.startGeneration === true,
     ),
   );
-  const { quota, activeGeneration, quotaState, setActiveGeneration, refreshQuota } =
+  const { quota, activeGeneration, quotaState, refreshing, setActiveGeneration, refreshQuota } =
     useGenerationQuota({
       dataMode: config.dataMode,
       activeRef,
       markLoading: false,
       onActiveGeneration: (current) => {
         if (current.entryId === id)
-          setEntry((existing) =>
+          setEntrySafely((existing) =>
             existing
               ? { ...existing, latestGenerationId: current.id, latestGeneration: current }
               : existing,
@@ -121,7 +138,7 @@ function DetailContent({
     setReloadLatestConfirmOpen,
   } = useEntryEditor({
     entry,
-    setEntry,
+    setEntry: setEntrySafely,
     pending,
     busy,
     activeRef,
@@ -164,13 +181,13 @@ function DetailContent({
     activeRef.current = true;
     return () => {
       activeRef.current = false;
-      onActivityChange({ dirty: false, busy: false });
+      onActivityChange({ dirty: false, busy: false, failed: false });
     };
   }, [onActivityChange]);
 
   useLayoutEffect(() => {
-    if (activeRef.current) onActivityChange({ dirty: draftDirty, busy });
-  }, [busy, draftDirty, onActivityChange]);
+    if (activeRef.current) onActivityChange({ dirty: draftDirty, busy, failed: Boolean(error) });
+  }, [busy, draftDirty, error, onActivityChange]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
@@ -182,12 +199,12 @@ function DetailContent({
     getEntry(id)
       .then(async (result) => {
         if (!active || !result.latestGenerationId) {
-          if (active) setEntry(result);
+          if (active) setEntrySafely(result);
           return;
         }
         const latestGeneration = await getGeneration(result.latestGenerationId).catch(() => null);
         if (active) {
-          setEntry(latestGeneration ? { ...result, latestGeneration } : result);
+          setEntrySafely(latestGeneration ? { ...result, latestGeneration } : result);
         }
       })
       .catch((e: Error) => {
@@ -196,7 +213,7 @@ function DetailContent({
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, setEntrySafely]);
   useEffect(() => {
     if (autoGenerationRequestedRef.current && location.state !== null)
       navigate(location.pathname, { replace: true, state: null });
@@ -224,6 +241,10 @@ function DetailContent({
   );
   const comicFromPreviousRevision =
     generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
+  const showQuotaStatus = Boolean(
+    quota &&
+    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
+  );
   const showGenerationAction = Boolean(
     !pending &&
     !unknownGeneration &&
@@ -234,7 +255,7 @@ function DetailContent({
   const draftSavedConfirmation = Boolean(
     entry && draftSavedEntryId === id && !generation && !generationReferenceUnavailable && !editing,
   );
-  const editFormVisible = Boolean(entry && editing && !pending);
+  const editFormVisible = Boolean(entry && editing);
   const statusKind: 'queued' | 'running' | 'unknown' | 'failed' | 'cancelled' | null =
     generation?.status === 'queued'
       ? 'queued'
@@ -278,11 +299,6 @@ function DetailContent({
   const savedDiaryPreview = savedDiaryHasMore
     ? `${savedDiaryCharacters.slice(0, 120).join('')}…`
     : savedDiaryCharacters.join('');
-  const showQuotaStatus = Boolean(
-    quota &&
-    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
-  );
-
   useEffect(() => {
     if (!error || !editFormVisible) return;
     const alert = editErrorRef.current;
@@ -301,7 +317,7 @@ function DetailContent({
 
   function applyGeneration(currentGeneration: Generation) {
     setActiveGeneration(currentGeneration);
-    setEntry((current) =>
+    setEntrySafely((current) =>
       current
         ? {
             ...current,
@@ -322,7 +338,7 @@ function DetailContent({
       setReceiptUncertain(false);
       setGenerationCaptchaRetry(false);
       setError('');
-      await refreshQuota();
+      await refreshQuota({ fresh: true });
     } catch {
       if (!activeRef.current) return;
       setReceiptUncertain(true);
@@ -363,14 +379,14 @@ function DetailContent({
       apiFailure?.code === 'GENERATION_DISABLED' ||
       apiFailure?.code === 'DEPENDENCY_UNAVAILABLE'
     )
-      await refreshQuota();
+      await refreshQuota({ fresh: true });
     if (
       apiFailure?.code === 'ENTRY_BUSY' ||
       apiFailure?.code === 'IDEMPOTENCY_CONFLICT' ||
       apiFailure?.code === 'REVISION_CONFLICT'
     ) {
       const latest = await readLatestEntry().catch(() => null);
-      if (activeRef.current && latest) setEntry(latest);
+      if (activeRef.current && latest) setEntrySafely(latest);
     }
   }
 
@@ -435,11 +451,11 @@ function DetailContent({
     try {
       const latest = await readLatestEntry();
       if (!activeRef.current) return;
-      setEntry(latest);
+      setEntrySafely(latest);
       setDraftDate(latest.diaryDate);
       setDraftBody(latest.body);
       setReceiptUncertain(false);
-      await refreshQuota();
+      await refreshQuota({ fresh: true });
     } catch (failure) {
       if (activeRef.current)
         setError(failure instanceof Error ? failure.message : '最新の状態を読み込めませんでした。');
@@ -468,8 +484,8 @@ function DetailContent({
     try {
       await api(`/entries/${entry.id}`, { method: 'DELETE' });
       if (!activeRef.current) return;
-      onActivityChange({ dirty: false, busy: false });
-      navigate(backTo);
+      onActivityChange({ dirty: false, busy: false, failed: false });
+      if (!hasBlockedNavigation()) navigate(backTo);
     } catch (failure) {
       if (activeRef.current)
         setError(failure instanceof Error ? failure.message : '操作できませんでした。');
@@ -516,7 +532,7 @@ function DetailContent({
             className="button-text"
             type="submit"
             form="edit-entry-form"
-            disabled={busy || !draftDirty}
+            disabled={busy || pending || !draftDirty}
           >
             {busy ? '保存中' : '保存'}
           </button>
@@ -538,13 +554,18 @@ function DetailContent({
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
 
-          {editing && !pending ? (
+          {editing ? (
             <form
               id="edit-entry-form"
               className="entry-form detail-edit-form"
               onSubmit={(event) => void saveEdit(event)}
             >
-              <fieldset disabled={busy} className="entry-form-fields">
+              <fieldset disabled={busy || pending} className="entry-form-fields">
+                {pending && (
+                  <output className="detail-edit-pending-note">
+                    この記録は生成中のため変更を保存できません。入力内容は保持され、生成が完了すると編集を再開できます。
+                  </output>
+                )}
                 <div className="date-row">
                   <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
                 </div>
@@ -559,7 +580,7 @@ function DetailContent({
               {editErrorStatus === 409 && (
                 <button
                   className="button button-secondary latest-entry-action"
-                  disabled={busy}
+                  disabled={busy || pending}
                   type="button"
                   onClick={requestReloadLatest}
                 >
@@ -715,16 +736,14 @@ function DetailContent({
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
           {quota && !pending && !unknownGeneration && (
-            <div
-              className={
-                showQuotaStatus && !generationReferenceUnavailable ? 'detail-quota-card' : 'sr-only'
-              }
-            >
+            <div className={showQuotaStatus ? 'detail-quota-card' : 'sr-only'}>
               <GenerationQuotaStatus
                 quota={quota}
                 activeGeneration={activeGeneration}
                 currentEntryId={entry.id}
-                currentGenerationId={generation?.id ?? null}
+                currentGenerationId={generation?.id ?? entry.latestGenerationId}
+                onRefresh={showQuotaStatus ? () => void refreshQuota() : undefined}
+                refreshing={refreshing}
               />
             </div>
           )}
@@ -737,8 +756,13 @@ function DetailContent({
                     ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
                     : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
                 </p>
-                <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-                  利用枠を再確認
+                <button
+                  className="button-text"
+                  type="button"
+                  disabled={refreshing}
+                  onClick={() => void refreshQuota()}
+                >
+                  {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
                 </button>
               </div>
             )}
@@ -750,7 +774,7 @@ function DetailContent({
             quota={quota}
             activeGeneration={activeGeneration}
             currentEntryId={entry.id}
-            currentGenerationId={generation?.id ?? null}
+            currentGenerationId={generation?.id ?? entry.latestGenerationId}
           />
         </div>
       )}
@@ -761,13 +785,28 @@ function DetailContent({
               ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
               : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
           </p>
-          <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-            利用枠を再確認
+          <button
+            className="button-text"
+            type="button"
+            disabled={refreshing}
+            onClick={() => void refreshQuota()}
+          >
+            {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
           </button>
         </div>
       )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
+          {quota && !showQuotaStatus && !pending && !unknownGeneration && (
+            <button
+              className="button-text quota-refresh-action"
+              disabled={busy || refreshing}
+              type="button"
+              onClick={() => void refreshQuota()}
+            >
+              {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+            </button>
+          )}
           {pending && (
             <Link className="button button-primary" to={backTo}>
               記録を見る
@@ -896,10 +935,20 @@ function DetailContent({
 export function Detail({
   config,
   onActivityChange,
+  hasBlockedNavigation,
 }: {
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
+  hasBlockedNavigation: () => boolean;
 }) {
   const { id = '' } = useParams();
-  return <DetailContent key={id} id={id} config={config} onActivityChange={onActivityChange} />;
+  return (
+    <DetailContent
+      key={id}
+      id={id}
+      config={config}
+      onActivityChange={onActivityChange}
+      hasBlockedNavigation={hasBlockedNavigation}
+    />
+  );
 }

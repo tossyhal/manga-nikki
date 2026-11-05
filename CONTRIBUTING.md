@@ -81,7 +81,9 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
-`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`.env.example`を`.env.local`へ、`dev.vars.local-connected.example`を`.dev.vars.local-connected`へコピーして値を設定し、開発用Supabaseにレビュー済みmigrationを適用してから起動します。`.env.local`にはブラウザー用のSupabase URL・publishable key・Turnstile site keyを、`.dev.vars.local-connected`にはサーバー用設定とsecret keyを設定します。サーバー専用secretをブラウザー用設定へ入れないでください。
+`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`.env.example`を`.env.local`へ、`dev.vars.local-connected.example`を`.dev.vars.local-connected`へ先にコピーし、コピー先だけ値を設定してから、開発用Supabaseにレビュー済みmigrationを適用して起動します。コピー元のexampleには秘密情報を書かないでください。`.env.local`にはブラウザー用のSupabase URL・publishable key・Turnstile site keyを、`.dev.vars.local-connected`にはサーバー用設定とsecret keyを設定します。サーバー専用secretをブラウザー用設定へ入れないでください。
+
+`pnpm dev:connected`は`.dev.vars.local-connected`が存在しない場合、Viteを起動する前に停止します。`.env.local`は通常の`pnpm dev`や`pnpm build`にも読み込まれます。初期設定の`local-mock`は画面を表示するだけでは匿名Authを開始しないため、`.env.local`を接続確認のたびに退避する必要はありません。サンプルpreviewには`pnpm build:staging`を使います。
 
 ```sh
 pnpm dev:connected
@@ -114,7 +116,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
 | `pnpm dev` | 画面とAPIの開発サーバー | 実装済み |
-| `pnpm dev:connected` | ローカルの開発用Supabaseへ接続する開発サーバー | 実装済み |
+| `pnpm dev:connected` | 設定した開発用Supabaseへ接続するローカル開発サーバー | 実装済み |
 | `pnpm lint` | 静的ルール検査 | 実装済み |
 | `pnpm typecheck` | TypeScriptの型検査 | 実装済み |
 | `pnpm test` | Vitestの非watch実行 | 実装済み |

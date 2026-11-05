@@ -7,7 +7,7 @@ export function useGenerationPolling(
   activeRef: RefObject<boolean>,
   applyGeneration: (generation: Generation) => void,
   setError: (message: string) => void,
-  refreshQuota: () => Promise<unknown>,
+  refreshQuota: (options?: { fresh?: boolean }) => Promise<unknown>,
 ) {
   const pending = generation?.status === 'queued' || generation?.status === 'running';
   const callbacks = useRef({ applyGeneration, setError, refreshQuota });
@@ -28,7 +28,7 @@ export function useGenerationPolling(
           callbacks.current.applyGeneration(result);
           callbacks.current.setError('');
           if (result.status !== 'queued' && result.status !== 'running')
-            void callbacks.current.refreshQuota();
+            void callbacks.current.refreshQuota({ fresh: true });
         }
       } catch (failure) {
         if (active && activeRef.current)
