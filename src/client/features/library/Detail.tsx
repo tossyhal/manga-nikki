@@ -23,6 +23,7 @@ import {
   type GenerationQuota,
 } from '../../lib/api';
 import { Comic } from '../comic/Comic';
+import { validateLibraryBackTo } from './librarySearch';
 import type { DiaryActivity } from '../diary/NewEntry';
 import { GenerationQuotaStatus } from '../diary/GenerationQuotaStatus';
 import { RegistrationCaptcha } from '../diary/RegistrationCaptcha';
@@ -75,35 +76,61 @@ function formatEntryDate(date: string) {
     month: 'long',
     day: 'numeric',
   }).format(value);
-  return monthDay;
+  const weekday = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'UTC',
+    weekday: 'long',
+  }).format(value);
+  return `${monthDay} ${weekday}`;
 }
 
 function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
   const [images, setImages] = useState<Record<string, string>>({});
-  const [error, setError] = useState('');
+  const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reloadVersion, setReloadVersion] = useState(0);
   useEffect(() => {
     let active = true;
     const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
-    Promise.all(ids.map(async (id) => [id, (await getAssetUrl(id)).url] as const))
-      .then((result) => {
-        if (active) setImages(Object.fromEntries(result));
-      })
-      .catch((failure: Error) => {
-        if (active) setError(failure.message);
-      });
+    void Promise.all(
+      ids.map(async (id) => {
+        try {
+          return { id, url: (await getAssetUrl(id)).url };
+        } catch {
+          return { id, url: null };
+        }
+      }),
+    ).then((result) => {
+      if (!active) return;
+      setImages(
+        Object.fromEntries(result.flatMap((image) => (image.url ? [[image.id, image.url]] : []))),
+      );
+      setFailedImageIds(result.filter((image) => image.url === null).map((image) => image.id));
+      setLoading(false);
+    });
     return () => {
       active = false;
     };
-  }, [comic]);
+  }, [comic, reloadVersion]);
+
+  function retryImages() {
+    if (loading) return;
+    setImages({});
+    setFailedImageIds([]);
+    setLoading(true);
+    setReloadVersion((version) => version + 1);
+  }
+
   return (
-    <>
-      {error && (
-        <p role="alert" className="error">
-          画像を取得できません。{error}
-        </p>
-      )}
-      <Comic comic={comic} images={images} imageError={Boolean(error)} hideTitle={hideTitle} />
-    </>
+    <Comic
+      key={reloadVersion}
+      comic={comic}
+      images={images}
+      imageErrors={failedImageIds}
+      imageLoading={loading}
+      imageRetrying={loading}
+      onRetryImages={retryImages}
+      hideTitle={hideTitle}
+    />
   );
 }
 
@@ -118,6 +145,10 @@ function DetailContent({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const backTo =
+    location.state && typeof location.state === 'object' && 'backTo' in location.state
+      ? (validateLibraryBackTo(location.state.backTo) ?? '/library')
+      : '/library';
   const draftSavedNavigation = Boolean(
     location.state &&
     typeof location.state === 'object' &&
@@ -729,7 +760,7 @@ function DetailContent({
       await api(`/entries/${entry.id}`, { method: 'DELETE' });
       if (!activeRef.current) return;
       onActivityChange({ dirty: false, busy: false });
-      navigate('/library');
+      navigate(backTo);
     } catch (failure) {
       if (activeRef.current)
         setError(failure instanceof Error ? failure.message : '操作できませんでした。');
@@ -744,18 +775,16 @@ function DetailContent({
     <div className={detailPageClass}>
       {entry && !editing && (
         <header className="detail-toolbar">
-          <Link className="icon-button" to="/library" aria-label="記録の一覧へ戻る">
+          <Link className="icon-button" to={backTo} aria-label="記録の一覧へ戻る">
             <Icon name="back" />
           </Link>
           <div className="detail-title-group">
             <h1 className={`detail-title${statusView ? ' detail-state-title' : ''}`}>
-              {draftSavedConfirmation
-                ? '下書きを保存しました'
-                : statusView
-                  ? statusTitle
-                  : generation?.status === 'succeeded' && generationForCurrentRevision
-                    ? generation.comic.title
-                    : summarizeDiary(entry.body)}
+              {statusView
+                ? statusTitle
+                : generation?.status === 'succeeded' && generationForCurrentRevision
+                  ? generation.comic.title
+                  : summarizeDiary(entry.body)}
             </h1>
             {statusView && <p className="detail-state-summary">{summarizeDiary(entry.body)}</p>}
           </div>
@@ -883,28 +912,32 @@ function DetailContent({
             >
               <fieldset disabled={busy} className="entry-form-fields">
                 <div className="date-row">
-                  <label className="date-display" htmlFor="edit-date">
-                    <time dateTime={draftDate}>{formatEntryDate(draftDate)}</time>
-                    <Icon name="calendar" size={20} />
-                  </label>
-                  <input
-                    id="edit-date"
-                    aria-label="日付"
-                    className="date-picker-input"
-                    type="date"
-                    value={draftDate}
-                    max={jstToday()}
-                    onChange={(event) => setDraftDate(event.target.value)}
-                    required
-                  />
+                  <div className="date-control">
+                    <label className="date-display" htmlFor="edit-date">
+                      <time dateTime={draftDate}>{formatEntryDate(draftDate)}</time>
+                      <Icon name="calendar" size={20} />
+                    </label>
+                    <input
+                      id="edit-date"
+                      aria-label="日付"
+                      className="date-picker-input"
+                      type="date"
+                      value={draftDate}
+                      max={jstToday()}
+                      onChange={(event) => setDraftDate(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.preventDefault();
+                      }}
+                      required
+                    />
+                  </div>
                 </div>
                 <div className="entry-editor-card">
                   <label className="entry-editor-title" htmlFor="edit-body">
-                    日記
+                    今日はどんな日だった？
                   </label>
                   <textarea
                     id="edit-body"
-                    aria-label="日記"
                     rows={8}
                     value={draftBody}
                     onChange={(event) => setDraftBody(event.target.value)}
@@ -915,7 +948,7 @@ function DetailContent({
                   <div className="entry-editor-footer">
                     <span />
                     <p id="edit-count" className="character-count">
-                      {[...draftBody.trim()].length} / 1,000文字
+                      {[...draftBody.trim()].length} / 1,000
                     </p>
                   </div>
                 </div>
@@ -935,14 +968,6 @@ function DetailContent({
                   {error}
                 </p>
               )}
-              <button
-                className="button-text edit-cancel-action"
-                disabled={busy}
-                type="button"
-                onClick={requestCancelEditing}
-              >
-                編集をやめる
-              </button>
             </form>
           ) : (
             <>
@@ -952,6 +977,7 @@ function DetailContent({
                     <Icon name="check" size={40} />
                   </div>
                   <h2 id="draft-saved-title">日記を保存しました</h2>
+                  <p className="diary">{entry.body}</p>
                   {canStartGeneration && <p>続けて4コマにできます。</p>}
                 </section>
               )}
@@ -1199,7 +1225,7 @@ function DetailContent({
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
           {pending && (
-            <Link className="button button-primary" to="/library">
+            <Link className="button button-primary" to={backTo}>
               記録を見る
             </Link>
           )}
