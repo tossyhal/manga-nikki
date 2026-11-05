@@ -281,4 +281,113 @@ revoke all on function public.mark_generation_saving(uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.mark_generation_saving(uuid, uuid) to service_role;
 
+create or replace function public.list_generation_reconcile_candidates(p_limit integer default 25)
+returns jsonb language plpgsql stable security invoker set search_path = ''
+as $$
+declare
+  v_candidates jsonb;
+begin
+  if p_limit is null or p_limit < 1 or p_limit > 50 then
+    raise exception using message = 'INVALID_INPUT';
+  end if;
+
+  select coalesce(pg_catalog.jsonb_agg(
+    pg_catalog.jsonb_build_object(
+      'generation_id', candidate.id,
+      'action', case
+        when candidate.status = 'running' then 'expire'
+        when candidate.cancel_requested or not candidate.entry_is_live then 'cancel'
+        else 'enqueue'
+      end
+    ) order by candidate.settlement_priority, candidate.updated_at, candidate.id
+  ), '[]'::jsonb)
+  into v_candidates
+  from (
+    select g.id, g.status, g.cancel_requested, g.updated_at,
+      case
+        when g.status = 'running' and g.stage = 'saving' and g.is_mock is false
+          and not g.cancel_requested
+          and private.is_valid_openai_generation_profile(g.model_profile_snapshot)
+          and exists (
+            select 1 from public.entries e
+            where e.id = g.entry_id and e.owner_id = g.owner_id
+              and private.is_live_generation_entry(e)
+          ) then 1
+        when g.status = 'queued' and not g.cancel_requested and exists (
+          select 1 from public.entries e
+          where e.id = g.entry_id and e.owner_id = g.owner_id
+            and private.is_live_generation_entry(e)
+        ) then 2
+        else 0
+      end as settlement_priority,
+      exists (
+        select 1 from public.entries e
+        where e.id = g.entry_id and e.owner_id = g.owner_id
+          and private.is_live_generation_entry(e)
+      ) as entry_is_live
+    from public.generations g
+    where (g.status = 'queued' and (
+        g.cancel_requested
+        or not exists (
+          select 1 from public.entries e
+          where e.id = g.entry_id and e.owner_id = g.owner_id
+            and private.is_live_generation_entry(e)
+        )
+        or coalesce(g.enqueued_at, g.created_at) <= pg_catalog.statement_timestamp() - interval '1 minute'
+      ))
+      or (g.status = 'running' and g.deadline_at <= pg_catalog.statement_timestamp())
+    order by settlement_priority, g.updated_at, g.id
+    limit p_limit
+  ) candidate;
+  return v_candidates;
+end;
+$$;
+revoke all on function public.list_generation_reconcile_candidates(integer)
+  from public, anon, authenticated;
+grant execute on function public.list_generation_reconcile_candidates(integer)
+  to service_role;
+
+create function public.list_generation_reconcile_candidates_v2(p_limit integer default 25)
+returns jsonb language plpgsql stable security invoker set search_path = ''
+as $$
+declare
+  v_existing_candidates jsonb;
+  v_candidates jsonb;
+begin
+  v_existing_candidates := public.list_generation_reconcile_candidates(p_limit);
+
+  select coalesce(pg_catalog.jsonb_agg(
+    pg_catalog.jsonb_build_object(
+      'generation_id', candidate.value -> 'generation_id',
+      'action', case
+        when candidate.value ->> 'action' = 'expire'
+          and generation.status = 'running'
+          and generation.stage = 'saving'
+          and generation.is_mock is false
+          and private.is_valid_openai_generation_profile(generation.model_profile_snapshot)
+          and not generation.cancel_requested
+          and entry.id is not null
+          and entry.deleted_at is null
+          and entry.expires_at > pg_catalog.statement_timestamp()
+        then 'recover-saving'
+        else candidate.value ->> 'action'
+      end
+    ) order by candidate.ordinality
+  ), '[]'::jsonb)
+  into v_candidates
+  from pg_catalog.jsonb_array_elements(v_existing_candidates) with ordinality
+    as candidate(value, ordinality)
+  left join public.generations generation
+    on generation.id = (candidate.value ->> 'generation_id')::uuid
+  left join public.entries entry
+    on entry.id = generation.entry_id and entry.owner_id = generation.owner_id;
+
+  return v_candidates;
+end;
+$$;
+revoke all on function public.list_generation_reconcile_candidates_v2(integer)
+  from public, anon, authenticated;
+grant execute on function public.list_generation_reconcile_candidates_v2(integer)
+  to service_role;
+
 commit;

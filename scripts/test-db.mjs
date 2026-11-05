@@ -372,7 +372,7 @@ try {
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
   console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
-  console.log('成功: OpenAI profile allowlist・予算quota・saving開始・claim/削除期限ゲート');
+  console.log('成功: OpenAI profile allowlist・予算quota・saving開始・候補優先/安全な保存復旧・claim/削除期限ゲート');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));

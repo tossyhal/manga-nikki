@@ -2,7 +2,7 @@
 
 本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[開発計画](../docs/PLAN.md)を参照してください。
 
-`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。`20261105000000_openai_generation_saving.sql`は固定OpenAI profile allowlist、OpenAI専用の原子的予約、対応profileのquota評価、claimの日記日付、保存開始ゲートを追加します。local-connectedの受付API・固定mock Queue Consumerと期限削除Scheduled handlerを実装済みです。OpenAI脚本・白黒画像のadapterとQueue経路を追加していますが、画像のprivate Storage保存・assets登録・succeeded確定RPC・署名URLは未接続です。実API課金・共有DBへのmigration適用・実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。過去の隔離環境で一部のAuth / CRUD / 固定mock Queue / Storage削除service / bucket RLSを確認していますが、最新branchの全経路を確認したものではありません。
+`migrations/20261102000000_diary_database.sql`は日記・生成ジョブ管理のテーブル、読み取り用RLS、日記操作用RPCを追加します。`20261103000000_generation_source.sql`は生成元`is_mock`を記録する列を追加し、`20261103010000_generation_reservations.sql`はprivate予算台帳と`find_generation_receipt` / `reserve_generation` RPCを追加します。`20261103020000_generation_execution.sql`はprovider attempt台帳、job claim、attempt開始・確定、失敗時のrelease / hold RPCを追加します。`20261103030000_generation_queue.sql`はmock専用受付、quota取得、固定fixture完了、Queue再送記録と候補照合RPCを追加します。`20261103040000_retention_cleanup.sql`は期限切れ物理削除RPC、assets metadata、本文なしのtombstone/監査台帳とgeneration idempotency archiveを追加します。`20261105000000_openai_generation_saving.sql`は固定OpenAI profile allowlist、OpenAI専用の原子的予約、対応profileのquota評価、claimの日記日付、保存開始ゲート、保存復旧候補RPCを追加します。local-connectedの受付API・固定mock Queue Consumerと期限削除Scheduled handlerを実装済みです。OpenAI脚本・白黒画像のadapterとQueue経路を追加していますが、画像のprivate Storage保存・assets登録・succeeded確定RPC・署名URLは未接続です。実API課金・共有DBへのmigration適用・実Turnstile・実Cloudflare Queue / Cronの結合は未実施です。過去の隔離環境で一部のAuth / CRUD / 固定mock Queue / Storage削除service / bucket RLSを確認していますが、最新branchの全経路を確認したものではありません。
 
 ## 検証
 
@@ -20,7 +20,7 @@ pnpm test:db
 - `tests/diary.sql`はトランザクションをロールバックし、実際に`anon`・ユーザーA/Bの`authenticated`・`service_role`へ切り替えて検証します。
 - `tests/reservations.sql`は架空profileと仮想予算を使い、private権限・入力検証・receipt照会の副作用がないこと・停止後再送・日記snapshot・quota集計を検証します。実AIは呼び出しません。
 - `tests/generation_queue.sql`は停止中のmock専用予約・実profile拒否・fixture完了とconsumed台帳・未送信release・削除/期限照合・未配送再送抑止・unknown/heldとRPC権限を検証します。実AIや外部Queueは呼び出しません。
-- `tests/openai_generation.sql`は固定OpenAI profile allowlist・環境/DB停止・非mock quota・費用/全体枠・所有者分離・claim日付・5 attempt完了・保存開始前の削除/期限・冪等なsaving再送・RPC権限を検証します。実AIや画像保存は呼び出しません。
+- `tests/openai_generation.sql`は固定OpenAI profile allowlist・環境/DB停止・非mock quota・費用/全体枠・所有者分離・claim日付・5 attempt完了・保存開始前の削除/期限・冪等なsaving再送・取消/期限切れの候補優先・保存復旧profile検証・RPC権限を検証します。実AIや画像保存は呼び出しません。
 - `tests/retention.sql`はasset owner/effective-entry RLS、path制約、active job待ち、stale lease、Storage成功後のfinalize、held台帳・provider ID保持、counter不変、tombstoneを検証します。Storageの独立API・RLSは対象外です。
 - 実行スクリプトは複数接続を使い、同じ作成キーの同時要求、内容の競合、同時編集、最後の下書き枠、同一生成キー6並列、ユーザー同時実行上限、最後の全体生成枠、ロック待ち中に期限を迎えた生成claim / attempt / 精算、およびowner advisory lock下のpurge/create replay競合を検証します。
 - 実SupabaseのAuth・PostgREST・Storageを経由するテストは別途必要です。この検証はPostgreSQLの制約・RLS・RPCを対象にします。
@@ -47,6 +47,7 @@ pnpm test:db
 | `complete_mock_generation` | `p_generation_id uuid`, `p_claim_token uuid`, `p_comic_json jsonb` | 期限内・未削除・mock profile・script/image attempt成功・固定comic schemaを検証してcomic JSONとconsumed台帳状態を確定。画像binaryやStorageは扱わない |
 | `mark_generation_enqueued` | `p_generation_id uuid` | 再送間隔を記録し、未配送queued jobの即時Cron再送を抑える |
 | `list_generation_reconcile_candidates` | `p_limit integer`（最大50、default 25） | service_role専用。再送・削除/期限cancel・期限切れrunning照合に必要なgeneration ID/actionだけを返す |
+| `list_generation_reconcile_candidates_v2` | `p_limit integer`（最大50、default 25） | service_role専用。旧RPCと同じ配列shape。取消/期限精算、有効なOpenAI saving復旧、enqueueの順に候補を返し、復旧可能なsavingだけactionを`recover-saving`にする |
 
 DB行はsnake_caseです。API担当は`id`・`diary_date`・`body`・`revision`・`latest_generation_id`・`created_at`・`updated_at`を共有型`Entry`のcamelCaseへ変換し、内部カラムをHTTPレスポンスに含めないでください。
 
@@ -111,12 +112,13 @@ RPCの業務エラーはSQLSTATE`P0001`、`message`が次の固定コードで�
 - `finish_provider_attempt`はrunning job・一致するclaim token・reserved reservation・dispatch済みattemptを再確認します。外部送信は済んでいるため、削除要求・日記期限・claim期限後でもknown resultとrequest IDを記録します。terminal job・古いtoken・精算済みreservationは変更しません。`request_id`はnullableかつ最大200文字、mockではnullです。`unknown`は自動再実行しません。
 - `fail_or_hold_generation`は全ロック取得後の現在時刻でclaim期限を確認し、queued / runningのみをterminalへ遷移させます。non-mockの`dispatched` / `unknown` attemptが残ればjobを`unknown`、reservationを`held`にします。non-mockの既知結果または確定したmock結果は予約最大額を`consumed`にし、外部未送信を証明できる場合だけ`released`へ変更します。releaseは元のJST日のcounterへ1回だけ戻し、terminal job・古いclaim・二重精算では状態やcounterを変更しません。
 - `mark_generation_saving`は全ロック後の現在時刻でclaim期限、削除/cancel、entry期限、OpenAI profileと予約額の整合性を確認し、script 1件とimage 4件の成功attemptが揃った場合だけ`stage='saving'`へ移します。statusは`running`、reservationは`reserved`のままです。同じclaim・同じsaving状態の再送だけ同じ結果を返します。画像保存・asset登録・完了確定は行いません。
+- `list_generation_reconcile_candidates`は旧action (`cancel` / `expire` / `enqueue`) と戻りshapeを維持し、limit前の優先度を取消・通常期限精算、復旧対象saving、enqueueの順にします。`list_generation_reconcile_candidates_v2`だけが、未削除・期限内でownerが一致するentry、`cancel_requested=false`、`is_mock=false`、固定OpenAI profileをすべて満たす`running`/`saving`を`recover-saving`へ写像します。削除/期限切れ・取消済み・mock・未対応profileは旧`expire`候補のままで、保存復旧で画像生成を再実行しません。復旧callback未設定時はsavingを変更せずskipします。
 
 ## 適用と後続作業
 
 この作業では共有Supabaseへの適用は行いません。人間のレビュー後、DB担当が接続先と既存migration履歴を確認し、採用したSupabase CLIのmigration手順で適用します。適用対象は`migrations/`だけです。`tests/bootstrap.sql`やテスト用クラスタを本番へ持ち込まないでください。
 
-実画像のprivate Storage保存・asset登録・succeeded確定RPC・署名URL発行は保存担当との接続後に追加します。保存handlerが未設定の場合はWorkerがprovider呼出し前に未送信を確定して枠をreleaseするため、実AI APIは呼びません。実APIの課金検証と共有DBへの適用は未実施です。local-connected `complete_mock_generation`は固定fixtureとmock ledgerだけを確定します。期限切れentryの物理削除は次節の通り実装済みです。物理削除時には画像削除後、日記の`latest_generation_id`を外してjob→日記の順に消します。`entries`の物理削除で失われる`(owner_id, create_request_id)`はprivate tombstoneへ保持し、削除後の古い`createRequestId`再送を`NOT_FOUND`にします。現在の外部キーは意図しない連鎖削除を行いません。
+実画像のprivate Storage保存・asset登録・succeeded確定RPC・署名URL発行は保存担当との接続後に追加します。保存handlerが未設定の場合はWorkerがprovider呼出し前に未送信を確定して枠をreleaseするため、実AI APIは呼びません。保存callback未設定時、照合runtimeは`recover-saving`をskipしsavingの予約を保持します。実APIの課金検証と共有DBへの適用は未実施です。local-connected `complete_mock_generation`は固定fixtureとmock ledgerだけを確定します。期限切れentryの物理削除は次節の通り実装済みです。物理削除時には画像削除後、日記の`latest_generation_id`を外してjob→日記の順に消します。`entries`の物理削除で失われる`(owner_id, create_request_id)`はprivate tombstoneへ保持し、削除後の古い`createRequestId`再送を`NOT_FOUND`にします。現在の外部キーは意図しない連鎖削除を行いません。
 
 期限切れentryの物理削除RPCとserver専用cleanup service、`public.assets` metadata契約を追加済みです。claimは削除対象entryとDB上のasset pathを15分leaseへ固定し、Storage通信の完了後にfinalizeします。finalizeはpolicy advisory lock→owner advisory lock→entry→jobの順に再ロックし、active jobなし・期限対象・同じpath集合・Storage成功を確認後、provider attempts / reservationsを削除前にprivateの最小監査台帳へ移します。quota counterは変更しません。generationの`owner_id` / `idempotency_key` / `request_hash`は本文なしの`private.retained_generation_requests`へ退避し、同ownerで同じkeyを別requestに使うと`IDEMPOTENCY_CONFLICT`、purged targetの再送は`NOT_FOUND`になります。予約とpurgeはpolicy advisory lockで直列化します。entryの`latest_generation_id`を外し、asset→job→entryの順に物理削除します。
 

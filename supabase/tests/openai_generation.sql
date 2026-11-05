@@ -41,16 +41,146 @@ as $$
 $$;
 grant execute on all functions in schema test to anon, authenticated, service_role;
 
+create table test.reconcile_fixture (
+  ordinal integer primary key,
+  owner_id uuid not null,
+  create_request_id uuid not null,
+  entry_id uuid,
+  generation_id uuid
+);
+insert into test.reconcile_fixture (ordinal, owner_id, create_request_id)
+select ordinal,
+  pg_catalog.md5('reconcile-owner-' || ordinal::text)::uuid,
+  pg_catalog.md5('reconcile-entry-' || ordinal::text)::uuid
+from pg_catalog.generate_series(1, 58) ordinal;
+insert into auth.users(id) select owner_id from test.reconcile_fixture;
+insert into public.entries (owner_id, create_request_id, create_request_hash,
+  diary_date, body, consent_version)
+select owner_id, create_request_id, pg_catalog.decode(pg_catalog.repeat('00', 32), 'hex'),
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date - 1,
+  '照合候補の架空日記 ' || ordinal::text, 'v1'
+from test.reconcile_fixture;
+update test.reconcile_fixture fixture set entry_id = entry.id
+from public.entries entry
+where entry.owner_id = fixture.owner_id and entry.create_request_id = fixture.create_request_id;
+update public.entries entry set deleted_at = pg_catalog.statement_timestamp()
+from test.reconcile_fixture fixture where fixture.ordinal = 54 and entry.id = fixture.entry_id;
+update public.entries entry set expires_at = pg_catalog.statement_timestamp() - interval '1 second'
+from test.reconcile_fixture fixture where fixture.ordinal = 55 and entry.id = fixture.entry_id;
+insert into public.generations (
+  id, entry_id, owner_id, entry_revision, idempotency_key, request_hash,
+  input_snapshot, model_profile_snapshot, is_mock, status, stage, claim_token,
+  deadline_at, cancel_requested, created_at, updated_at, enqueued_at, started_at
+)
+select pg_catalog.md5('reconcile-generation-' || fixture.ordinal::text)::uuid,
+  fixture.entry_id, fixture.owner_id, 1,
+  pg_catalog.md5('reconcile-key-' || fixture.ordinal::text)::uuid,
+  'reconcile-request-' || fixture.ordinal::text,
+  '照合候補の架空日記 ' || fixture.ordinal::text,
+  case
+    when fixture.ordinal between 28 and 56 then test.openai_profile(1)
+    when fixture.ordinal = 57 then '{"profile_id":"reconcile-mock","is_mock":true,"max_cost_micro_usd":1}'::jsonb
+    when fixture.ordinal = 58 then '{"profile_id":"reconcile-unsupported","is_mock":false,"max_cost_micro_usd":1}'::jsonb
+    else '{"profile_id":"reconcile-queue","is_mock":true,"max_cost_micro_usd":1}'::jsonb
+  end,
+  fixture.ordinal <= 27 or fixture.ordinal = 57,
+  case when fixture.ordinal <= 27 then 'queued' else 'running' end,
+  case when fixture.ordinal <= 27 then null else 'saving' end,
+  case when fixture.ordinal <= 27 then null else pg_catalog.gen_random_uuid() end,
+  case when fixture.ordinal <= 27 then null
+    else pg_catalog.statement_timestamp() - interval '2 minutes' end,
+  fixture.ordinal in (27, 56),
+  pg_catalog.statement_timestamp(),
+  case when fixture.ordinal <= 26
+    then pg_catalog.statement_timestamp() - interval '4 hours' - fixture.ordinal * interval '1 second'
+    else pg_catalog.statement_timestamp() - interval '3 hours' + fixture.ordinal * interval '1 second'
+  end,
+  case when fixture.ordinal <= 26
+    then pg_catalog.statement_timestamp() - interval '10 minutes' - fixture.ordinal * interval '1 second'
+    else pg_catalog.statement_timestamp() end,
+  case when fixture.ordinal <= 27 then null else pg_catalog.statement_timestamp() end
+from test.reconcile_fixture fixture;
+update test.reconcile_fixture fixture set generation_id = generation.id
+from public.generations generation
+where generation.entry_id = fixture.entry_id;
+
+select public.list_generation_reconcile_candidates(25) as prioritized_candidates \gset
+select test.assert(pg_catalog.jsonb_array_length(:'prioritized_candidates'::jsonb) = 25
+  and (select count(*) = 1 from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb) item
+    where item ->> 'action' = 'cancel')
+  and (select count(*) = 24 from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb) item
+    where item ->> 'action' = 'expire')
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb)
+      with ordinality item(value, ordinal)
+    where item.value ->> 'action' = 'enqueue'
+  )
+  and (select count(*) = 6
+    from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb)
+      with ordinality item(value, ordinal)
+    where item.ordinal <= 6 and item.value ->> 'action' in ('cancel', 'expire')
+  ), 'cancel/expireと有効saving回復候補は古いenqueue候補より優先してlimit内に入る');
+select public.list_generation_reconcile_candidates_v2(50) as recovery_candidates \gset
+select test.assert(pg_catalog.jsonb_array_length(:'recovery_candidates'::jsonb) = 50
+  and (select count(*) = 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'cancel')
+  and (select count(*) = 5 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'expire')
+  and (select count(*) = 26 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'recover-saving')
+  and (select count(*) = 18 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'enqueue')
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
+      with ordinality item(value, ordinal)
+    where item.ordinal <= 6 and item.value ->> 'action' not in ('cancel', 'expire')
+  )
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
+      with ordinality item(value, ordinal)
+    where item.ordinal between 7 and 32 and item.value ->> 'action' <> 'recover-saving'
+  )
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
+      with ordinality item(value, ordinal)
+    where item.ordinal > 32 and item.value ->> 'action' <> 'enqueue'
+  ), 'v2は精算・有効OpenAI saving回復・enqueueの順で候補を返す');
+select test.assert((select count(*) = 26
+    from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    join test.reconcile_fixture fixture
+      on fixture.generation_id = (item ->> 'generation_id')::uuid
+    where fixture.ordinal between 28 and 53 and item ->> 'action' = 'recover-saving')
+  and (select count(*) = 5
+    from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    join test.reconcile_fixture fixture
+      on fixture.generation_id = (item ->> 'generation_id')::uuid
+    where fixture.ordinal between 54 and 58 and item ->> 'action' = 'expire')
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'recover-saving'
+      and not exists (
+        select 1 from test.reconcile_fixture fixture
+        where fixture.ordinal between 28 and 53
+          and fixture.generation_id = (item ->> 'generation_id')::uuid
+      )
+  ), 'v2は有効なOpenAI savingだけ復旧し、削除/cancel/期限・mock・未対応profileは従来expireを返す');
+
 select test.assert(has_function_privilege('service_role',
   'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and has_function_privilege('service_role',
     'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
+  and has_function_privilege('service_role',
+    'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE')
   and not has_function_privilege('anon',
     'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and not has_function_privilege('authenticated',
     'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE'),
+  and not has_function_privilege('authenticated', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
+  and not has_function_privilege('anon',
+    'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE')
+  and not has_function_privilege('authenticated',
+    'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE'),
   'OpenAI予約とsaving移行RPCはservice_role専用');
 select test.assert(not has_function_privilege('anon',
   'private.is_valid_openai_generation_profile(jsonb)', 'EXECUTE')
@@ -183,6 +313,13 @@ select test.assert(:'receipt'::jsonb ->> 'status' = 'queued'
   and (select count = 1 and committed_micro_usd = 17
     from private.quota_counters where scope = 'global_total'),
   '対応profileは4画像分の予約額を一度だけsnapshot・台帳化する');
+select test.expect_error(format('select public.update_entry(%L,%L,1,%L,%L)',
+  'aaaaaaaa-1111-4111-8111-111111111111', :'quota_entry'::uuid,
+  (statement_timestamp() at time zone 'Asia/Tokyo')::date - 2, '予約中は日付も編集できない'),
+  'P0001', 'ENTRY_BUSY');
+select test.assert((select diary_date = (statement_timestamp() at time zone 'Asia/Tokyo')::date - 1
+  from public.entries where id = :'quota_entry'::uuid),
+  '予約中の日付変更は拒否しclaim時の表示日付を保つ');
 
 reset role;
 update private.generation_policy set enabled = false, model_profile_json = '{}'::jsonb,
@@ -350,10 +487,12 @@ select public.fail_or_hold_generation(:'amount_generation'::uuid, :'amount_token
 set local role anon;
 select test.expect_error('select public.reserve_openai_generation(null,null,null,null,true)', '42501');
 select test.expect_error('select public.mark_generation_saving(gen_random_uuid(),gen_random_uuid())', '42501');
+select test.expect_error('select public.list_generation_reconcile_candidates_v2(25)', '42501');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'aaaaaaaa-1111-4111-8111-111111111111', true);
 select test.expect_error('select public.reserve_openai_generation(null,null,null,null,true)', '42501');
 select test.expect_error('select public.mark_generation_saving(gen_random_uuid(),gen_random_uuid())', '42501');
+select test.expect_error('select public.list_generation_reconcile_candidates_v2(25)', '42501');
 reset role;
 rollback;
