@@ -1,8 +1,7 @@
 import type { Environment } from './mode';
 import { createServerRpcClient } from './supabase-clients';
 import { createServerComicStorageClient } from './supabase-storage';
-
-const maxImageBytes = 8 * 1024 * 1024;
+import { InvalidStoredImageError, maxImageBytes } from './comic-save-manifest';
 export const saveLeaseMs = 120_000;
 
 export type GenerationSaveBackend = Readonly<{
@@ -30,12 +29,6 @@ export class GenerationSaveDependencyError extends Error {
 export class MissingStoredImageError extends Error {
   constructor() {
     super('GENERATION_SAVE_IMAGE_MISSING');
-  }
-}
-
-export class InvalidStoredImageError extends Error {
-  constructor() {
-    super('GENERATION_SAVE_IMAGE_INVALID');
   }
 }
 
