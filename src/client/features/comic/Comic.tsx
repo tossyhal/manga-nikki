@@ -154,6 +154,9 @@ export function Comic({
           })}
         </div>
         <figcaption className="comic-transcript">
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {anyImageFailed ? '漫画の画像を表示できません。' : ''}
+          </p>
           {!hideTitle && <Title className="comic-title sr-only">{comic.title}</Title>}
           {comic.visual.kind === 'page' && comic.visual.textMode === 'external' && (
             <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
