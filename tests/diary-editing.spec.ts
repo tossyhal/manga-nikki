@@ -496,6 +496,13 @@ test('未保存確認はモーダルとして背景のフォーカスを止め�
   const title = '入力内容が保存されていません';
   const dialog = page.getByRole('dialog', { name: title });
   await expect(dialog).toBeVisible();
+  const actionSizes = await dialog.getByRole('button').evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const { width, height } = button.getBoundingClientRect();
+      return [Math.round(width * 10) / 10, Math.round(height * 10) / 10];
+    }),
+  );
+  expect(actionSizes[0]).toEqual(actionSizes[1]);
   expect(await dialog.evaluate((element) => element.matches(':modal'))).toBe(true);
   await recordLink.focus();
   expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);

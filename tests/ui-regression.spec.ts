@@ -59,17 +59,11 @@ async function shellGeometry(page: Page) {
       const { x, y, width, height } = element.getBoundingClientRect();
       return [x, y, width, height].map((value) => Math.round(value * 10) / 10);
     };
-    const navItems = Array.from(document.querySelectorAll('.bottom-nav-item'));
     return {
       brand: bounds(document.querySelector('.app-header .brand')),
       headerAction: bounds(document.querySelector('.app-header-action')),
       main: bounds(document.querySelector('#main')),
       nav: bounds(document.querySelector('.bottom-nav')),
-      items: navItems.map((item) => ({
-        link: bounds(item),
-        icon: bounds(item.querySelector('.bottom-nav-icon')),
-        label: bounds(item.querySelector('.bottom-nav-label')),
-      })),
     };
   });
 }
@@ -79,9 +73,9 @@ test('下部ナビは現在位置のラベルと等幅の3つの遷移先を保�
   await page.setViewportSize({ width: 390, height: 844 });
 
   const destinations = [
-    { path: '/', activeName: 'ホーム' },
-    { path: '/new', activeName: '日記を書く' },
-    { path: '/library', activeName: '記録' },
+    { path: '/', activeName: 'ホーム', label: 'ホーム' },
+    { path: '/new', activeName: '日記を書く', label: '書く' },
+    { path: '/library', activeName: '記録', label: '記録' },
   ];
 
   for (const { path, activeName } of destinations) {
@@ -92,30 +86,55 @@ test('下部ナビは現在位置のラベルと等幅の3つの遷移先を保�
 
     const activeLink = nav.getByRole('link', { name: activeName, exact: true });
     await expect(activeLink).toHaveAttribute('aria-current', 'page');
-    await expect(activeLink.locator('.bottom-nav-label')).toHaveAttribute('aria-hidden', 'false');
-    await expect(activeLink.locator('.bottom-nav-label')).toHaveCSS('visibility', 'visible');
-    for (const { activeName: otherName } of destinations) {
-      if (otherName === activeName) continue;
-      const otherLink = nav.getByRole('link', { name: otherName, exact: true });
-      await expect(otherLink).not.toHaveAttribute('aria-current', 'page');
-      await expect(otherLink.locator('.bottom-nav-label')).toHaveAttribute('aria-hidden', 'true');
-      await expect(otherLink.locator('.bottom-nav-label')).toHaveCSS('visibility', 'hidden');
+    for (const { activeName: linkName, label: labelText } of destinations) {
+      const link = nav.getByRole('link', { name: linkName, exact: true });
+      const label = link.locator('.bottom-nav-label');
+      const isActive = linkName === activeName;
+      await expect(label).toHaveText(labelText);
+      await expect(label).toHaveAttribute('aria-hidden', String(!isActive));
+      await expect(label).toHaveCSS('display', isActive ? 'block' : 'none');
+      if (!isActive) await expect(link).not.toHaveAttribute('aria-current', 'page');
     }
 
     const widths = await links.evaluateAll((elements) =>
       elements.map((element) => element.getBoundingClientRect().width),
     );
     expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
-    const iconBoxes = await links.locator('.bottom-nav-icon').evaluateAll((elements) =>
+    const activeIndex = destinations.findIndex(({ activeName: name }) => name === activeName);
+    const tabGeometry = await links.evaluateAll((elements) =>
       elements.map((element) => {
-        const { top, width, height } = element.getBoundingClientRect();
-        return { top, width, height };
+        const icon = element.querySelector('.bottom-nav-icon');
+        const label = element.querySelector('.bottom-nav-label');
+        if (!icon || !label) throw new Error('下部ナビの要素がありません');
+
+        const linkBounds = element.getBoundingClientRect();
+        const iconBounds = icon.getBoundingClientRect();
+        const labelBounds = label.getBoundingClientRect();
+        return {
+          linkCenterY: linkBounds.top + linkBounds.height / 2,
+          iconCenterY: iconBounds.top + iconBounds.height / 2,
+          iconWidth: iconBounds.width,
+          iconHeight: iconBounds.height,
+          labelDisplay: getComputedStyle(label).display,
+          labelHeight: labelBounds.height,
+          groupCenterY: (iconBounds.top + labelBounds.bottom) / 2,
+        };
       }),
     );
-    expect(iconBoxes.every(({ width, height }) => width === 28 && height === 28)).toBe(true);
-    expect(
-      Math.max(...iconBoxes.map(({ top }) => top)) - Math.min(...iconBoxes.map(({ top }) => top)),
-    ).toBe(0);
+    for (const [index, tab] of tabGeometry.entries()) {
+      expect(tab.iconWidth).toBe(28);
+      expect(tab.iconHeight).toBe(28);
+      if (index === activeIndex) {
+        expect(tab.labelDisplay).toBe('block');
+        expect(tab.labelHeight).toBe(18);
+        expect(Math.abs(tab.groupCenterY - tab.linkCenterY)).toBeLessThanOrEqual(0.5);
+        expect(tab.linkCenterY - tab.iconCenterY).toBeCloseTo(9.5, 1);
+      } else {
+        expect(tab.labelDisplay).toBe('none');
+        expect(tab.labelHeight).toBe(0);
+        expect(Math.abs(tab.iconCenterY - tab.linkCenterY)).toBeLessThanOrEqual(0.5);
+      }
+    }
   }
 });
 
@@ -124,14 +143,24 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
   await page.setViewportSize({ width: 393, height: 852 });
 
   const snapshots: Awaited<ReturnType<typeof shellGeometry>>[] = [];
+  let homeDateFontSize: string | undefined;
+  let entryDateFontSize: string | undefined;
   for (const path of ['/', '/new', '/library']) {
     await page.goto(path);
     await expect(page.getByRole('link', { name: '漫画日記 ホーム' })).toBeVisible();
     if (path === '/') {
       await expect(page.getByRole('heading', { name: '今日の記録' })).toHaveClass(/sr-only/);
       await expect(page.locator('.home-today-hero')).toBeVisible();
+      homeDateFontSize = await page
+        .locator('.home-date')
+        .evaluate((element) => getComputedStyle(element).fontSize);
     }
-    if (path === '/new') await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+    if (path === '/new') {
+      await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+      entryDateFontSize = await page
+        .locator('.date-display')
+        .evaluate((element) => getComputedStyle(element).fontSize);
+    }
     if (path === '/library') {
       await expect(page.getByRole('table')).toBeVisible();
       await expect(page.getByRole('button', { name: '一覧で見る' })).toBeVisible();
@@ -146,6 +175,21 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
   }
 
   for (const snapshot of snapshots.slice(1)) expect(snapshot).toEqual(snapshots[0]);
+  expect(homeDateFontSize).toBe(entryDateFontSize);
+});
+
+test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.setViewportSize({ width: 393, height: 852 });
+
+  for (const path of ['/', `/entries/${entryId}`]) {
+    await page.goto(path);
+    const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    const bottomGap = await nav.evaluate(
+      (element) => window.innerHeight - element.getBoundingClientRect().bottom,
+    );
+    expect(bottomGap).toBeCloseTo(12, 0);
+  }
 });
 
 test('Home・入力・記録・詳細は主要幅で横にはみ出さない', async ({ page }) => {
