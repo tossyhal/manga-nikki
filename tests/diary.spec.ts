@@ -117,15 +117,18 @@ test('設定取得失敗時は案内と公開サンプルだけを表示する',
     await page.goto(path);
     await expect(page.locator('.notice')).toHaveText(message);
     if (path === '/') {
-      await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'サンプルを見る' })).toBeVisible();
       await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
-      await page.getByRole('button', { name: '漫画を読む' }).click();
+      await page.getByRole('button', { name: 'サンプルを見る' }).click();
       await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+      await expect(page.getByText('架空サンプル', { exact: true })).toBeVisible();
       await expect(
         page.getByText('朝はトーストを食べた。図書館で本を読んだ。帰り道で猫を見かけた。'),
       ).toBeVisible();
       await page.getByRole('button', { name: '戻る' }).click();
+      await expect(page.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'サンプルを見る' })).toBeVisible();
     } else {
       await expect(page.locator('#main').getByRole('alert')).toHaveText(message);
     }
