@@ -13,8 +13,12 @@ export function BottomNav() {
         aria-label="ホーム"
         aria-current={active === 'home' ? 'page' : undefined}
       >
-        <Icon name="home" />
-        <span aria-hidden={active !== 'home'}>ホーム</span>
+        <span className="bottom-nav-icon" aria-hidden="true">
+          <Icon name="home" />
+        </span>
+        <span className="bottom-nav-label" aria-hidden={active !== 'home'}>
+          ホーム
+        </span>
       </Link>
       <Link
         className={`bottom-nav-item${active === 'write' ? ' is-active' : ''}`}
@@ -22,8 +26,12 @@ export function BottomNav() {
         aria-label="日記を書く"
         aria-current={active === 'write' ? 'page' : undefined}
       >
-        <Icon name="plus" size={28} />
-        <span aria-hidden={active !== 'write'}>書く</span>
+        <span className="bottom-nav-icon" aria-hidden="true">
+          <Icon name="plus" size={28} />
+        </span>
+        <span className="bottom-nav-label" aria-hidden={active !== 'write'}>
+          書く
+        </span>
       </Link>
       <Link
         className={`bottom-nav-item${active === 'records' ? ' is-active' : ''}`}
@@ -31,8 +39,12 @@ export function BottomNav() {
         aria-label="記録"
         aria-current={active === 'records' ? 'page' : undefined}
       >
-        <Icon name="calendar" />
-        <span aria-hidden={active !== 'records'}>記録</span>
+        <span className="bottom-nav-icon" aria-hidden="true">
+          <Icon name="calendar" />
+        </span>
+        <span className="bottom-nav-label" aria-hidden={active !== 'records'}>
+          記録
+        </span>
       </Link>
     </nav>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Link,
   Outlet,
@@ -34,6 +34,7 @@ type AppContext = {
   configError: boolean;
   personalDataAvailable: boolean;
   onActivityChange: (activity: DiaryActivity) => void;
+  setHeaderAction: (action: ReactNode | null) => void;
 };
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
@@ -184,13 +185,14 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
         </time>
       )}
       <section className="today-section" aria-labelledby="today-heading">
-        <h1 id="today-heading">{showSample ? 'サンプル' : '今日の記録'}</h1>
+        <h1 id="today-heading" className={showSample ? undefined : 'sr-only'}>
+          {showSample ? 'サンプル' : '今日の記録'}
+        </h1>
         {showSample ? (
           <div className="home-today-hero">
             <div className="home-today-content">
-              <span className="sample-tag">架空サンプル</span>
               <h2>{pageComic.title}</h2>
-              <p>日記を漫画にしたサンプルです。</p>
+              <p>サンプル漫画</p>
               <button
                 className="today-write-link"
                 type="button"
@@ -318,11 +320,12 @@ function NewEntryRoute() {
 }
 
 function LibraryRoute() {
-  const { config, configError, personalDataAvailable } = useOutletContext<AppContext>();
+  const { config, configError, personalDataAvailable, setHeaderAction } =
+    useOutletContext<AppContext>();
   if (!config && !configError) return <output>読み込んでいます…</output>;
   if (configError) return <p role="alert">{configUnavailableMessage}</p>;
   return personalDataAvailable ? (
-    <Library />
+    <Library setHeaderAction={setHeaderAction} />
   ) : (
     <p>記録の閲覧はこのサンプル環境では利用できません。</p>
   );
@@ -351,14 +354,20 @@ function NotFound() {
 
 function App() {
   const location = useLocation();
+  const isPrimaryRoute = ['/', '/new', '/library'].includes(location.pathname);
+  const isLibraryRoute = location.pathname === '/library';
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
+  const [headerAction, setHeaderActionState] = useState<ReactNode | null>(null);
   const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
   const [blockedActivity, setBlockedActivity] = useState<DiaryActivity | null>(null);
   const diaryActivityRef = useRef(diaryActivity);
   const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
     diaryActivityRef.current = activity;
     setDiaryActivity(activity);
+  }, []);
+  const setHeaderAction = useCallback((action: ReactNode | null) => {
+    setHeaderActionState(() => action);
   }, []);
   const shouldBlockNavigation = useCallback<BlockerFunction>(
     ({ currentLocation, nextLocation }) => {
@@ -395,33 +404,37 @@ function App() {
     configError,
     personalDataAvailable,
     onActivityChange: reportDiaryActivity,
+    setHeaderAction,
   };
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isPrimaryRoute ? ' primary-shell' : ''}`}>
       <a className="skip" href="#main">
         本文へ移動
       </a>
-      {location.pathname === '/' && (
+      {isPrimaryRoute && (
         <header className="app-header">
           <Link className="brand" to="/" aria-label="漫画日記 ホーム">
-            まんが日記
+            漫画日記
           </Link>
-          <span className="header-settings" aria-hidden="true">
-            <Icon name="settings" />
-          </span>
+          <div className="app-header-action">{isLibraryRoute ? headerAction : null}</div>
         </header>
       )}
-      {configError && (
-        <aside className="notice" role="alert">
-          {configUnavailableMessage}
-        </aside>
-      )}
-      <PwaNotice
-        diaryDirty={diaryActivity.dirty}
-        diaryBusy={diaryActivity.busy}
-        hideOfflineNotice={location.pathname === '/new'}
-      />
-      <main id="main" className={`app-main${location.pathname === '/' ? ' app-main-home' : ''}`}>
+      <div className="app-notices">
+        {configError && (
+          <aside className="notice" role="alert">
+            {configUnavailableMessage}
+          </aside>
+        )}
+        <PwaNotice
+          diaryDirty={diaryActivity.dirty}
+          diaryBusy={diaryActivity.busy}
+          hideOfflineNotice={location.pathname === '/new'}
+        />
+      </div>
+      <main
+        id="main"
+        className={`app-main${isPrimaryRoute ? ' primary-content' : ''}${location.pathname === '/' ? ' app-main-home' : ''}`}
+      >
         <Outlet context={context} />
       </main>
       <BottomNav />

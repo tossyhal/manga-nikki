@@ -53,13 +53,13 @@ export function PwaNotice({ diaryDirty, diaryBusy, hideOfflineNotice = false }: 
       {!online && !hideOfflineNotice && (
         <output className="pwa-notice" aria-live="polite">
           <p>
-            オフラインです。架空サンプルは見られますが、日記の保存・履歴の取得・漫画の生成には通信が必要です。日記本文や生成画像はオフライン用に保存しません。
+            オフラインです。保存・履歴の取得・漫画の生成には通信が必要です。日記本文と生成画像はオフライン用に保存していません。
           </p>
         </output>
       )}
       {offlineReady && (
         <output className="pwa-notice" aria-live="polite">
-          <p>架空サンプルを含む画面をオフラインで表示できます。日記本文や生成画像は対象外です。</p>
+          <p>サンプルはオフラインで表示できます。日記本文と生成画像は対象外です。</p>
           <button
             className="button button-secondary"
             type="button"
