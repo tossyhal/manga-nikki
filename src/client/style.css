@@ -247,12 +247,14 @@ p {
 }
 
 .home-date {
-  display: block;
-  margin: 8px 0 18px;
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  margin: 0 0 4px;
   color: #252525;
   font-size: 16px;
   font-weight: 700;
-  line-height: 1.4;
+  line-height: 1.55;
 }
 
 .today-section h1 {

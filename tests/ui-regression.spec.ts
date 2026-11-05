@@ -52,6 +52,24 @@ async function installMockUiRoutes(page: Page, entries: Entry[] = [entryFixture]
   });
 }
 
+async function dateTextMetrics(page: Page, selector: string) {
+  return page.locator(selector).evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rect = range.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      text: element.textContent?.trim(),
+      x: Math.round(rect.x * 10) / 10,
+      y: Math.round(rect.y * 10) / 10,
+      height: Math.round(rect.height * 10) / 10,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      color: style.color,
+    };
+  });
+}
+
 async function shellGeometry(page: Page) {
   return page.evaluate(() => {
     const bounds = (element: Element | null) => {
@@ -143,23 +161,19 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
   await page.setViewportSize({ width: 393, height: 852 });
 
   const snapshots: Awaited<ReturnType<typeof shellGeometry>>[] = [];
-  let homeDateFontSize: string | undefined;
-  let entryDateFontSize: string | undefined;
+  let homeDateText: Awaited<ReturnType<typeof dateTextMetrics>> | undefined;
+  let entryDateText: Awaited<ReturnType<typeof dateTextMetrics>> | undefined;
   for (const path of ['/', '/new', '/library']) {
     await page.goto(path);
     await expect(page.getByRole('link', { name: '漫画日記 ホーム' })).toBeVisible();
     if (path === '/') {
       await expect(page.getByRole('heading', { name: '今日の記録' })).toHaveClass(/sr-only/);
       await expect(page.locator('.home-today-hero')).toBeVisible();
-      homeDateFontSize = await page
-        .locator('.home-date')
-        .evaluate((element) => getComputedStyle(element).fontSize);
+      homeDateText = await dateTextMetrics(page, '.home-date');
     }
     if (path === '/new') {
       await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
-      entryDateFontSize = await page
-        .locator('.date-display')
-        .evaluate((element) => getComputedStyle(element).fontSize);
+      entryDateText = await dateTextMetrics(page, '.date-display time');
     }
     if (path === '/library') {
       await expect(page.getByRole('table')).toBeVisible();
@@ -175,7 +189,7 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
   }
 
   for (const snapshot of snapshots.slice(1)) expect(snapshot).toEqual(snapshots[0]);
-  expect(homeDateFontSize).toBe(entryDateFontSize);
+  expect(homeDateText).toEqual(entryDateText);
 });
 
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
