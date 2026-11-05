@@ -553,7 +553,9 @@ describe('generation queue consumer', () => {
           return { generation_id: generationId, status: 'running', stage: 'saving' };
         }
         if (name === 'list_generation_reconcile_candidates_v2')
-          return stage === 'saving' ? [{ generation_id: generationId, action: 'recover-saving' }] : [];
+          return stage === 'saving'
+            ? [{ generation_id: generationId, action: 'recover-saving' }]
+            : [];
         throw new Error(`unexpected rpc: ${name}`);
       }, calls);
       const saveGeneratedComic = vi.fn<SaveGeneratedComic>(async () => {
@@ -596,7 +598,10 @@ describe('generation queue consumer', () => {
       expect(createImageProvider).toHaveBeenCalledTimes(imageFactoryCalls);
       expect(calls.map((call) => call.name)).toEqual([
         'claim_generation',
-        ...Array.from({ length: 5 }, () => ['begin_provider_attempt', 'finish_provider_attempt']).flat(),
+        ...Array.from({ length: 5 }, () => [
+          'begin_provider_attempt',
+          'finish_provider_attempt',
+        ]).flat(),
         'mark_generation_saving',
         'list_generation_reconcile_candidates_v2',
       ]);

@@ -296,11 +296,7 @@ export async function reserveLiveOpenAIGeneration(
   if (existing) return existing;
 
   if (
-    !openAIGenerationIngressConfigured(
-      context.environment,
-      saveHandlerReady,
-      recoveryHandlerReady,
-    )
+    !openAIGenerationIngressConfigured(context.environment, saveHandlerReady, recoveryHandlerReady)
   )
     throw new LiveGenerationError(503, 'GENERATION_DISABLED');
 

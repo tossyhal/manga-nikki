@@ -118,8 +118,7 @@ export async function runOpenAIGeneration(
 
   const saveGeneratedComic = runtime.saveGeneratedComic;
   const apiKey = environment.OPENAI_API_KEY?.trim();
-  if (!saveGeneratedComic || !apiKey)
-    throw new Error('OPENAI_GENERATION_DISABLED');
+  if (!saveGeneratedComic || !apiKey) throw new Error('OPENAI_GENERATION_DISABLED');
 
   const claimDeadlineMs = Date.parse(claim.deadline_at);
   const deadlineMs = Math.min(claimDeadlineMs, Date.now() + overallTimeoutMs);
