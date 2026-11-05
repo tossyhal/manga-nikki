@@ -35,7 +35,7 @@
 - 非公開スキーマと専用RPCの保護
   - 利用枠・予算・試行履歴（`quota` / `policy` / `attempts`）は`private`スキーマに置き、外部へ非公開とします。
   - サーバー専用RPCの実行権限（`EXECUTE`）は、`PUBLIC`・`anon`・`authenticated`から明示的に剥奪（REVOKE）します。
-  - 関数は原則`SECURITY INVOKER`とし、どうしても`SECURITY DEFINER`が必要な場合は「空の`search_path`指定・スキーマ完全修飾名・関数内部での所有者検証」を必須とします。
+  - 関数は原則`SECURITY INVOKER`とし、private counter / save task操作に必要な`create_entry`と保存RPCだけ`SECURITY DEFINER`を使います。これらはservice_role専用・空の`search_path`・スキーマ完全修飾名とし、`create_entry`は検証済みJWT subject由来のownerを引数に取るWorkerからだけ呼びます。
   - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
@@ -80,6 +80,13 @@
   - 画像のBase64データ・署名付きURL
   - AIプロバイダから返った生のエラーレスポンス
 - 開発・CI・デモ動画の撮影には必ず架空の日記を使用し、アクセス元の生IPアドレスの恒久保存や行動追跡用のAnalyticsは導入しません。
+
+### 日記作成頻度と未回収容量の上限
+
+- 公開CRUDを有効にする場合、`create_entry`がDB transaction内で新規作成だけを計上し、ownerあたり50件/JST日、全体1,000件/JST日を上限にします。同一作成要求の冪等再送は再計上せず、削除APIは常に利用でき、削除しても日次枠は戻しません。
+- `entries`に残る物理未回収行は論理削除済み・期限切れも含め、ownerあたり100件・全体5,000件で上限を設けます。active draft20件の既存上限は別に維持します。上限時の拒否はHTTP429で返し、認証・RLS・CAPTCHA・生成予算の制御を緩めて回避しません。
+- `private.entry_creation_owner_daily`と`private.entry_creation_global_daily`は日記本文・作成request IDを保持しません。新しい作成が成功するtransactionでJST日付より古いcounter行を削除します。日次global作成上限により1日あたりowner counter行は最大1,000行で、次の成功日に古い行をまとめて回収します。
+- capacityの初期値は短期ハッカソン運用向けの保護上限です。物理cleanupはJST 0時に最大10entry/日で、削除・期限切れentryがactive generationやStorage障害で待機することもあります。全体1,000件/日の作成上限は持続可能な処理能力を示す値ではなく、5,000件の保持上限へ達した場合はcleanupで行が回収されるまで全体の新規作成をfail closedにします。上限値・保持期間・cleanup能力を増やす公開拡張は、実測したcapacityを基に別途判断してください。
 
 ---
 
@@ -177,6 +184,7 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
 | JWTなし / 偽造 / 別プロジェクト / 期限切れ、他人の`entry` / `job` / `asset`指定 | 認証エラーで拒否、他人のリソースは一律`404`となり署名URLも発行されない |
 | `anon`・ユーザーA・ユーザーBによる直接のREST / RPC / Storageアクセス | 他人データの閲覧、直接の書き込み、専用RPCの直接実行、Storage署名発行がすべて拒否される |
 | 同一`Idempotency-Key`の同時リクエスト / 異なる内容、最後の1枠への同時リクエスト | 生成ジョブと枠予約は1件だけ作られ、別内容は`409`、予算・回数上限の超過が起きない |
+| `POST /entries`の同一作成要求・JST日次owner/global頻度上限・保持100/5,000件上限・DELETE後の再作成 | 同一要求は二重計上されず、削除は受け付けたまま、日次・保持上限の並列要求は上限を超えず429になる。物理cleanupで容量が戻ることも確認する |
 | 匿名ユーザーIDの再作成、全体/期間/金額上限への到達、キルスイッチ停止時 | ユーザーを作り直しても全体上限で止まり、停止時は未開始のAIプロバイダを一切呼ばない |
 | サインアップ用と生成用のTurnstileトークン使い回し、会場等の同一IPからの多人数利用 | トークン使い回しは拒否され、IP制限時は意図通り架空サンプル画面へ案内される |
 | Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mockはclaimで1回だけ処理し、未配送は照合する。OpenAI各callは事前にattemptを開始し、結果不明なら`unknown` / `held`で保持して自動再実行しない |
@@ -206,6 +214,7 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
 
 - 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
 - `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
+- 日記作成counterはJST日次でowner50件・全体1,000件、保持行上限はowner100件・全体5,000件です。cleanup最大10entry/日より作成上限のほうが大きいため、5,000行に達した後は回収が作成を上回るまで全体作成が止まる可能性があります。これは短期デモ用のハード上限で、公開拡張時にスループットを保証する容量計画ではありません。Storage GC outboxもpath 40件/1batchの上限があり、全markerを毎日処理できる保証ではありません。
 - 1分のgeneration reconcileは`list_generation_reconcile_candidates_v2(p_limit=25)`を使います。DB候補選択は通常精算→保存復旧→enqueueの順で、復旧候補は最大3件、enqueue候補がある場合は精算後の残枠のおよそ半分までを割り当て、残りでenqueueします。5分先の`save_recovery_retry_at`が未来のsaving jobは候補から外し、expire扱いにしません。Runtime実行順は通常精算→enqueue→保存復旧で、queue送信枠を先に確保します。
 - saving復旧callback前に`begin_generation_save_recovery(p_generation_id)`がDB lock下でstatus/stage/profile/owner/entry/claim deadline/reservation/retry dueを再検査し、成功時は`save_recovery_retry_at=now()+5分`を設定します。他workerに先に取得された・不適格なら`false`を返し、callbackは呼びません。元のprovider claim・attempt台帳は変更せず、AI providerは再実行しません。Cron一回あたりcallbackは最大3件、各最大120秒で、元のprovider claim deadlineから24時間以内に限ります。
 - live-demoでは復旧callbackが注入されていれば`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存saving taskをgeneration IDから再開します。`pending`または一時障害では`stage=saving`を維持し、24時間を超えたjobは通常expire精算で`failed` / `consumed`とし、予約をreleaseせず再生成もしません。取消・削除・entry期限切れjobは復旧候補より先に通常精算し、`unknown` jobは自動解放しません。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
