@@ -19,11 +19,15 @@ export function GenerationQuotaStatus({
   activeGeneration,
   currentEntryId,
   currentGenerationId,
+  onRefresh,
+  refreshing = false,
 }: {
   quota: GenerationQuota;
   activeGeneration: Generation | null;
   currentEntryId?: string;
   currentGenerationId?: string | null;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }) {
   const nextReset = resetLabel(quota.resetAt);
   const showOtherActiveGeneration =
@@ -54,6 +58,11 @@ export function GenerationQuotaStatus({
             '記録の一覧から進行状況を確認してください。'
           )}
         </p>
+      )}
+      {onRefresh && (
+        <button className="button-text" type="button" disabled={refreshing} onClick={onRefresh}>
+          {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+        </button>
       )}
     </section>
   );

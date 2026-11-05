@@ -1044,8 +1044,33 @@ p {
   transform: none;
 }
 
-.primary-action-dock > .button {
+.primary-action-dock > .button,
+.primary-action-row > .button {
   display: flex;
+}
+
+.primary-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.primary-action-row > .button {
+  min-width: 0;
+  flex: 1;
+}
+
+.quota-refresh-action {
+  min-height: 44px;
+  padding-inline: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.detail-action-dock > .quota-refresh-action {
+  display: block;
+  width: 100%;
+  margin: 0 0 4px;
 }
 
 .inline-alert,
@@ -1695,6 +1720,17 @@ p {
 
 .detail-edit-form {
   padding-bottom: 14px;
+}
+
+.detail-edit-pending-note {
+  display: block;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f6f6f6;
+  color: #505050;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .detail-edit-form .entry-editor-footer {

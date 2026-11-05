@@ -225,6 +225,165 @@ test('生成待ち・生成中の日記では編集操作を表示しない', as
   }
 });
 
+test('編集フォーム表示中に生成状態が後着しても入力と操作を一貫させる', async ({ page }) => {
+  let releaseQuota!: () => void;
+  let notifyQuota!: () => void;
+  const quotaRequested = new Promise<void>((resolve) => {
+    notifyQuota = resolve;
+  });
+  const quotaGate = new Promise<void>((resolve) => {
+    releaseQuota = resolve;
+  });
+  let releasePoll!: () => void;
+  let notifyPoll!: () => void;
+  const pollRequested = new Promise<void>((resolve) => {
+    notifyPoll = resolve;
+  });
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let generationReads = 0;
+
+  await configureDetail(page);
+  await page.route('**/api/v1/me/quota', async (route) => {
+    notifyQuota();
+    await quotaGate;
+    return route.fulfill({
+      json: {
+        remainingToday: 2,
+        activeGenerationId: generationId,
+        resetAt: '2099-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1)
+      return route.fulfill({ json: generationFixtures(entryId, generationId).queued });
+    if (generationReads === 2) {
+      notifyPoll();
+      await pollGate;
+    }
+    return route.fulfill({ json: generationFixtures(entryId, generationId).failed });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await quotaRequested;
+  await clickEntryMenuItem(page, '日記を編集');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '生成状態が後着しても保つ編集内容';
+  await diary.fill(draft);
+
+  releaseQuota();
+  await pollRequested;
+  await expect(page.locator('#edit-entry-form')).toHaveCount(1);
+  await expect(diary).toHaveValue(draft);
+  await expect(diary).toBeDisabled();
+  await expect(page.locator('.detail-edit-pending-note')).toContainText(
+    '生成中のため変更を保存できません',
+  );
+  await expect(
+    page.locator('.detail-edit-toolbar').getByRole('button', { name: '保存', exact: true }),
+  ).toBeDisabled();
+
+  releasePoll();
+  await expect(diary).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  await expect(
+    page.locator('.detail-edit-toolbar').getByRole('button', { name: '保存', exact: true }),
+  ).toBeEnabled();
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`保存結果が離脱確認へ${outcome === 'success' ? '成功状態' : '未保存状態'}を反映する`, async ({
+    page,
+  }) => {
+    let currentDetail: EntryDetail = { ...draftEntryDetailFixture };
+    let releasePatch!: () => void;
+    let notifyPatch!: () => void;
+    const patchRequested = new Promise<void>((resolve) => {
+      notifyPatch = resolve;
+    });
+    const patchGate = new Promise<void>((resolve) => {
+      releasePatch = resolve;
+    });
+
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: mockClientConfigFixture }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+      if (route.request().method() !== 'PATCH') return route.fulfill({ json: currentDetail });
+      const update = route.request().postDataJSON() as {
+        diaryDate: string;
+        body: string;
+      };
+      notifyPatch();
+      await patchGate;
+      if (outcome === 'failure')
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: 'DEPENDENCY_UNAVAILABLE',
+              message: '保存できませんでした。',
+              requestId: 'blocked-save-e2e',
+              retryable: true,
+            },
+          },
+        });
+      currentDetail = {
+        ...currentDetail,
+        ...update,
+        revision: 2,
+      };
+      return route.fulfill({
+        json: {
+          id: currentDetail.id,
+          diaryDate: currentDetail.diaryDate,
+          body: currentDetail.body,
+          revision: currentDetail.revision,
+          latestGenerationId: currentDetail.latestGenerationId,
+          createdAt: currentDetail.createdAt,
+          updatedAt: '2026-01-03T00:00:00Z',
+        } satisfies Entry,
+      });
+    });
+
+    await page.goto(`/entries/${entryId}`);
+    await clickEntryMenuItem(page, '日記を編集');
+    const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+    const draft = `離脱確認中に保存${outcome}`;
+    await diary.fill(draft);
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await patchRequested;
+    await page.getByRole('link', { name: '記録', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: '処理中です' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('保存に失敗すると');
+    await expect(dialog.getByRole('button', { name: '移動する' })).toBeVisible();
+
+    releasePatch();
+    if (outcome === 'success') {
+      await expect(page).toHaveURL(/\/library(?:\?|$)/);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    } else {
+      const dirtyDialog = page.getByRole('dialog', {
+        name: '入力内容が保存されていません',
+      });
+      await expect(dirtyDialog).toBeVisible();
+      await expect(dirtyDialog.getByRole('button', { name: '保存せずに離れる' })).toBeVisible();
+      await expect(diary).toHaveValue(draft);
+      await clickAppDialogButton(page, '入力内容が保存されていません', '入力に戻る');
+      await expect(diary).toHaveValue(draft);
+      await page.getByRole('link', { name: '記録', exact: true }).click();
+      await clickAppDialogButton(page, '入力内容が保存されていません', '保存せずに離れる');
+      await expect(page).toHaveURL(/\/library(?:\?|$)/);
+    }
+  });
+}
+
 for (const failure of [
   { status: 401, code: 'AUTH_EXPIRED', mode: 'live' as const },
   { status: 409, code: 'REVISION_CONFLICT', mode: 'mock' as const },

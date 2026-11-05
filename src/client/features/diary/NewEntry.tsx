@@ -54,11 +54,12 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
   const [generationFailureEntry, setGenerationFailureEntry] = useState<Entry | null>(null);
-  const { quota, activeGeneration, quotaState, setQuotaState, refreshQuota } = useGenerationQuota({
-    dataMode: config.dataMode,
-    activeRef,
-    markLoading: true,
-  });
+  const { quota, activeGeneration, quotaState, refreshing, setQuotaState, refreshQuota } =
+    useGenerationQuota({
+      dataMode: config.dataMode,
+      activeRef,
+      markLoading: true,
+    });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
   const configAllowsGeneration = config.dataMode !== 'sample' && config.generationAvailable;
   const sessionRequired = config.dataMode === 'live' && quotaState === 'session-required';
@@ -323,15 +324,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
 
   return (
     <section className={pageClasses}>
-      {online && quota && !showQuotaStatus && (
-        <div className="sr-only">
-          <GenerationQuotaStatus
-            quota={quota}
-            activeGeneration={activeGeneration}
-            currentGenerationId={null}
-          />
-        </div>
-      )}
       <form
         className="entry-form new-entry-form"
         noValidate
@@ -367,15 +359,27 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             }
           />
         </fieldset>
-        {online && quota && showQuotaStatus && (
-          <div className="quota-limit-card">
-            <GenerationQuotaStatus
-              quota={quota}
-              activeGeneration={activeGeneration}
-              currentGenerationId={null}
-            />
-          </div>
-        )}
+        {online &&
+          quota &&
+          (showQuotaStatus ? (
+            <div className="quota-limit-card">
+              <GenerationQuotaStatus
+                quota={quota}
+                activeGeneration={activeGeneration}
+                currentGenerationId={null}
+                onRefresh={() => void refreshQuota()}
+                refreshing={refreshing}
+              />
+            </div>
+          ) : (
+            <div className="sr-only">
+              <GenerationQuotaStatus
+                quota={quota}
+                activeGeneration={activeGeneration}
+                currentGenerationId={null}
+              />
+            </div>
+          ))}
         {online &&
           !config.generationAvailable &&
           config.dataMode !== 'sample' &&
@@ -392,14 +396,14 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </p>
             <button
               className="button-text"
-              disabled={busy}
+              disabled={busy || refreshing}
               type="button"
               onClick={() => {
                 setQuotaState('loading');
                 void refreshQuota();
               }}
             >
-              利用枠を再確認
+              {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
             </button>
           </section>
         )}
@@ -490,17 +494,29 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
             )}
             <div className="primary-action-dock">
-              <button className="button button-primary" disabled={primaryDisabled} type="submit">
-                {busy
-                  ? '保存しています…'
-                  : saveErrorIntent !== null
-                    ? 'もう一度保存'
-                    : canGenerate
-                      ? '4コマにする'
-                      : quotaState === 'loading' && configAllowsGeneration
-                        ? '利用枠を確認しています…'
-                        : '下書きとして保存'}
-              </button>
+              <div className="primary-action-row">
+                <button className="button button-primary" disabled={primaryDisabled} type="submit">
+                  {busy
+                    ? '保存しています…'
+                    : saveErrorIntent !== null
+                      ? 'もう一度保存'
+                      : canGenerate
+                        ? '4コマにする'
+                        : quotaState === 'loading' && configAllowsGeneration
+                          ? '利用枠を確認しています…'
+                          : '下書きとして保存'}
+                </button>
+                {quota && !showQuotaStatus && (
+                  <button
+                    className="button-text quota-refresh-action"
+                    disabled={busy || refreshing}
+                    type="button"
+                    onClick={() => void refreshQuota()}
+                  >
+                    {refreshing ? '確認中…' : '枠を更新'}
+                  </button>
+                )}
+              </div>
             </div>
           </>
         )}

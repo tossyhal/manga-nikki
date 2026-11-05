@@ -83,7 +83,7 @@ function DetailContent({
       location.state.startGeneration === true,
     ),
   );
-  const { quota, activeGeneration, quotaState, setActiveGeneration, refreshQuota } =
+  const { quota, activeGeneration, quotaState, refreshing, setActiveGeneration, refreshQuota } =
     useGenerationQuota({
       dataMode: config.dataMode,
       activeRef,
@@ -224,6 +224,10 @@ function DetailContent({
   );
   const comicFromPreviousRevision =
     generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
+  const showQuotaStatus = Boolean(
+    quota &&
+    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
+  );
   const showGenerationAction = Boolean(
     !pending &&
     !unknownGeneration &&
@@ -278,11 +282,6 @@ function DetailContent({
   const savedDiaryPreview = savedDiaryHasMore
     ? `${savedDiaryCharacters.slice(0, 120).join('')}…`
     : savedDiaryCharacters.join('');
-  const showQuotaStatus = Boolean(
-    quota &&
-    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
-  );
-
   useEffect(() => {
     if (!error || !editFormVisible) return;
     const alert = editErrorRef.current;
@@ -516,7 +515,7 @@ function DetailContent({
             className="button-text"
             type="submit"
             form="edit-entry-form"
-            disabled={busy || !draftDirty}
+            disabled={busy || pending || !draftDirty}
           >
             {busy ? '保存中' : '保存'}
           </button>
@@ -538,13 +537,18 @@ function DetailContent({
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
 
-          {editing && !pending ? (
+          {editing ? (
             <form
               id="edit-entry-form"
               className="entry-form detail-edit-form"
               onSubmit={(event) => void saveEdit(event)}
             >
-              <fieldset disabled={busy} className="entry-form-fields">
+              <fieldset disabled={busy || pending} className="entry-form-fields">
+                {pending && (
+                  <output className="detail-edit-pending-note">
+                    この記録は生成中のため変更を保存できません。入力内容は保持され、生成が完了すると編集を再開できます。
+                  </output>
+                )}
                 <div className="date-row">
                   <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
                 </div>
@@ -559,7 +563,7 @@ function DetailContent({
               {editErrorStatus === 409 && (
                 <button
                   className="button button-secondary latest-entry-action"
-                  disabled={busy}
+                  disabled={busy || pending}
                   type="button"
                   onClick={requestReloadLatest}
                 >
@@ -715,16 +719,14 @@ function DetailContent({
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
           {quota && !pending && !unknownGeneration && (
-            <div
-              className={
-                showQuotaStatus && !generationReferenceUnavailable ? 'detail-quota-card' : 'sr-only'
-              }
-            >
+            <div className={showQuotaStatus ? 'detail-quota-card' : 'sr-only'}>
               <GenerationQuotaStatus
                 quota={quota}
                 activeGeneration={activeGeneration}
                 currentEntryId={entry.id}
                 currentGenerationId={generation?.id ?? null}
+                onRefresh={showQuotaStatus ? () => void refreshQuota() : undefined}
+                refreshing={refreshing}
               />
             </div>
           )}
@@ -737,8 +739,13 @@ function DetailContent({
                     ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
                     : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
                 </p>
-                <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-                  利用枠を再確認
+                <button
+                  className="button-text"
+                  type="button"
+                  disabled={refreshing}
+                  onClick={() => void refreshQuota()}
+                >
+                  {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
                 </button>
               </div>
             )}
@@ -761,13 +768,28 @@ function DetailContent({
               ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
               : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
           </p>
-          <button className="button-text" type="button" onClick={() => void refreshQuota()}>
-            利用枠を再確認
+          <button
+            className="button-text"
+            type="button"
+            disabled={refreshing}
+            onClick={() => void refreshQuota()}
+          >
+            {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
           </button>
         </div>
       )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
+          {quota && !showQuotaStatus && !pending && !unknownGeneration && (
+            <button
+              className="button-text quota-refresh-action"
+              disabled={busy || refreshing}
+              type="button"
+              onClick={() => void refreshQuota()}
+            >
+              {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+            </button>
+          )}
           {pending && (
             <Link className="button button-primary" to={backTo}>
               記録を見る
