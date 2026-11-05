@@ -83,9 +83,12 @@ function rpcFetcher(
 
 function successfulOpenAIProviders() {
   const script = scriptSchema.parse(structuredClone(scriptSample));
-  const png = new Uint8Array([
-    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  ]);
+  const png = Uint8Array.from(
+    atob(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=',
+    ),
+    (character) => character.charCodeAt(0),
+  );
   const metadataFor = (
     stage: ProviderStage,
     callIndex: number,

@@ -1,8 +1,8 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> PR#29までの変更は`main`へ統合済みです。PR#41でOpenAI白黒生成のQueue・attempt ledgerと保存復旧callback契約を加えていますが、画像private保存・asset登録・実生成の成功確定RPCは未実装です。保存taskのdurable記録と復旧callbackは保存担当の実装範囲です。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
+> PR#29までの変更は`main`へ統合済みです。現在のbranchでは、OpenAI白黒生成のQueue・attempt ledgerにprivate画像保存・asset登録・実生成完了RPC・保存復旧runtime・署名URL取得を接続しています。保存migrationはbranchにありますが共有DBへは未適用です。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
 >
-> 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの課金・有料化・本番公開は別承認なしに行いません。
+> 隔離Supabase等で行った部分的な検証は[README](../README.md)を参照してください。親担当者の隔離Supabase統合試験では実private保存・完了障害後の復旧・欠損objectの失敗確定・署名URL取得・他owner拒否・削除後404を確認しています。共有DB、実Turnstile、実Cloudflare Queue / Cron、実AIの品質・課金、公開環境は未検証です。通常の開発はモック（`mock`）で行い、実AIの課金・有料化・本番公開は別承認なしに行いません。
 
 ---
 
@@ -26,9 +26,9 @@
 - `getUser`はリクエストごとにAuthサーバーへ接続するため、Authサービス障害時には個人APIを利用できません。Supabaseはこれをサーバー側でセッション終了を検出する方法として案内していますが、失効済みJWTは有効期限`exp`まで残りうるとも明記しています。したがって即時失効は保証せず、`session_id`を使った`auth.sessions`照会も現行APIでは行いません。
 - 公式資料：[Authサーバー側ガイド](https://supabase.com/docs/guides/auth/server-side/advanced-guide)、[Auth sessions](https://supabase.com/docs/guides/auth/sessions)、[Signing out](https://supabase.com/docs/guides/auth/signout)。
 - 読み取りと書き込みの分離
-  - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
+  - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`、secret keyだけを使う`createServerRpcClient`、Storage署名専用clientを分け、incoming Authorization headerをservice clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。live-demoには固定OpenAI profile予約、脚本1回と画像4回のattempt ledger、Queue Consumerを実装しています。実Turnstile・共有DB・実Cloudflare Queue結合、画像private Storage保存・asset登録・実生成のsucceeded確定RPCは未接続です。新規生成は保存handlerまたは復旧callbackの片方でも未設定なら受付とConsumerをfail closedにします。保存が一時停止したjobは`running` / `saving`に残し、Queueをackします。Cronは保存復旧callbackからdurable taskを続けられます。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。live-demoには固定OpenAI profile予約、脚本1回と画像4回のattempt ledger、Queue Consumer、private画像保存・asset登録・完了確定RPC・復旧runtimeを実装しています。実Turnstile・共有DB・実Cloudflare Queue結合は未確認です。新規生成は環境flag・policy・Queue・Turnstile・API keyなどのready条件が揃わなければ受付をfail closedにします。保存が一時停止したjobは`running` / `saving`に残し、Queueをackします。CronはDBに保存したmanifestから画像を照合して復旧し、AIを再実行しません。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -39,10 +39,10 @@
   - `service_role`は`generation_policy`をSELECTだけに限定し、`quota_counters`は予約のためSELECT / INSERT / UPDATE、`reservations`はSELECT / INSERTと`state`列UPDATE、`provider_attempts`はSELECT / INSERTと`state`・`request_id`・`finished_at`列UPDATEを許可します。どちらのledgerにもDELETE権限はありません。`SECURITY INVOKER`の必要権限としてDBロールへ付与するもので、アプリ通常経路はサーバー専用RPC client factoryに限定します。`anon`・`authenticated`にはprivate schema usageを付与しません。
 - Storage（画像）の非公開管理
   - ブラウザからStorageへの直接`SELECT`・署名URL発行・直接アップロードはすべて禁止します。
-  - Hono APIが「`asset` → `job` → `entry`の所有者一致・未削除・有効期限内」を照合した上で、有効期限60秒の署名URLを発行します。
+  - Hono APIは利用者JWT/RLSでasset・成功済みgenerationとcomic内asset参照を読み、同じownerの未削除・有効期限内entryを確認します。さらにserver専用clientでassetのowner/generation/path metadataを確認した後に有効期限60秒の署名URLを発行し、署名直後に権限状態をもう一度照会します。本人の有効なentryに属する過去generationも表示できます。
   - 発行された署名URLをDB・`localStorage`・Service Worker等へ保存してはいけません。また、ファイルパスの先頭文字列（プレフィックス）だけで認可判定を行いません。
   - `supabase/storage/comics-bucket.sql`はStorage APIが有効な環境だけで、`storage.buckets` / `storage.objects`を管理できるroleから適用します。local Supabaseでは検証済みの`supabase_admin`を使います（table ownerは`supabase_storage_admin`、CLI3の`postgres`には権限不足）。cloudの適用roleは未検証です。`service_role`へDDL権限を足さず、プラットフォーム既定のRLSを維持します。
-  - 過去のlocal Supabase Storage API検証ではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを確認しました。広域authenticated permissive policy下でもcomicsは拒否され、別bucket操作は阻害されませんでした。これは生成画像保存serviceの接続確認ではありません。cloudの適用・Storage API結合は未検証です。
+  - 過去のlocal Supabase Storage API検証ではprivate bucket、MIME・8 MiB制限、anon / authenticatedのcomics直接list / signed URL / upload拒否、comicsの`updateBucket(public: true)`拒否、service_role upload / removeを確認しました。今回の隔離Supabase結合では保存runtimeのprivate upload/downloadと署名URL発行も確認しました。共有DB、cloudのbucket設定・Storage API結合は未検証です。
 - CAPTCHA（Cloudflare Turnstile）と会場ネットワーク対策
   - 匿名サインアップ時と漫画生成リクエスト時では別々のTurnstileトークンを使用し、生成側では`hostname`や`action`も検証します。
   - APIはCAPTCHA検証前にサーバー専用`find_generation_receipt` RPCで既存要求を照会します。receiptがあれば`202`で返し、`null`なら生成専用Turnstile Siteverifyで`action=generate`と許可hostnameを確認してから`reserve_mock_generation`を呼びます。wrapperはpolicy lock下でmock profileを確認し、既存予約RPCも並行要求に備えて同じreceiptを再確認します。
@@ -89,7 +89,7 @@
 
 - 制限設定の正本はDBの`private.generation_policy`テーブルです。
   - 初期値：`enabled = false`、全体の日次枠・全期間枠・金額予算はすべて`0`、ユーザーごとの上限は「1日2試行まで・同時実行1ジョブまで」（日付の切り替わりはサーバー側の日本時間JST基準）。
-- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら新規受付を停止します。停止時点ですでにqueuedだったjobと`reserved`枠は維持し、releaseしません。Consumerはclaimや外部呼出しを始めず、handler復帰後にreconcileがQueueへ再送します。default Workerには両handlerを注入していません。
+- 環境変数の`GENERATION_ENABLED="true"`とDBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・承認済み予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら新規受付を停止します。停止時点ですでにqueuedだったjobと`reserved`枠は維持し、releaseしません。Consumerはclaimや外部呼出しを始めず、handler復帰後にreconcileがQueueへ再送します。default Workerには保存・復旧handlerを注入済みですが、現在のstaging/production設定はsample/off・Queue未設定のため停止しています。
 - `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、`find_generation_receipt`と`reserve_generation`の既存同一要求照会は停止中も同じjobを返します。
 - `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。現在コードが許可する実AI profileはOpenAI脚本`gpt-4.1-mini-2025-04-14` + 白黒画像`gpt-image-2.5-flare`、4 image callsです。profileには`profile_id`、`is_mock=false`、DB管理の正整数`max_cost_micro_usd`を含め、最大費用を予約します。provider/model/color modeなどは固定allowlistと一致しなければ停止し、日記本文やHTTP bodyから受けません。初期policyはdisabled・予算0で、費用負担者と実際の利用可能モデル権限は未確認です。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
@@ -150,6 +150,17 @@ staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenと
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
    - 古い料金表の数値を予算の根拠にしません。
+
+### 実デモ用live-demoを準備する手順
+
+現在の`wrangler.jsonc`はstaging / productionを`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`に固定し、両環境にQueue bindingを設定していません。実デモへ移すには環境設定を変える別レビューが必要です。以下は実AIの課金・公開を有効化する許可ではありません。
+
+1. 架空日記専用のSupabase demo projectを用意し、匿名Authを設定します。`supabase/migrations/`のレビュー済みmigrationを順番に適用し、`supabase/storage/comics-bucket.sql`でprivate `comics` bucketを設定します。migrationとbucket設定は管理roleで適用し、Worker用secret keyをDDL実行に使いません。
+2. staging用Wrangler設定の変更をレビューし、`APP_ENV=staging`、`DATA_MODE=live`、`AI_MODE=live`、初期値`GENERATION_ENABLED=false`とします。専用Queueを作り、`GENERATION_QUEUE` producer / consumerの両方へbindし、consumerのbatch size 1・concurrency 2を設定します。Cronには1分ごとのgeneration照合と`0 15 * * *`（UTC）の期限削除を設定します。現行sample設定のproduction環境は変更しません。
+3. Worker側に`SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`、`SUPABASE_SECRET_KEY`、`TURNSTILE_SECRET_KEY`、`TURNSTILE_ALLOWED_HOSTNAMES`、`OPENAI_API_KEY`を設定します。秘密値はWorker Secretsへ置きます。browser build側の`.env.staging.local`には公開値の`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを置きます。
+4. `GENERATION_ENABLED=false`かつDB policy disabledのまま、匿名Auth・日記CRUD・Queue binding・cleanup・private Storage保存/署名/削除とowner拒否を検証します。実AIを試す前に費用負担者、最大費用`Cmax`、日次/全期間枠、モデル利用権限を承認記録へ記し、隔離環境で検証します。その承認後だけDB policyとWorker flagを両方有効にし、承認された少数の架空日記で計測します。
+
+この作業branchでは共有DBへのmigration適用、Worker設定の変更、Queue作成、秘密情報登録、deploy、DB policy / `GENERATION_ENABLED`の有効化、実AI呼出しは行っていません。
 
 ---
 
