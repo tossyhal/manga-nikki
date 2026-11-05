@@ -1,11 +1,29 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import { pageComic, sampleDiary } from '../src/shared/fixtures';
+
+async function openPublicSample(page: Page) {
+  const errorCard = page.locator('.app-state-card[role="alert"]');
+  await expect(errorCard.getByRole('heading', { name: '読み込めませんでした' })).toBeVisible();
+  await errorCard.getByRole('button', { name: 'サンプルを見る' }).click();
+
+  const sample = page.locator('.sample-detail');
+  await expect(sample.getByRole('heading', { level: 1, name: pageComic.title })).toBeVisible();
+  await expect(sample.getByText('架空サンプル', { exact: true })).toBeVisible();
+  await expect(sample.locator('.original-diary > p')).toHaveText(sampleDiary);
+  const image = sample.locator('.comic img');
+  await expect(image).toBeVisible();
+  await expect(image).toHaveAttribute('src', '/sample-comic.svg');
+  await expect
+    .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(0);
+}
 
 test('production previewは公開用静的ファイルだけをcacheし、offlineで架空サンプルを表示する', async ({
   page,
   context,
 }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
+  await openPublicSample(page);
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
@@ -42,7 +60,6 @@ test('production previewは公開用静的ファイルだけをcacheし、offlin
 
   await context.setOffline(true);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'サンプル' })).toBeVisible();
-  await expect(page.getByRole('img', { name: '架空の一日の4コマ漫画' })).toBeVisible();
-  await expect(page.getByRole('status')).toContainText('オフラインです。');
+  await expect(page.getByRole('status').filter({ hasText: 'オフラインです。' })).toBeVisible();
+  await openPublicSample(page);
 });
