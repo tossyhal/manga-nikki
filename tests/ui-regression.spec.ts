@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
+import { generationFixtures, panelsComic } from '../src/shared/fixtures';
+import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
 import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
 
@@ -68,6 +69,18 @@ async function dateTextMetrics(page: Page, selector: string) {
       color: style.color,
     };
   });
+}
+
+async function expectMainToFit(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const main = document.querySelector('#main');
+        if (!(main instanceof HTMLElement)) throw new Error('本文領域がありません');
+        return main.scrollHeight - main.clientHeight;
+      }),
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 async function shellGeometry(page: Page) {
@@ -260,7 +273,7 @@ test('primary画面と詳細画面の下部ナビをviewport下端から12px離�
     const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
-      const expectedWidth = Math.min(390, viewport.width - 40);
+      const expectedWidth = viewport.width >= 960 ? 360 : Math.min(390, viewport.width - 40);
       await expect
         .poll(async () => {
           const bounds = await nav.boundingBox();
@@ -305,7 +318,7 @@ test('primary画面と詳細画面の下部ナビをviewport下端から12px離�
 test('Home・入力・記録・詳細は主要幅で横にはみ出さない', async ({ page }) => {
   await installMockUiRoutes(page);
 
-  const widths = [1280, 430, 393, 320];
+  const widths = [1440, 1280, 800, 640, 430, 393, 320];
   await page.setViewportSize({ width: 320, height: 844 });
   const paths = ['/', '/new', '/library', `/entries/${entryId}`];
   for (const path of paths) {
@@ -349,6 +362,97 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       }
     }
   }
+});
+
+test('デスクトップではページ幅を使い、漫画4コマを2列で表示する', async ({ page }) => {
+  await installMockUiRoutes(page, makeEntries(20));
+
+  const viewportWidths = [1280, 1440];
+  for (const width of viewportWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+
+    const shell = await page.locator('.app-shell').boundingBox();
+    const home = await page.locator('.home-page').boundingBox();
+    const todaySection = await page.locator('.today-section').boundingBox();
+    const recentRecords = await page.locator('.recent-records').boundingBox();
+    expect(shell?.width).toBe(1120);
+    expect(shell?.x).toBe((width - 1120) / 2);
+    expect(home?.width).toBe(960);
+    expect(todaySection).not.toBeNull();
+    expect(recentRecords).not.toBeNull();
+    expect((todaySection?.x ?? 0) + (todaySection?.width ?? 0)).toBeLessThan(recentRecords?.x ?? 0);
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+      .toBeLessThanOrEqual(width);
+    await expectMainToFit(page);
+    const homeDate = await dateTextMetrics(page, '.home-date');
+
+    await page.goto('/new');
+    const newEntry = await page.locator('.new-entry-page').boundingBox();
+    const diary = await page.locator('.entry-editor-card').boundingBox();
+    expect(newEntry?.width).toBe(960);
+    expect(diary?.width).toBeGreaterThanOrEqual(900);
+    expect(await dateTextMetrics(page, '.date-display time')).toEqual(homeDate);
+    await expectMainToFit(page);
+
+    await page.goto('/library');
+    const calendar = await page.locator('.library-calendar').boundingBox();
+    const selectedDay = await page.locator('.library-day-section').boundingBox();
+    expect(calendar).not.toBeNull();
+    expect(selectedDay).not.toBeNull();
+    expect((calendar?.x ?? 0) + (calendar?.width ?? 0)).toBeLessThan(selectedDay?.x ?? 0);
+    await expectMainToFit(page);
+
+    await page.getByRole('tab', { name: 'リスト' }).click();
+    const listCards = page.locator('.library-list-records .entry-history-list .entry-history-card');
+    await expect(listCards).toHaveCount(3);
+    const listCardBounds = await listCards.evaluateAll((cards) =>
+      cards.map((card) => card.getBoundingClientRect().left),
+    );
+    expect(new Set(listCardBounds).size).toBe(3);
+    await expectMainToFit(page);
+  }
+
+  const panelGeneration: Generation = {
+    ...generationFixtures(entryId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').succeeded,
+    comic: panelsComic,
+  };
+  const panelEntry: EntryDetail = {
+    ...detailFixture,
+    latestGenerationId: panelGeneration.id,
+    latestGeneration: panelGeneration,
+  };
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: `${today}T15:00:00.000Z`,
+        generationAvailable: true,
+      },
+    }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: panelEntry }));
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00.000Z' },
+    }),
+  );
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.comic.is-panels .comic-panel-card')).toHaveCount(4);
+  const panelGrid = await page
+    .locator('.comic.is-panels .comic-images')
+    .evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+  expect(panelGrid).toBe(2);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1280);
 });
 
 test('通常の高さではHome・入力・6週カレンダー・20件一覧にスクロールを出さない', async ({
@@ -404,7 +508,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
       }
     } else if (path === '/new') {
       const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
-      const cta = page.locator('.primary-action-dock > .button');
+      const cta = page.locator('.primary-action-row > .button');
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await expect(diary).toBeVisible();
@@ -497,7 +601,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
 
   const dateControl = page.locator('.date-control');
   const card = page.locator('.entry-editor-card');
-  const primaryAction = page.locator('.primary-action-dock > .button');
+  const primaryAction = page.locator('.primary-action-row > .button');
   await expect(dateControl).toBeVisible();
   await expect(card).toBeVisible();
   await expect(primaryAction).toBeEnabled();
@@ -515,7 +619,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
     return {
       date: bounds('.date-control'),
       card: bounds('.entry-editor-card'),
-      action: bounds('.primary-action-dock > .button'),
+      action: bounds('.primary-action-row > .button'),
       mainBottom: mainBounds.bottom,
     };
   });
@@ -526,7 +630,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
   await expect(primaryAction).toBeInViewport();
   const scrolledLayout = await page.evaluate(() => {
     const main = document.querySelector('#main');
-    const action = document.querySelector('.primary-action-dock > .button');
+    const action = document.querySelector('.primary-action-row > .button');
     if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement))
       throw new Error('本文領域または保存操作がありません');
     const mainBounds = main.getBoundingClientRect();
