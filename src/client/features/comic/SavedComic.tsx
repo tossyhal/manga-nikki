@@ -6,7 +6,8 @@ import { shouldRenewExpiredAsset } from './signedAssetRefresh';
 
 export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
   const [images, setImages] = useState<Record<string, string>>({});
-  const [imageReceivedAt, setImageReceivedAt] = useState<Record<string, number>>({});
+  const [imageRequestedAt, setImageRequestedAt] = useState<Record<string, number>>({});
+  const [imageRequestedAtWall, setImageRequestedAtWall] = useState<Record<string, number>>({});
   const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadVersion, setReloadVersion] = useState(0);
@@ -22,10 +23,12 @@ export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTit
     void Promise.all(
       ids.map(async (id) => {
         try {
+          const requestedAt = performance.now();
+          const requestedAtWall = Date.now();
           const result = await getAssetUrl(id);
-          return { id, url: result.url, receivedAt: performance.now() };
+          return { id, url: result.url, requestedAt, requestedAtWall };
         } catch {
-          return { id, url: null, receivedAt: null };
+          return { id, url: null, requestedAt: null, requestedAtWall: null };
         }
       }),
     ).then((result) => {
@@ -34,10 +37,17 @@ export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTit
       setImages(
         Object.fromEntries(result.flatMap((image) => (image.url ? [[image.id, image.url]] : []))),
       );
-      setImageReceivedAt(
+      setImageRequestedAt(
         Object.fromEntries(
           result.flatMap((image) =>
-            image.receivedAt !== null ? [[image.id, image.receivedAt]] : [],
+            image.requestedAt !== null ? [[image.id, image.requestedAt]] : [],
+          ),
+        ),
+      );
+      setImageRequestedAtWall(
+        Object.fromEntries(
+          result.flatMap((image) =>
+            image.requestedAtWall !== null ? [[image.id, image.requestedAtWall]] : [],
           ),
         ),
       );
@@ -54,7 +64,8 @@ export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTit
     autoRenewAttempted.current = false;
     autoRenewing.current = false;
     setImages({});
-    setImageReceivedAt({});
+    setImageRequestedAt({});
+    setImageRequestedAtWall({});
     setFailedImageIds([]);
     setLoading(true);
     setReloadVersion((version) => version + 1);
@@ -62,11 +73,19 @@ export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTit
 
   function handleImageError(id: string): boolean {
     if (autoRenewing.current) return true;
-    if (!shouldRenewExpiredAsset(imageReceivedAt[id], autoRenewAttempted.current)) return false;
+    if (
+      !shouldRenewExpiredAsset(
+        imageRequestedAt[id],
+        imageRequestedAtWall[id],
+        autoRenewAttempted.current,
+      )
+    )
+      return false;
     autoRenewAttempted.current = true;
     autoRenewing.current = true;
     setImages({});
-    setImageReceivedAt({});
+    setImageRequestedAt({});
+    setImageRequestedAtWall({});
     setFailedImageIds([]);
     setLoading(true);
     setReloadVersion((version) => version + 1);

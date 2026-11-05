@@ -175,7 +175,7 @@ describe('scheduled retention cleanup mode gate', () => {
     ]);
   });
 
-  it('does not reach storage or finalization when the claim dependency fails', async () => {
+  it('runs outbox GC and preserves a retention failure when both claims fail', async () => {
     const requests: Request[] = [];
     const fetcher: typeof fetch = async (input, init) => {
       requests.push(new Request(input, init));
@@ -190,12 +190,19 @@ describe('scheduled retention cleanup mode gate', () => {
       SUPABASE_URL: 'https://retention-test.supabase.co',
       SUPABASE_SECRET_KEY: 'sb_secret_test_only',
     };
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(cleanRetainedEntriesForScheduledEnvironment(liveDemo, fetcher)).rejects.toThrow(
-      'RETENTION_CLEANUP_UNAVAILABLE',
-    );
+    try {
+      await expect(cleanRetainedEntriesForScheduledEnvironment(liveDemo, fetcher)).rejects.toThrow(
+        'RETENTION_CLEANUP_UNAVAILABLE',
+      );
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith('storage_deletion_cleanup_unavailable');
+    } finally {
+      errorLog.mockRestore();
+    }
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       '/rest/v1/rpc/claim_retention_cleanup',
+      '/rest/v1/rpc/claim_storage_deletion_cleanup',
     ]);
   });
 });
