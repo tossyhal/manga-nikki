@@ -8,9 +8,11 @@ import { publicConfigGuard } from './src/build/public-config-guard';
 const isReleaseBuild = ['staging', 'production'].includes(
   process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
 );
+const isPlaywrightE2e = process.env.MANGA_NIKKI_E2E === '1';
 
 export default defineConfig({
   envDir: isReleaseBuild ? false : undefined,
+  cacheDir: isPlaywrightE2e ? 'node_modules/.vite-e2e' : undefined,
   plugins: [
     publicConfigGuard(),
     react(),

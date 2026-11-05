@@ -131,6 +131,8 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
+`pnpm test:e2e`は通常開発サーバー（5173）と分けた4176で専用サーバーを起動します。既存のサーバーは再利用しないため、4176を別のプロセスが使用中ならE2Eは起動に失敗します。専用ポートを変える場合は`PLAYWRIGHT_PORT`を設定してください。E2E専用サーバーは通常dev serverと別のViteキャッシュを使います。
+
 ### 環境別ビルド
 
 staging / productionのビルドは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
