@@ -681,6 +681,18 @@ p {
   margin: 0 0 4px;
 }
 
+.primary-shell .new-entry-page .date-row {
+  gap: 16px;
+}
+
+.primary-shell .new-entry-page .date-control {
+  position: relative;
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .date-display {
   display: flex;
   width: 100%;
@@ -691,6 +703,13 @@ p {
   color: #252525;
   font-size: 16px;
   font-weight: 700;
+}
+
+.primary-shell .new-entry-page .date-display {
+  width: auto;
+  justify-content: flex-start;
+  gap: 12px;
+  white-space: nowrap;
 }
 
 .date-display svg {
@@ -706,6 +725,10 @@ p {
   padding: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.primary-shell .new-entry-page .date-picker-input {
+  right: -12px;
 }
 
 .entry-editor-card {
