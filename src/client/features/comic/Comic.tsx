@@ -8,7 +8,7 @@ function ComicTranscript({ comic }: { comic: ComicDocument }) {
       {comic.panels.map((panel) => (
         <li key={panel.index}>
           <p>{panel.scene}</p>
-          {panel.caption && <p>{panel.caption}</p>}
+          {panel.caption && panel.caption !== panel.scene && <p>{panel.caption}</p>}
           {panel.dialogue && <p>「{panel.dialogue}」</p>}
         </li>
       ))}
@@ -114,8 +114,9 @@ export function Comic({
               ) : (
                 <div
                   className={`comic-image-placeholder${failed ? ' is-error' : ''}`}
-                  role={failed ? 'alert' : 'status'}
-                  aria-live={failed ? 'assertive' : 'polite'}
+                  role={failed ? 'img' : 'status'}
+                  aria-label={failed ? '漫画の画像を表示できません' : undefined}
+                  aria-live={failed ? undefined : 'polite'}
                 >
                   {failed ? '漫画の画像を表示できません。' : '漫画画像を読み込んでいます…'}
                 </div>
@@ -131,9 +132,20 @@ export function Comic({
                   <figcaption className="comic-panel-caption">
                     <span className="comic-panel-number">{panel.index}</span>
                     <div>
-                      <p>{panel.caption || panel.scene}</p>
+                      {failed ? (
+                        <>
+                          <p>{panel.scene}</p>
+                          {panel.caption && panel.caption !== panel.scene && <p>{panel.caption}</p>}
+                        </>
+                      ) : (
+                        <>
+                          <p>{panel.caption || panel.scene}</p>
+                          {panel.caption && panel.caption !== panel.scene && (
+                            <span className="sr-only">{panel.scene}</span>
+                          )}
+                        </>
+                      )}
                       {panel.dialogue && <p>「{panel.dialogue}」</p>}
-                      {panel.caption && <span className="sr-only">{panel.scene}</span>}
                     </div>
                   </figcaption>
                 )}
@@ -163,7 +175,7 @@ export function Comic({
                   {comic.panels.map((panel) => (
                     <li key={panel.index}>
                       <p>{panel.scene}</p>
-                      {panel.caption && <p>{panel.caption}</p>}
+                      {panel.caption && panel.caption !== panel.scene && <p>{panel.caption}</p>}
                       {panel.dialogue && <p>「{panel.dialogue}」</p>}
                     </li>
                   ))}
@@ -180,8 +192,9 @@ export function Comic({
           )}
           {comic.visual.kind === 'panels' && anyImageFailed && (
             <details className="comic-script comic-image-fallback" open>
-              <summary>漫画の画像を表示できません。内容を読む</summary>
-              <ComicTranscript comic={comic} />
+              <summary>
+                漫画の画像を表示できません。各コマの内容はカードの下に表示しています
+              </summary>
               <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
             </details>
           )}
