@@ -100,6 +100,10 @@
   color: #505050;
 }
 
+.library-inline-error:empty {
+  display: none;
+}
+
 .library-inline-error p {
   display: -webkit-box;
   min-width: 0;
@@ -121,6 +125,10 @@
   font-size: 12px;
   line-height: 18px;
   text-align: center;
+}
+
+.library-calendar-status:empty {
+  display: none;
 }
 
 .library-calendar {
@@ -221,7 +229,9 @@
 .library-day-records {
   min-height: 0;
   flex: 1 1 auto;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .library-day-empty {
@@ -621,7 +631,7 @@
   }
 }
 
-@media (max-height: 760px) {
+@media (max-height: 660px) {
   .library-page {
     height: auto;
     min-height: 580px;
