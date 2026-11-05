@@ -912,6 +912,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
 
 test('生成受付の409後に最新状態が進行中なら受付エラーを解除する', async ({ page }) => {
   const queued = generationFixtures(entryId, generationId, 1).queued;
+  const running = generationFixtures(entryId, generationId, 1).running;
   const succeeded = generationFixtures(entryId, generationId, 1).succeeded;
   const latest: EntryDetail = {
     ...draftEntryDetailFixture,
@@ -921,6 +922,23 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
   let entryReads = 0;
   let generationReads = 0;
   let generationSubmitted = false;
+  let releaseFirstPoll!: () => void;
+  let notifyFirstPoll!: () => void;
+  let releaseTerminalPoll!: () => void;
+  let notifyTerminalPoll!: () => void;
+  const firstPollGate = new Promise<void>((resolve) => {
+    releaseFirstPoll = resolve;
+  });
+  const firstPollRequested = new Promise<void>((resolve) => {
+    notifyFirstPoll = resolve;
+  });
+  const terminalPollGate = new Promise<void>((resolve) => {
+    releaseTerminalPoll = resolve;
+  });
+  const terminalPollRequested = new Promise<void>((resolve) => {
+    notifyTerminalPoll = resolve;
+  });
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00Z') });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/entries/*/generations', (route) => {
     generationSubmitted = true;
@@ -940,9 +958,16 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
     entryReads++;
     return route.fulfill({ json: generationSubmitted ? latest : draftEntryDetailFixture });
   });
-  await page.route(`**/api/v1/generations/${generationId}`, (route) => {
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
     generationReads++;
-    return route.fulfill({ json: generationReads === 1 ? queued : succeeded });
+    if (generationReads === 1) {
+      notifyFirstPoll();
+      await firstPollGate;
+      return route.fulfill({ json: running });
+    }
+    notifyTerminalPoll();
+    await terminalPollGate;
+    return route.fulfill({ json: succeeded });
   });
   await page.route('**/api/v1/assets/*/url', (route) =>
     route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
@@ -951,6 +976,15 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();
 
+  await firstPollRequested;
+  releaseFirstPoll();
+  await expect(page.getByRole('heading', { name: '画像を描いています' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  const advancePolling = page.clock.runFor(5100);
+  await terminalPollRequested;
+  releaseTerminalPoll();
+  await advancePolling;
   await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(entryReads).toBeGreaterThanOrEqual(2);
