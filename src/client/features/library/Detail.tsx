@@ -78,6 +78,9 @@ function DetailContent({
     });
   }, []);
   const [error, setError] = useState('');
+  const [pollingError, setPollingError] = useState('');
+  const [foregroundActionFailed, setForegroundActionFailed] = useState(false);
+  const displayError = error || pollingError;
   const [busy, setBusy] = useState(false);
   const [generationCaptchaOpen, setGenerationCaptchaOpen] = useState(false);
   const [generationCaptchaRetry, setGenerationCaptchaRetry] = useState(false);
@@ -145,6 +148,7 @@ function DetailContent({
     actionInFlightRef,
     setBusy,
     setError,
+    setOperationFailed: setForegroundActionFailed,
     readLatestEntry,
     onBeginEdit: () => {
       setDraftSavedEntryId(null);
@@ -186,8 +190,9 @@ function DetailContent({
   }, [onActivityChange]);
 
   useLayoutEffect(() => {
-    if (activeRef.current) onActivityChange({ dirty: draftDirty, busy, failed: Boolean(error) });
-  }, [busy, draftDirty, error, onActivityChange]);
+    if (activeRef.current)
+      onActivityChange({ dirty: draftDirty, busy, failed: foregroundActionFailed });
+  }, [busy, draftDirty, foregroundActionFailed, onActivityChange]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
@@ -300,11 +305,11 @@ function DetailContent({
     ? `${savedDiaryCharacters.slice(0, 120).join('')}…`
     : savedDiaryCharacters.join('');
   useEffect(() => {
-    if (!error || !editFormVisible) return;
+    if (!displayError || !editFormVisible) return;
     const alert = editErrorRef.current;
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView({ block: 'center' });
-  }, [editFormVisible, error, validationFailureCount]);
+  }, [displayError, editFormVisible, validationFailureCount]);
 
   async function readLatestEntry(): Promise<EntryDetail> {
     let latest = await getEntry(id);
@@ -337,6 +342,7 @@ function DetailContent({
       applyGeneration(currentGeneration);
       setReceiptUncertain(false);
       setGenerationCaptchaRetry(false);
+      setForegroundActionFailed(false);
       setError('');
       await refreshQuota({ fresh: true });
     } catch {
@@ -366,6 +372,7 @@ function DetailContent({
 
   async function handleGenerationFailure(failure: unknown, fallback: string) {
     const apiFailure = failure instanceof ApiClientError ? failure : null;
+    setForegroundActionFailed(true);
     setError(generationActionErrorMessage(failure, fallback));
     if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
       setGenerationCaptchaRetry(true);
@@ -404,6 +411,8 @@ function DetailContent({
     setGenerationCaptchaOpen(false);
     setGenerationRequestSending(true);
     setBusy(true);
+    setForegroundActionFailed(false);
+    setPollingError('');
     setError('');
     try {
       const receipt = await generate(entry, captchaToken);
@@ -427,6 +436,8 @@ function DetailContent({
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setBusy(true);
+    setForegroundActionFailed(false);
+    setPollingError('');
     setError('');
     try {
       const receipt = await recheckGeneration(entry);
@@ -447,6 +458,8 @@ function DetailContent({
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setBusy(true);
+    setForegroundActionFailed(false);
+    setPollingError('');
     setError('');
     try {
       const latest = await readLatestEntry();
@@ -474,21 +487,25 @@ function DetailContent({
     );
   }
 
-  useGenerationPolling(generation, activeRef, applyGeneration, setError, refreshQuota);
+  useGenerationPolling(generation, activeRef, applyGeneration, setPollingError, refreshQuota);
 
   async function removeEntry() {
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setBusy(true);
+    setForegroundActionFailed(false);
     setError('');
     try {
       await api(`/entries/${entry.id}`, { method: 'DELETE' });
       if (!activeRef.current) return;
+      setForegroundActionFailed(false);
       onActivityChange({ dirty: false, busy: false, failed: false });
       if (!hasBlockedNavigation()) navigate(backTo);
     } catch (failure) {
-      if (activeRef.current)
+      if (activeRef.current) {
+        setForegroundActionFailed(true);
         setError(failure instanceof Error ? failure.message : '操作できませんでした。');
+      }
     } finally {
       if (activeRef.current) {
         actionInFlightRef.current = false;
@@ -587,9 +604,9 @@ function DetailContent({
                   最新の記録を読み込む
                 </button>
               )}
-              {error && (
+              {displayError && (
                 <p ref={editErrorRef} role="alert" tabIndex={-1} className="error">
-                  {error}
+                  {displayError}
                 </p>
               )}
             </form>
@@ -716,11 +733,11 @@ function DetailContent({
           )}
         </>
       ) : (
-        !error && <output>読み込んでいます…</output>
+        !displayError && <output>読み込んでいます…</output>
       )}
-      {error && !editFormVisible && (
+      {displayError && !editFormVisible && (
         <p role="alert" className="error">
-          {error}
+          {displayError}
         </p>
       )}
       {entry && !editing && (
