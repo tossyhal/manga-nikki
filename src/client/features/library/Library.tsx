@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import type { Entry } from '../../../shared/schemas';
 import { jstToday } from '../../../shared/schemas';
@@ -225,8 +233,12 @@ export function Library() {
     () => parseLibrarySearch(location.search, today),
     [location.search, today],
   );
-  const searchState = parsedSearch ?? defaultLibrarySearch(today);
+  const searchState = useMemo(
+    () => parsedSearch ?? defaultLibrarySearch(today),
+    [parsedSearch, today],
+  );
   const canonicalSearch = serializeLibrarySearch(searchState);
+  const latestSearchRef = useRef(searchState);
   const initialSearchRef = useRef(searchState);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -240,15 +252,17 @@ export function Library() {
   const attemptedListRestoreRef = useRef<number | null>(null);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
 
+  useLayoutEffect(() => {
+    latestSearchRef.current = searchState;
+  }, [searchState]);
+
   const updateSearch = useCallback(
     (patch: Partial<LibrarySearchState>) => {
-      const current = parseLibrarySearch(location.search, today) ?? defaultLibrarySearch(today);
-      navigate(
-        { pathname: '/library', search: serializeLibrarySearch({ ...current, ...patch }) },
-        { replace: true },
-      );
+      const next = { ...latestSearchRef.current, ...patch };
+      latestSearchRef.current = next;
+      navigate({ pathname: '/library', search: serializeLibrarySearch(next) }, { replace: true });
     },
-    [location.search, navigate, today],
+    [navigate],
   );
 
   useEffect(() => {
