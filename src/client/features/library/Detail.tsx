@@ -171,6 +171,7 @@ function DetailContent({
               }
             : existing,
         );
+        if (current.status !== 'queued' && current.status !== 'running') setPollingError('');
       },
     });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
@@ -479,6 +480,12 @@ function DetailContent({
             ? validLatestGeneration
             : latest.lastSuccessfulGeneration,
       };
+      if (
+        validLatestGeneration &&
+        validLatestGeneration.status !== 'queued' &&
+        validLatestGeneration.status !== 'running'
+      )
+        setPollingError('');
     }
     entryRef.current = latest;
     detailReadVersionRef.current++;
@@ -570,7 +577,16 @@ function DetailContent({
       apiFailure?.code === 'REVISION_CONFLICT'
     ) {
       const latest = await readLatestEntry().catch(() => null);
-      if (activeRef.current && latest) setEntrySafely(latest);
+      if (activeRef.current && latest) {
+        setEntrySafely(latest);
+        const status = latest.latestGeneration?.status;
+        if (status === 'queued' || status === 'running') {
+          setReceiptUncertain(false);
+          setGenerationCaptchaRetry(false);
+          setError('');
+          setForegroundActionFailed(false);
+        }
+      }
     }
   }
 

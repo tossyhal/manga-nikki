@@ -129,6 +129,15 @@ test('拡大画像の署名URL失効は1回だけ自動更新し、その後は�
   const comic = structuredClone(panelsComic);
   const generation = { ...fixtures.succeeded, comic };
   const assetUrlRequests = new Map<string, number>();
+  let holdInitialResponses = true;
+  let releaseInitialResponses!: () => void;
+  let notifyInitialRequests!: () => void;
+  const initialResponseGate = new Promise<void>((resolve) => {
+    releaseInitialResponses = resolve;
+  });
+  const initialRequestsStarted = new Promise<void>((resolve) => {
+    notifyInitialRequests = resolve;
+  });
   let holdRenewal = false;
   let releaseRenewal!: () => void;
   const renewalGate = new Promise<void>((resolve) => {
@@ -145,13 +154,17 @@ test('拡大画像の署名URL失効は1回だけ自動更新し、その後は�
     if (!assetId) return route.abort();
     const requestNumber = (assetUrlRequests.get(assetId) ?? 0) + 1;
     assetUrlRequests.set(assetId, requestNumber);
-    if (holdRenewal) await renewalGate;
     const browserNow = await page.evaluate(() => Date.now());
+    if (requestNumber === 1 && holdInitialResponses) {
+      if (assetUrlRequests.size === 4) notifyInitialRequests();
+      await initialResponseGate;
+    }
+    if (holdRenewal) await renewalGate;
     const url = `/sample-comic.svg?asset=${assetId}&request=${requestNumber}`;
     return route.fulfill({
       json: {
         url,
-        expiresAt: new Date(browserNow + (requestNumber === 1 ? -120_000 : 120_000)).toISOString(),
+        expiresAt: new Date(browserNow + (requestNumber === 1 ? 60_000 : 120_000)).toISOString(),
       },
     });
   });
@@ -165,6 +178,10 @@ test('拡大画像の署名URL失効は1回だけ自動更新し、その後は�
   });
 
   await page.goto(`/entries/${entryId}`);
+  await initialRequestsStarted;
+  await page.clock.fastForward(10_000);
+  holdInitialResponses = false;
+  releaseInitialResponses();
   await expect
     .poll(() => [...assetUrlRequests.values()].reduce((sum, count) => sum + count, 0))
     .toBeGreaterThanOrEqual(4);
@@ -182,7 +199,7 @@ test('拡大画像の署名URL失効は1回だけ自動更新し、その後は�
   await expect(dialog).toBeVisible();
 
   async function expireZoomImage() {
-    await page.clock.fastForward(56_000);
+    await page.clock.fastForward(51_000);
     const zoomImage = dialog.locator('img');
     await zoomImage.evaluate((image) => {
       const url = new URL((image as HTMLImageElement).src);

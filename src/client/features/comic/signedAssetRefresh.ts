@@ -1,14 +1,19 @@
 export function shouldRenewExpiredAsset(
-  receivedAt: number | undefined,
+  requestedAt: number | undefined,
+  requestedAtWall: number | undefined,
   attempted: boolean,
   now = performance.now(),
+  wallNow = Date.now(),
 ): boolean {
-  // 署名URLは60秒で失効するため、通信遅延分を見込んで単調時計で55秒後から更新する。
+  // 単調時計が端末スリープ中に止まる環境もあるため、両時計の経過時間の大きい方を使う。
   return (
     !attempted &&
-    receivedAt !== undefined &&
-    Number.isFinite(receivedAt) &&
+    requestedAt !== undefined &&
+    requestedAtWall !== undefined &&
+    Number.isFinite(requestedAt) &&
+    Number.isFinite(requestedAtWall) &&
     Number.isFinite(now) &&
-    now >= receivedAt + 55_000
+    Number.isFinite(wallNow) &&
+    Math.max(now - requestedAt, wallNow - requestedAtWall) >= 55_000
   );
 }

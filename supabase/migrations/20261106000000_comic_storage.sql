@@ -946,13 +946,16 @@ begin
     from private.storage_deletion_outbox outbox
     where outbox.next_check_at <= v_now
       and (outbox.claim_token is null or outbox.lease_expires_at <= v_now)
-    order by outbox.next_check_at, outbox.object_path
+    order by outbox.attempt_count,
+      (outbox.last_checked_at is null) desc,
+      outbox.next_check_at, outbox.object_path
     limit p_limit
     for update of outbox skip locked
   ), claimed as (
     update private.storage_deletion_outbox outbox
     set claim_token = pg_catalog.gen_random_uuid(),
         lease_expires_at = v_now + interval '15 minutes',
+        next_check_at = v_now + interval '15 minutes',
         attempt_count = outbox.attempt_count + 1
     from candidates
     where outbox.object_path = candidates.object_path
@@ -992,7 +995,9 @@ begin
   if not found then return false; end if;
 
   v_now := pg_catalog.clock_timestamp();
-  if v_outbox.claim_token <> p_claim_token or v_outbox.lease_expires_at <= v_now then
+  if v_outbox.claim_token is distinct from p_claim_token
+    or v_outbox.lease_expires_at is null
+    or v_outbox.lease_expires_at <= v_now then
     return false;
   end if;
 
