@@ -675,6 +675,53 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
   await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveCount(0);
 });
 
+test('生成受付の409後に最新状態が進行中なら受付エラーを解除する', async ({ page }) => {
+  const queued = generationFixtures(entryId, generationId, 1).queued;
+  const succeeded = generationFixtures(entryId, generationId, 1).succeeded;
+  const latest: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  let entryReads = 0;
+  let generationReads = 0;
+  let generationSubmitted = false;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    generationSubmitted = true;
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: {
+          code: 'ENTRY_BUSY',
+          message: 'この記録はすでに生成中です。',
+          requestId: 'e2e-entry-busy',
+          retryable: false,
+        },
+      },
+    });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    entryReads++;
+    return route.fulfill({ json: generationSubmitted ? latest : draftEntryDetailFixture });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) => {
+    generationReads++;
+    return route.fulfill({ json: generationReads === 1 ? queued : succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(entryReads).toBeGreaterThanOrEqual(2);
+  expect(generationReads).toBeGreaterThanOrEqual(2);
+});
+
 test('未来日は保存せず、日付と本文を保持する', async ({ page }) => {
   let patchCount = 0;
   await configureDetail(page);

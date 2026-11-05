@@ -227,8 +227,9 @@ test('タブ復帰で利用枠を更新し、生成を自動で始めない', as
 });
 
 test('quota.resetAtの日次境界で再取得し、入力を保持する', async ({ page }) => {
-  const clockStart = new Date('2026-11-06T14:59:58.500Z');
-  const resetAt = new Date(clockStart.getTime() + 1500).toISOString();
+  const resetAtTime = new Date('2026-11-06T15:00:00.000Z');
+  const clockStart = new Date(resetAtTime.getTime() - 60_000);
+  const resetAt = resetAtTime.toISOString();
   let quotaRequests = 0;
   let generationPosts = 0;
   await page.clock.install({ time: clockStart });
@@ -257,8 +258,9 @@ test('quota.resetAtの日次境界で再取得し、入力を保持する', asyn
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '日次更新後にも保つ架空の日記';
   await diary.fill(draft);
+  await page.clock.pauseAt(new Date(resetAtTime.getTime() - 500));
 
-  await page.clock.runFor(2500);
+  await page.clock.runFor(2000);
   await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
   await expect(diary).toHaveValue(draft);
   expect(quotaRequests).toBe(2);
@@ -266,8 +268,9 @@ test('quota.resetAtの日次境界で再取得し、入力を保持する', asyn
 });
 
 test('日次境界前の利用枠要求が終わった後に一度だけ再取得する', async ({ page }) => {
-  const clockStart = new Date('2026-11-06T14:59:59.000Z');
-  const resetAt = new Date(clockStart.getTime() + 1000).toISOString();
+  const resetAtTime = new Date('2026-11-06T15:00:00.000Z');
+  const clockStart = new Date(resetAtTime.getTime() - 60_000);
+  const resetAt = resetAtTime.toISOString();
   const oldQuota = {
     remainingToday: 0,
     activeGenerationId: null,
@@ -306,6 +309,7 @@ test('日次境界前の利用枠要求が終わった後に一度だけ再取�
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '遅れてきた日次境界の再取得後にも保つ日記';
   await diary.fill(draft);
+  await page.clock.pauseAt(new Date(resetAtTime.getTime() - 500));
   const refreshClick = quotaStatus.getByRole('button', { name: '利用枠を再確認' }).click();
   await refreshRequested;
   await page.clock.runFor(2100);
@@ -320,8 +324,9 @@ test('日次境界前の利用枠要求が終わった後に一度だけ再取�
 });
 
 test('初回の利用枠応答が日次境界を越えた場合も再取得する', async ({ page }) => {
-  const clockStart = new Date('2026-11-06T14:59:59.000Z');
-  const resetAt = new Date(clockStart.getTime() + 1000).toISOString();
+  const resetAtTime = new Date('2026-11-06T15:00:00.000Z');
+  const clockStart = new Date(resetAtTime.getTime() - 60_000);
+  const resetAt = resetAtTime.toISOString();
   const oldQuota = {
     remainingToday: 0,
     activeGenerationId: null,
@@ -359,6 +364,7 @@ test('初回の利用枠応答が日次境界を越えた場合も再取得す�
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '初回応答が日次境界を越えても保持する日記';
   await diary.fill(draft);
+  await page.clock.pauseAt(new Date(resetAtTime.getTime() - 500));
   await page.clock.runFor(1001);
   releaseInitial();
 
@@ -431,6 +437,62 @@ test('終端polling後に返った古いactive-generation応答で成功状態�
   await expect.poll(() => generationReads).toBe(4);
   await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
   await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toHaveCount(0);
+});
+
+test('quota経由で終端状態を確認したらpollingエラーを解除する', async ({ page }) => {
+  const queued = generationFixtures(entryId, generationId).queued;
+  const succeeded = generationFixtures(entryId, generationId).succeeded;
+  const detail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  let quotaRequests = 0;
+  let generationReads = 0;
+  let allowTerminalGeneration = false;
+  const clockStart = new Date('2026-11-06T15:00:00.000Z');
+  await page.clock.install({ time: clockStart });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => {
+    quotaRequests++;
+    return route.fulfill({
+      json: availableQuota(allowTerminalGeneration ? generationId : null),
+    });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) => {
+    generationReads++;
+    if (!allowTerminalGeneration)
+      return route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: 'DEPENDENCY_UNAVAILABLE',
+            message: '一時的な状態取得失敗',
+            requestId: 'polling-error-e2e',
+            retryable: true,
+          },
+        },
+      });
+    return route.fulfill({ json: succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.getByRole('alert')).toContainText(
+    '一時的に利用できません。時間をおいて再操作してください。',
+  );
+  const pauseTime = await page.evaluate(() => Date.now() + 6000);
+  await page.clock.pauseAt(new Date(pauseTime));
+  allowTerminalGeneration = true;
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow')));
+
+  await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(quotaRequests).toBeGreaterThanOrEqual(2);
+  expect(generationReads).toBeGreaterThanOrEqual(2);
 });
 
 test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルとして受付する', async ({ page }) => {
@@ -691,6 +753,106 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   expect(generationRequests).toHaveLength(2);
   expect(generationReads).toBe(readsAfterUnknown);
   await expect(page.getByRole('button', { name: '新しい確認を取得' })).toHaveCount(0);
+});
+
+test('通信断後の409で進行中を読み込んだら完了後も受付確認を再表示しない', async ({ page }) => {
+  await installLiveSession(page);
+  await installTurnstileFake(page);
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00Z') });
+  const queued = generationFixtures(entryId, generationId).queued;
+  const running = generationFixtures(entryId, generationId).running;
+  const succeeded = generationFixtures(entryId, generationId).succeeded;
+  const latest: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  const generationRequests: Array<{ key: string; captchaToken: string }> = [];
+  let generationPosts = 0;
+  let entryReads = 0;
+  let generationReads = 0;
+  let releaseFirstPoll!: () => void;
+  let notifyFirstPoll!: () => void;
+  let notifyTerminalPoll!: () => void;
+  const firstPollGate = new Promise<void>((resolve) => {
+    releaseFirstPoll = resolve;
+  });
+  const firstPollStarted = new Promise<void>((resolve) => {
+    notifyFirstPoll = resolve;
+  });
+  const terminalPollStarted = new Promise<void>((resolve) => {
+    notifyTerminalPoll = resolve;
+  });
+
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+  );
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    entryReads++;
+    return route.fulfill({ json: generationPosts > 0 ? latest : draftEntryDetailFixture });
+  });
+  await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
+    const body = route.request().postDataJSON() as { captchaToken: string };
+    generationPosts++;
+    generationRequests.push({
+      key: route.request().headers()['idempotency-key'] ?? '',
+      captchaToken: body.captchaToken,
+    });
+    if (generationPosts === 1) return route.abort('failed');
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: {
+          code: 'ENTRY_BUSY',
+          message: 'この記録の漫画を作成中です。',
+          requestId: 'e2e-entry-busy',
+          retryable: false,
+        },
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1) return route.fulfill({ json: queued });
+    if (generationReads === 2) {
+      notifyFirstPoll();
+      await firstPollGate;
+      return route.fulfill({ json: running });
+    }
+    notifyTerminalPoll();
+    return route.fulfill({ json: succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
+    }),
+  );
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '4コマにする' }).click();
+  await expect(page.getByRole('alert')).toContainText('通信に失敗しました');
+  await page.getByRole('button', { name: '受付結果を確認', exact: true }).click();
+  await firstPollStarted;
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '受付結果を確認', exact: true })).toHaveCount(0);
+
+  releaseFirstPoll();
+  await expect(page.getByRole('heading', { name: '画像を描いています' })).toBeVisible();
+  await page.clock.runFor(5000);
+  await terminalPollStarted;
+  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '受付結果を確認', exact: true })).toHaveCount(0);
+
+  expect(entryReads).toBeGreaterThanOrEqual(2);
+  expect(generationRequests).toHaveLength(2);
+  expect(generationRequests[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(generationRequests[1]?.key).toBe(generationRequests[0]?.key);
+  expect(generationRequests.map(({ captchaToken }) => captchaToken)).toEqual([
+    'generation-token-e2e-1',
+    '',
+  ]);
 });
 
 test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り直せる', async ({ page }) => {

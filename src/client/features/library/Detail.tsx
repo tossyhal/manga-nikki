@@ -109,12 +109,14 @@ function DetailContent({
       activeRef,
       markLoading: false,
       onActiveGeneration: (current) => {
-        if (current.entryId === id)
+        if (current.entryId === id) {
           setEntrySafely((existing) =>
             existing
               ? { ...existing, latestGenerationId: current.id, latestGeneration: current }
               : existing,
           );
+          if (current.status !== 'queued' && current.status !== 'running') setPollingError('');
+        }
       },
     });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
@@ -315,7 +317,11 @@ function DetailContent({
     let latest = await getEntry(id);
     if (latest.latestGenerationId) {
       const currentGeneration = await getGeneration(latest.latestGenerationId).catch(() => null);
-      if (currentGeneration) latest = { ...latest, latestGeneration: currentGeneration };
+      if (currentGeneration) {
+        latest = { ...latest, latestGeneration: currentGeneration };
+        if (currentGeneration.status !== 'queued' && currentGeneration.status !== 'running')
+          setPollingError('');
+      }
     }
     return latest;
   }
@@ -393,7 +399,16 @@ function DetailContent({
       apiFailure?.code === 'REVISION_CONFLICT'
     ) {
       const latest = await readLatestEntry().catch(() => null);
-      if (activeRef.current && latest) setEntrySafely(latest);
+      if (activeRef.current && latest) {
+        setEntrySafely(latest);
+        const status = latest.latestGeneration?.status;
+        if (status === 'queued' || status === 'running') {
+          setReceiptUncertain(false);
+          setGenerationCaptchaRetry(false);
+          setError('');
+          setForegroundActionFailed(false);
+        }
+      }
     }
   }
 
