@@ -1,7 +1,13 @@
+import {
+  getMockQuota,
+  createMockEntry,
+  listMockEntries,
+  getMockEntry,
+  reserveMockGeneration,
+} from './repositories/mock-service';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { pageComic } from '../shared/fixtures';
-import { createEntrySchema, updateEntrySchema, generateSchema, jstToday } from '../shared/schemas';
+import { createEntrySchema, updateEntrySchema, generateSchema } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
 import { createMockRepository, type MockRepository } from './repositories/mock';
 import {
@@ -27,63 +33,8 @@ import {
   verifySupabaseAccessToken,
 } from './auth';
 
-class ApiError extends Error {
-  constructor(
-    public status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 503,
-    public code: string,
-  ) {
-    super(code);
-  }
-}
-const messages: Record<string, string> = {
-  INVALID_INPUT: '入力内容を確認してください。',
-  AUTH_REQUIRED: '認証情報を確認してください。',
-  CONSENT_REQUIRED: '利用への同意を確認してください。',
-  NOT_FOUND: '記録が見つかりません。',
-  REVISION_CONFLICT: '記録が更新されています。再読み込みしてください。',
-  ENTRY_BUSY: '生成中の記録は編集できません。',
-  IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
-  INPUT_TOO_LARGE: '入力サイズが大きすぎます。',
-  USER_LIMIT_REACHED: '本日の生成上限に達しました。',
-  GLOBAL_LIMIT_REACHED: '現在、生成の上限に達しています。',
-  TOO_MANY_ACTIVE: '生成中の記録があります。完了後にもう一度お試しください。',
-  CAPTCHA_FAILED: '確認に失敗しました。新しい確認を行ってください。',
-  DRAFT_LIMIT_REACHED: '下書きが上限に達しました。不要な記録を削除してください。',
-  DEPENDENCY_UNAVAILABLE: '一時的に利用できません。時間をおいて再操作してください。',
-  GENERATION_DISABLED: 'この環境では個人データの操作は利用できません。',
-};
-async function jsonBody(request: Request): Promise<unknown> {
-  if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json')
-    throw new ApiError(400, 'INVALID_INPUT');
-  const reader = request.body?.getReader();
-  if (!reader) throw new ApiError(400, 'INVALID_INPUT');
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      size += part.value.byteLength;
-      if (size > 16384) {
-        await reader.cancel();
-        throw new ApiError(413, 'INPUT_TOO_LARGE');
-      }
-      chunks.push(part.value);
-    }
-    const data = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      data.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(400, 'INVALID_INPUT');
-  } finally {
-    reader.releaseLock();
-  }
-}
+import { ApiError, messages, jsonBody } from './http';
+
 export function createApp(
   options: {
     localDevelopment?: boolean;
@@ -196,11 +147,6 @@ export function createApp(
       turnstileFetch: options.turnstileFetch,
     };
   };
-  const getEntry = (id: string, owner: string) => {
-    const found = getRepository().entries.get(id);
-    if (!found || found.owner !== owner) throw new ApiError(404, 'NOT_FOUND');
-    return found;
-  };
   app.get('/api/v1/me/quota', async (c) => {
     const current = mode(c.env);
     if (current !== 'local-mock')
@@ -210,49 +156,13 @@ export function createApp(
           current === 'local-connected' && generationIngressConfigured(c.env),
         ),
       );
-    const day = jstToday();
-    const resetAt = new Date(Date.parse(`${day}T00:00:00+09:00`) + 86400000).toISOString();
-    return c.json({
-      remainingToday: Math.max(
-        0,
-        2 - (getRepository().counts.get(`${c.get('owner')}:${day}`) ?? 0),
-      ),
-      activeGenerationId: null,
-      resetAt,
-      generationAvailable: true,
-    });
+    return c.json(getMockQuota(getRepository(), c.get('owner')));
   });
   app.post('/api/v1/entries', async (c) => {
     const input = createEntrySchema.parse(await jsonBody(c.req.raw));
     if (mode(c.env) !== 'local-mock')
       return c.json(await createLiveEntry(liveContext(c), input), 201);
-    const owner = c.get('owner');
-    const existing = [...getRepository().entries.values()].find(
-      (x) => x.owner === owner && x.requestId === input.createRequestId,
-    );
-    if (existing) {
-      if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
-        throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
-      return c.json(existing.entry, 201);
-    }
-    if (
-      [...getRepository().entries.values()].filter(
-        (x) => x.owner === owner && !x.entry.latestGenerationId,
-      ).length >= 20
-    )
-      throw new ApiError(429, 'DRAFT_LIMIT_REACHED');
-    const now = new Date().toISOString();
-    const entry = {
-      id: crypto.randomUUID(),
-      diaryDate: input.diaryDate,
-      body: input.body,
-      revision: 1,
-      latestGenerationId: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    getRepository().entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
-    return c.json(entry, 201);
+    return c.json(createMockEntry(getRepository(), c.get('owner'), input), 201);
   });
   app.get('/api/v1/entries', async (c) => {
     const limit = z.coerce
@@ -267,18 +177,7 @@ export function createApp(
         await listLiveEntries(liveContext(c), { limit, ...(cursor ? { cursor } : {}) }),
       );
     }
-    const sorted = [...getRepository().entries.values()]
-      .filter((x) => x.owner === c.get('owner'))
-      .map((x) => x.entry)
-      .sort((a, b) => b.diaryDate.localeCompare(a.diaryDate) || b.id.localeCompare(a.id));
-    const cursor = c.req.query('cursor');
-    const index = cursor ? sorted.findIndex((x) => x.id === cursor) : -1;
-    if (cursor && index < 0) throw new ApiError(400, 'INVALID_INPUT');
-    const items = sorted.slice(index + 1, index + 1 + limit);
-    return c.json({
-      items,
-      nextCursor: sorted.length > index + 1 + limit ? (items.at(-1)?.id ?? null) : null,
-    });
+    return c.json(listMockEntries(getRepository(), c.get('owner'), limit, c.req.query('cursor')));
   });
   app.get('/api/v1/entries/:id', async (c) => {
     if (mode(c.env) !== 'local-mock') {
@@ -286,7 +185,7 @@ export function createApp(
       if (!detail) throw new ApiError(404, 'NOT_FOUND');
       return c.json(detail);
     }
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     return c.json({
       ...entry,
       latestGeneration: entry.latestGenerationId
@@ -298,7 +197,7 @@ export function createApp(
     const input = updateEntrySchema.parse(await jsonBody(c.req.raw));
     if (mode(c.env) !== 'local-mock')
       return c.json(await updateLiveEntry(liveContext(c), c.req.param('id'), input));
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     if (input.expectedRevision !== entry.revision) throw new ApiError(409, 'REVISION_CONFLICT');
     Object.assign(entry, {
       body: input.body,
@@ -311,7 +210,7 @@ export function createApp(
   app.delete('/api/v1/entries/:id', async (c) => {
     if (mode(c.env) !== 'local-mock')
       return c.json(await deleteLiveEntry(liveContext(c), c.req.param('id')), 202);
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     getRepository().entries.delete(entry.id);
     for (const [key, job] of getRepository().generations)
       if (job.generation.entryId === entry.id) getRepository().generations.delete(key);
@@ -333,52 +232,9 @@ export function createApp(
       );
       return c.json(receipt, 202);
     }
-    const { entry } = getEntry(c.req.param('id'), c.get('owner'));
+    const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
-    const owner = c.get('owner');
-    const old = [...getRepository().generations.values()].find(
-      (x) => x.owner === owner && x.key === key,
-    );
-    if (
-      old &&
-      (old.generation.entryId !== entry.id ||
-        old.generation.entryRevision !== input.expectedRevision)
-    )
-      throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
-    if (!old && input.expectedRevision !== entry.revision)
-      throw new ApiError(409, 'REVISION_CONFLICT');
-    const receipt = (id: string) => ({
-      generationId: id,
-      status: 'queued' as const,
-      statusUrl: `/api/v1/generations/${id}`,
-    });
-    if (old) return c.json(receipt(old.generation.id), 202);
-    const counter = `${owner}:${jstToday()}`;
-    const count = getRepository().counts.get(counter) ?? 0;
-    if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');
-    const id = crypto.randomUUID();
-    const assetId = crypto.randomUUID();
-    const entryRevision = entry.revision;
-    const comic = {
-      ...pageComic,
-      visual: { kind: 'page' as const, assetId, textMode: 'external' as const },
-    };
-    getRepository().generations.set(id, {
-      owner,
-      key,
-      generation: {
-        id,
-        entryId: entry.id,
-        entryRevision,
-        status: 'succeeded',
-        stage: null,
-        comic,
-        mock: true,
-      },
-    });
-    getRepository().counts.set(counter, count + 1);
-    entry.latestGenerationId = id;
-    return c.json(receipt(id), 202);
+    return c.json(reserveMockGeneration(getRepository(), c.get('owner'), entry, key, input), 202);
   });
   app.get('/api/v1/generations/:id', async (c) => {
     const current = mode(c.env);

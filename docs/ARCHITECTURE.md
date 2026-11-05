@@ -46,6 +46,24 @@ supabase/
  └─ { migrations, tests }                                # DBスキーマ定義とRLS/RPCテスト
 ```
 
+### 実装コードの責務境界
+
+- `client/app/App.tsx`はアプリ共通枠・設定取得・画面離脱保護、`app/routes.tsx`はルートと利用可否の表示を担当します。ホーム固有の取得・表示は`features/home/`に置きます。
+- 日記の新規作成と編集では`DiaryDateField`・`DiaryBodyField`と日付書式を共有します。利用枠は`useGenerationQuota`で取得し、新規画面だけ再取得時にloadingへ戻す差を明示します。
+- 記録のURL状態は`librarySearch.ts`、日付計算は`libraryCalendar.ts`、取得範囲の走査は`libraryCoverage.ts`、取得中の状態とキャンセルは`useLibraryEntries.ts`が担当します。表示のページ数とAPIのcursorは別に扱います。
+- 詳細の編集は`useEntryEditor`、生成中の状態取得は`useGenerationPolling`、操作メニューは`DetailToolbar`、状態カードは`GenerationStatusCard`へ分離します。編集・生成・削除の排他用refは詳細画面内で共有し、別々の操作ロックを作りません。
+- `client/lib/api/`は通信基盤、日記操作、生成受付・再確認、画像URL取得で分けます。既存の`lib/api.ts`からのexportは維持し、作成・生成の冪等性キーと保存形式も変更しません。
+- サーバーの`http.ts`はHTTPエラーとサイズ制限付き本文読取、`repositories/mock-service.ts`はモックの日記作成・一覧・枠確認・生成を担当します。実接続との振り分けと認証の順序は`server/app.ts`に残します。
+- SupabaseのURL・キー検証は`supabase-config.ts`、生成行の状態変換は`generation-row.ts`へ集約します。利用者用・RPC専用・Storage削除専用のクライアントは分け、所有者と最新／履歴生成の関連確認は呼出元で行います。
+
+### 初期読み込みと認証SDK
+
+認証SDKはliveモードと公開設定を確認した後、セッション確認・明示的な登録が必要になった時点で読み込みます。初期化Promiseを共有し、読み込み・初期化失敗をセッションなしとして扱わず、匿名アカウントの自動作成や保存済み認証情報の削除は行いません。
+
+画面のコードと全静的JS/CSSのPWA事前キャッシュは維持します。SDKの分離は初期の解析・実行量を減らすもので、PWAの取得総量を大きく減らすものではありません。liveの初回セッション確認時にはSDKチャンクの取得が1回必要です。PWA成果物の入口JSは`index.html`から特定します。
+
+共有の日付関数は`shared/date.ts`に置き、既存の`shared/schemas.ts`からのexportも維持します。フォーマッターは再利用し、呼出時の現在時刻からJSTの日付を求めます。
+
 ---
 
 ## 2. 非同期生成の処理フローと境界

@@ -97,13 +97,29 @@ test('埋め込み文字の漫画で画像取得に失敗したら脚本を一�
   comic.panels[0].caption = '代替表示でも一度だけ読める説明';
   comic.panels[0].dialogue = '一度だけ読み上げる会話';
   const generation = { ...fixtures.succeeded, comic };
+  let assetUrlRequests = 0;
+  let retryRequested = false;
+  let generationPosts = 0;
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
     route.fulfill({ json: detail(generation) }),
   );
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: generation }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) => route.abort('failed'));
+  await page.route('**/api/v1/assets/*/url', (route) => {
+    assetUrlRequests++;
+    if (!retryRequested) return route.abort('failed');
+    return route.fulfill({
+      json: {
+        url: '/sample-comic.svg?asset=retry',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    });
+  });
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    generationPosts++;
+    return route.abort();
+  });
 
   await page.goto(`/entries/${entryId}`);
   const fallback = page.locator('.comic-image-fallback');
@@ -112,6 +128,23 @@ test('埋め込み文字の漫画で画像取得に失敗したら脚本を一�
   await expect(fallback.getByText('「一度だけ読み上げる会話」', { exact: true })).toBeVisible();
   await expect(page.locator('.comic-transcript ol.sr-only')).toHaveCount(0);
   await expect(page.getByText(comic.panels[0].caption, { exact: true })).toHaveCount(1);
+
+  const failedRequests = assetUrlRequests;
+  retryRequested = true;
+  await fallback.getByRole('button', { name: '画像を再読み込み' }).click();
+  const image = page.locator('.comic img');
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() =>
+      image.evaluate((element) => {
+        const img = element as HTMLImageElement;
+        return img.complete && img.naturalWidth > 0;
+      }),
+    )
+    .toBe(true);
+  await expect(page.locator('.comic-image-fallback')).toHaveCount(0);
+  expect(assetUrlRequests).toBe(failedRequests + 1);
+  expect(generationPosts).toBe(0);
 });
 
 test('queuedからrunning、succeededへ進み、完了後はポーリングを止める', async ({ page }) => {
@@ -134,6 +167,8 @@ test('queuedからrunning、succeededへ進み、完了後はポーリングを�
   await expect(page.getByRole('heading', { level: 1, name: pageComic.title })).toBeVisible();
   const completedReads = reads;
   await page.clock.runFor(15000);
+  // 仮想時計では通信通知の到着まで進まないため、実時間でも観測する。
+  await page.waitForTimeout(500);
   expect(reads).toBe(completedReads);
 });
 test('編集後の日記では旧revisionから生成した漫画だと表示する', async ({ page }) => {
@@ -179,6 +214,7 @@ for (const status of ['failed', 'unknown', 'cancelled'] as const) {
       await expect(page.locator('.generation-card')).toContainText('自動では再生成せず');
     const terminalReads = reads;
     await page.clock.runFor(15000);
+    await page.waitForTimeout(500);
     expect(reads).toBe(terminalReads);
     expect(generates).toBe(0);
   });

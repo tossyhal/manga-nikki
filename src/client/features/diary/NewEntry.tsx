@@ -1,57 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useGenerationQuota, quotaAllowsGeneration } from './useGenerationQuota';
+import { DiaryDateField } from './DiaryDateField';
+import { DiaryBodyField } from './DiaryBodyField';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
+import { createEntrySchema, type Entry } from '../../../shared/schemas';
+import { jstToday } from '../../../shared/date';
 import { summarizeDiary } from '../../../shared/summary';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
 import { GenerationQuotaStatus } from './GenerationQuotaStatus';
-import {
-  ApiClientError,
-  createEntry,
-  generate,
-  getGeneration,
-  getQuotaForExistingSession,
-  recheckGeneration,
-  type GenerationQuota,
-} from '../../lib/api';
+import { ApiClientError, createEntry, generate, recheckGeneration } from '../../lib/api';
 import { registerAnonymousSession, getLiveAccessToken } from '../../lib/auth';
 import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { useOnlineStatus } from '../../lib/useOnlineStatus';
 
-export type DiaryActivity = { dirty: boolean; busy: boolean };
+import type { DiaryActivity } from './diaryActivity';
 
 type NewEntryProps = {
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
 };
-
-type QuotaState = 'loading' | 'ready' | 'session-required' | 'unavailable';
-
-function generationIsAvailable(quota: GenerationQuota | null): boolean {
-  return Boolean(
-    quota &&
-    quota.generationAvailable &&
-    quota.remainingToday > 0 &&
-    quota.activeGenerationId === null,
-  );
-}
-
-function formatDiaryDate(date: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '日付を選択';
-  const value = new Date(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(value.valueOf()) || value.toISOString().slice(0, 10) !== date)
-    return '日付を選択';
-  const monthDay = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    month: 'long',
-    day: 'numeric',
-  }).format(value);
-  const weekday = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    weekday: 'long',
-  }).format(value);
-  return `${monthDay} ${weekday}`;
-}
 
 export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
@@ -59,7 +27,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const requestId = useRef(crypto.randomUUID());
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
-  const quotaRequestRef = useRef(0);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -87,16 +54,18 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
   const [generationFailureEntry, setGenerationFailureEntry] = useState<Entry | null>(null);
-  const [quota, setQuota] = useState<GenerationQuota | null>(null);
-  const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
-  const [quotaState, setQuotaState] = useState<QuotaState>('loading');
+  const { quota, activeGeneration, quotaState, setQuotaState, refreshQuota } = useGenerationQuota({
+    dataMode: config.dataMode,
+    activeRef,
+    markLoading: true,
+  });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
   const configAllowsGeneration = config.dataMode !== 'sample' && config.generationAvailable;
   const sessionRequired = config.dataMode === 'live' && quotaState === 'session-required';
   const canGenerate =
     online &&
     configAllowsGeneration &&
-    (sessionRequired || (quotaState === 'ready' && generationIsAvailable(quota)));
+    (sessionRequired || (quotaState === 'ready' && quotaAllowsGeneration(quota)));
   const quotaLimited = Boolean(
     config.dataMode !== 'sample' &&
     (!config.generationAvailable ||
@@ -110,38 +79,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
-
-  const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
-    const requestId = ++quotaRequestRef.current;
-    if (!activeRef.current) return null;
-    setQuotaState('loading');
-    try {
-      const currentQuota = await getQuotaForExistingSession();
-      if (!activeRef.current || requestId !== quotaRequestRef.current) return null;
-      setQuota(currentQuota);
-      if (!currentQuota) {
-        setActiveGeneration(null);
-        setQuotaState(config.dataMode === 'live' ? 'session-required' : 'unavailable');
-        return null;
-      }
-      setQuotaState('ready');
-      if (currentQuota.activeGenerationId) {
-        const current = await getGeneration(currentQuota.activeGenerationId).catch(() => null);
-        if (activeRef.current && requestId === quotaRequestRef.current)
-          setActiveGeneration(current);
-      } else {
-        setActiveGeneration(null);
-      }
-      return currentQuota;
-    } catch {
-      if (activeRef.current && requestId === quotaRequestRef.current) {
-        setQuota(null);
-        setActiveGeneration(null);
-        setQuotaState('unavailable');
-      }
-      return null;
-    }
-  }, [config.dataMode]);
 
   useLayoutEffect(() => {
     if (activeRef.current) onActivityChange({ dirty, busy });
@@ -226,7 +163,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     if (makeComic && config.dataMode === 'mock') {
       const currentQuota = await refreshQuota();
       if (!activeRef.current) return;
-      if (!generationIsAvailable(currentQuota)) {
+      if (!quotaAllowsGeneration(currentQuota)) {
         setError(
           currentQuota?.activeGenerationId
             ? '別の漫画を作成しています。先に進行中の記録を確認してください。'
@@ -406,25 +343,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         <h1 className="sr-only">日記を書く</h1>
         <fieldset disabled={busy || saved !== null} className="entry-form-fields">
           <div className="date-row">
-            <div className="date-control">
-              <label className="date-display" htmlFor="date">
-                <time dateTime={date}>{formatDiaryDate(date)}</time>
-                <Icon name="calendar" size={20} />
-              </label>
-              <input
-                id="date"
-                aria-label="日付"
-                className="date-picker-input"
-                type="date"
-                value={date}
-                max={jstToday()}
-                onChange={(event) => setDate(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') event.preventDefault();
-                }}
-                required
-              />
-            </div>
+            <DiaryDateField id="date" value={date} onChange={setDate} />
             <button
               className="button-text"
               disabled={busy || saved !== null || !online}
@@ -434,28 +353,19 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               下書き保存
             </button>
           </div>
-          <div className="entry-editor-card">
-            <label className="entry-editor-title" htmlFor="body">
-              今日はどんな日だった？
-            </label>
-            <textarea
-              id="body"
-              rows={8}
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-              placeholder="今日のできごとを書いてみよう。"
-              required
-              aria-describedby="count summary-preview"
-            />
-            <div className="entry-editor-footer">
+          <DiaryBodyField
+            id="body"
+            countId="count"
+            value={body}
+            onChange={setBody}
+            placeholder="今日のできごとを書いてみよう。"
+            descriptionId="summary-preview"
+            footer={
               <p id="summary-preview" className="summary-preview sr-only">
                 {body.trim() ? `見出し：${summarizeDiary(body)}` : '見出しは本文から自動で作ります'}
               </p>
-              <p id="count" className="character-count">
-                {[...body.trim()].length} / 1,000
-              </p>
-            </div>
-          </div>
+            }
+          />
         </fieldset>
         {online && quota && showQuotaStatus && (
           <div className="quota-limit-card">

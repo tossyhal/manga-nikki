@@ -48,4 +48,5 @@ jobs:
       - run: pnpm test:release-environment
       - run: pnpm exec playwright install --with-deps --only-shell chromium
       - run: pnpm test:e2e
-      - run: pnpm test:e2e:pwa
+      - name: PWA検査（検査済みのビルド成果物を再利用）
+        run: pnpm exec playwright test --config playwright.pwa.config.ts

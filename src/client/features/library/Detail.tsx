@@ -1,13 +1,14 @@
+import { useEntryEditor } from './useEntryEditor';
+import { useGenerationQuota, quotaAllowsGeneration } from '../diary/useGenerationQuota';
+import { useGenerationPolling } from './useGenerationPolling';
+import { GenerationStatusCard } from './GenerationStatusCard';
+import { DetailToolbar } from './DetailToolbar';
+import { DiaryDateField } from '../diary/DiaryDateField';
+import { DiaryBodyField } from '../diary/DiaryBodyField';
+import { formatDiaryDate } from '../../lib/diaryDate';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import {
-  jstToday,
-  updateEntrySchema,
-  type ComicDocument,
-  type Entry,
-  type EntryDetail,
-  type Generation,
-} from '../../../shared/schemas';
+import { type EntryDetail, type Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import type { ClientConfig } from '../../lib/config';
 import {
@@ -16,122 +17,22 @@ import {
   generate,
   getEntry,
   getGeneration,
-  getQuotaForExistingSession,
-  getAssetUrl,
   hasGenerationRequest,
   recheckGeneration,
-  type GenerationQuota,
 } from '../../lib/api';
-import { Comic } from '../comic/Comic';
+import { SavedComic } from '../comic/SavedComic';
 import { validateLibraryBackTo } from './librarySearch';
-import type { DiaryActivity } from '../diary/NewEntry';
+import type { DiaryActivity } from '../diary/diaryActivity';
 import { GenerationQuotaStatus } from '../diary/GenerationQuotaStatus';
 import { RegistrationCaptcha } from '../diary/RegistrationCaptcha';
 import { ConfirmDialog } from '../../app/ConfirmDialog';
 import { Icon } from '../../app/Icon';
-
-type QuotaState = 'loading' | 'ready' | 'session-required' | 'unavailable';
-
-function quotaAllowsGeneration(quota: GenerationQuota | null): boolean {
-  return Boolean(
-    quota &&
-    quota.generationAvailable &&
-    quota.remainingToday > 0 &&
-    quota.activeGenerationId === null,
-  );
-}
 
 function generationActionErrorMessage(failure: unknown, fallback: string): string {
   if (failure instanceof ApiClientError && failure.code === 'DEPENDENCY_UNAVAILABLE') {
     return '漫画の受付を利用できません。時間をおいて再操作してください。';
   }
   return failure instanceof Error ? failure.message : fallback;
-}
-
-function generationStateMessage(generation: Generation): string {
-  if (generation.status === 'unknown') {
-    return '結果の確認を待っています。自動では再生成せず、利用枠を保持しています。状態を再確認してください。';
-  }
-  if (generation.status === 'failed') {
-    return '漫画を作成できませんでした。日記は保存されています。本文を編集して保存すると新しく受付できます。';
-  }
-  return '生成は中止されました。日記は保存されています。';
-}
-
-function generationStageMessage(generation: Generation): string {
-  if (generation.status === 'queued') return '受付済みです。生成を待っています。';
-  if (generation.status !== 'running') return '';
-  if (generation.stage === 'script') return '構成（脚本）を作成しています。';
-  if (generation.stage === 'images') return '画像を描いています。';
-  return '漫画を保存しています。';
-}
-
-function formatEntryDate(date: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '日付を選択';
-  const value = new Date(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(value.valueOf()) || value.toISOString().slice(0, 10) !== date)
-    return '日付を選択';
-  const monthDay = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    month: 'long',
-    day: 'numeric',
-  }).format(value);
-  const weekday = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'UTC',
-    weekday: 'long',
-  }).format(value);
-  return `${monthDay} ${weekday}`;
-}
-
-function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
-  const [images, setImages] = useState<Record<string, string>>({});
-  const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reloadVersion, setReloadVersion] = useState(0);
-  useEffect(() => {
-    let active = true;
-    const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
-    void Promise.all(
-      ids.map(async (id) => {
-        try {
-          return { id, url: (await getAssetUrl(id)).url };
-        } catch {
-          return { id, url: null };
-        }
-      }),
-    ).then((result) => {
-      if (!active) return;
-      setImages(
-        Object.fromEntries(result.flatMap((image) => (image.url ? [[image.id, image.url]] : []))),
-      );
-      setFailedImageIds(result.filter((image) => image.url === null).map((image) => image.id));
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [comic, reloadVersion]);
-
-  function retryImages() {
-    if (loading) return;
-    setImages({});
-    setFailedImageIds([]);
-    setLoading(true);
-    setReloadVersion((version) => version + 1);
-  }
-
-  return (
-    <Comic
-      key={reloadVersion}
-      comic={comic}
-      images={images}
-      imageErrors={failedImageIds}
-      imageLoading={loading}
-      imageRetrying={loading}
-      onRetryImages={retryImages}
-      hideTitle={hideTitle}
-    />
-  );
 }
 
 function DetailContent({
@@ -161,33 +62,19 @@ function DetailContent({
   const [entry, setEntry] = useState<EntryDetail | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [draftDate, setDraftDate] = useState('');
-  const [draftBody, setDraftBody] = useState('');
-  const [editErrorStatus, setEditErrorStatus] = useState<number | null>(null);
-  const [validationFailureCount, setValidationFailureCount] = useState(0);
-  const [quota, setQuota] = useState<GenerationQuota | null>(null);
-  const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
-  const [quotaState, setQuotaState] = useState<QuotaState>('loading');
   const [generationCaptchaOpen, setGenerationCaptchaOpen] = useState(false);
   const [generationCaptchaRetry, setGenerationCaptchaRetry] = useState(false);
   const [generationCaptchaAttempt, setGenerationCaptchaAttempt] = useState(0);
   const [generationRequestSending, setGenerationRequestSending] = useState(false);
   const [receiptUncertain, setReceiptUncertain] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [discardEditConfirmOpen, setDiscardEditConfirmOpen] = useState(false);
-  const [reloadLatestConfirmOpen, setReloadLatestConfirmOpen] = useState(false);
   const [journalExpanded, setJournalExpanded] = useState(false);
   const activeRef = useRef(true);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const editErrorRef = useRef<HTMLParagraphElement>(null);
   const actionInFlightRef = useRef(false);
   const generationFlowRef = useRef(false);
   const generationCaptchaAttemptRef = useRef(0);
   const generationRequestRef = useRef(false);
-  const quotaRequestRef = useRef(0);
   const autoGenerationRequestedRef = useRef(
     Boolean(
       location.state &&
@@ -196,9 +83,63 @@ function DetailContent({
       location.state.startGeneration === true,
     ),
   );
+  const { quota, activeGeneration, quotaState, setActiveGeneration, refreshQuota } =
+    useGenerationQuota({
+      dataMode: config.dataMode,
+      activeRef,
+      markLoading: false,
+      onActiveGeneration: (current) => {
+        if (current.entryId === id)
+          setEntry((existing) =>
+            existing
+              ? { ...existing, latestGenerationId: current.id, latestGeneration: current }
+              : existing,
+          );
+      },
+    });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
-  const draftDirty =
-    editing && entry !== null && (draftDate !== entry.diaryDate || draftBody !== entry.body);
+  const pending =
+    entry?.latestGeneration?.status === 'queued' || entry?.latestGeneration?.status === 'running';
+  const {
+    editing,
+    draftDate,
+    setDraftDate,
+    draftBody,
+    setDraftBody,
+    editErrorStatus,
+    validationFailureCount,
+    draftDirty,
+    beginEditing,
+    requestCancelEditing,
+    saveEdit,
+    requestReloadLatest,
+    cancelEditing,
+    reloadLatest,
+    discardEditConfirmOpen,
+    setDiscardEditConfirmOpen,
+    reloadLatestConfirmOpen,
+    setReloadLatestConfirmOpen,
+  } = useEntryEditor({
+    entry,
+    setEntry,
+    pending,
+    busy,
+    activeRef,
+    actionInFlightRef,
+    setBusy,
+    setError,
+    readLatestEntry,
+    onBeginEdit: () => {
+      setDraftSavedEntryId(null);
+      autoGenerationRequestedRef.current = false;
+      if (generationFlowRef.current) {
+        generationFlowRef.current = false;
+        generationCaptchaAttemptRef.current += 1;
+        setGenerationCaptchaOpen(false);
+        setGenerationCaptchaRetry(false);
+      }
+    },
+  });
   const openGenerationCaptcha = useCallback(
     (retry = false) => {
       if (generationFlowRef.current) return;
@@ -219,48 +160,6 @@ function DetailContent({
     [siteKey],
   );
 
-  const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
-    const requestId = ++quotaRequestRef.current;
-    try {
-      const currentQuota = await getQuotaForExistingSession();
-      if (!activeRef.current || requestId !== quotaRequestRef.current) return null;
-      setQuota(currentQuota);
-      if (!currentQuota) {
-        setActiveGeneration(null);
-        setQuotaState(config.dataMode === 'live' ? 'session-required' : 'unavailable');
-        return null;
-      }
-      setQuotaState('ready');
-      if (currentQuota.activeGenerationId) {
-        const current = await getGeneration(currentQuota.activeGenerationId).catch(() => null);
-        if (activeRef.current && requestId === quotaRequestRef.current) {
-          setActiveGeneration(current);
-          if (current?.entryId === id) {
-            setEntry((existing) =>
-              existing
-                ? {
-                    ...existing,
-                    latestGenerationId: current.id,
-                    latestGeneration: current,
-                  }
-                : existing,
-            );
-          }
-        }
-      } else {
-        setActiveGeneration(null);
-      }
-      return currentQuota;
-    } catch {
-      if (activeRef.current && requestId === quotaRequestRef.current) {
-        setQuota(null);
-        setActiveGeneration(null);
-        setQuotaState('unavailable');
-      }
-      return null;
-    }
-  }, [config.dataMode, id]);
-
   useLayoutEffect(() => {
     activeRef.current = true;
     return () => {
@@ -272,11 +171,6 @@ function DetailContent({
   useLayoutEffect(() => {
     if (activeRef.current) onActivityChange({ dirty: draftDirty, busy });
   }, [busy, draftDirty, onActivityChange]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
-  }, [menuOpen]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
@@ -312,7 +206,6 @@ function DetailContent({
     navigate(location.pathname, { replace: true, state: null });
   }, [draftSavedNavigation, location.pathname, location.state, navigate]);
   const generation = entry?.latestGeneration;
-  const pending = generation?.status === 'queued' || generation?.status === 'running';
   const generationForCurrentRevision = generation?.entryRevision === entry?.revision;
   const unknownGeneration = generation?.status === 'unknown';
   const generationReferenceUnavailable = Boolean(entry?.latestGenerationId && !generation);
@@ -331,10 +224,6 @@ function DetailContent({
   );
   const comicFromPreviousRevision =
     generation?.status === 'succeeded' && generation.entryRevision < (entry?.revision ?? 0);
-  const stageIndex =
-    generation?.status === 'running'
-      ? ['script', 'images', 'saving'].indexOf(generation.stage)
-      : -1;
   const showGenerationAction = Boolean(
     !pending &&
     !unknownGeneration &&
@@ -459,6 +348,32 @@ function DetailContent({
     return () => window.clearTimeout(timer);
   }, [canStartGeneration, editing, entry, openGenerationCaptcha, quotaState]);
 
+  async function handleGenerationFailure(failure: unknown, fallback: string) {
+    const apiFailure = failure instanceof ApiClientError ? failure : null;
+    setError(generationActionErrorMessage(failure, fallback));
+    if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
+      setGenerationCaptchaRetry(true);
+    } else if (apiFailure?.code === null) {
+      setReceiptUncertain(true);
+    }
+    if (
+      apiFailure?.code === 'USER_LIMIT_REACHED' ||
+      apiFailure?.code === 'GLOBAL_LIMIT_REACHED' ||
+      apiFailure?.code === 'TOO_MANY_ACTIVE' ||
+      apiFailure?.code === 'GENERATION_DISABLED' ||
+      apiFailure?.code === 'DEPENDENCY_UNAVAILABLE'
+    )
+      await refreshQuota();
+    if (
+      apiFailure?.code === 'ENTRY_BUSY' ||
+      apiFailure?.code === 'IDEMPOTENCY_CONFLICT' ||
+      apiFailure?.code === 'REVISION_CONFLICT'
+    ) {
+      const latest = await readLatestEntry().catch(() => null);
+      if (activeRef.current && latest) setEntry(latest);
+    }
+  }
+
   async function submitGeneration(captchaToken = '') {
     if (!entry || !activeRef.current || generationRequestRef.current || actionInFlightRef.current)
       return;
@@ -480,29 +395,7 @@ function DetailContent({
       await receiveGenerationReceipt(receipt);
     } catch (failure) {
       if (!activeRef.current) return;
-      const apiFailure = failure instanceof ApiClientError ? failure : null;
-      setError(generationActionErrorMessage(failure, '漫画の受付を確認できませんでした。'));
-      if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
-        setGenerationCaptchaRetry(true);
-      } else if (apiFailure?.code === null) {
-        setReceiptUncertain(true);
-      }
-      if (
-        apiFailure?.code === 'USER_LIMIT_REACHED' ||
-        apiFailure?.code === 'GLOBAL_LIMIT_REACHED' ||
-        apiFailure?.code === 'TOO_MANY_ACTIVE' ||
-        apiFailure?.code === 'GENERATION_DISABLED' ||
-        apiFailure?.code === 'DEPENDENCY_UNAVAILABLE'
-      )
-        await refreshQuota();
-      if (
-        apiFailure?.code === 'ENTRY_BUSY' ||
-        apiFailure?.code === 'IDEMPOTENCY_CONFLICT' ||
-        apiFailure?.code === 'REVISION_CONFLICT'
-      ) {
-        const latest = await readLatestEntry().catch(() => null);
-        if (activeRef.current && latest) setEntry(latest);
-      }
+      await handleGenerationFailure(failure, '漫画の受付を確認できませんでした。');
     } finally {
       if (activeRef.current) {
         generationRequestRef.current = false;
@@ -525,29 +418,7 @@ function DetailContent({
       await receiveGenerationReceipt(receipt);
     } catch (failure) {
       if (!activeRef.current) return;
-      const apiFailure = failure instanceof ApiClientError ? failure : null;
-      setError(generationActionErrorMessage(failure, '受付結果を確認できませんでした。'));
-      if (apiFailure?.code === 'CAPTCHA_FAILED' || apiFailure?.code === 'CAPTCHA_REQUIRED') {
-        setGenerationCaptchaRetry(true);
-      } else if (apiFailure?.code === null) {
-        setReceiptUncertain(true);
-      }
-      if (
-        apiFailure?.code === 'USER_LIMIT_REACHED' ||
-        apiFailure?.code === 'GLOBAL_LIMIT_REACHED' ||
-        apiFailure?.code === 'TOO_MANY_ACTIVE' ||
-        apiFailure?.code === 'GENERATION_DISABLED' ||
-        apiFailure?.code === 'DEPENDENCY_UNAVAILABLE'
-      )
-        await refreshQuota();
-      if (
-        apiFailure?.code === 'ENTRY_BUSY' ||
-        apiFailure?.code === 'IDEMPOTENCY_CONFLICT' ||
-        apiFailure?.code === 'REVISION_CONFLICT'
-      ) {
-        const latest = await readLatestEntry().catch(() => null);
-        if (activeRef.current && latest) setEntry(latest);
-      }
+      await handleGenerationFailure(failure, '受付結果を確認できませんでした。');
     } finally {
       if (activeRef.current) {
         actionInFlightRef.current = false;
@@ -580,140 +451,6 @@ function DetailContent({
     }
   }
 
-  function beginEditing() {
-    if (!entry || pending || busy || actionInFlightRef.current) return;
-    setDraftSavedEntryId(null);
-    autoGenerationRequestedRef.current = false;
-    if (generationFlowRef.current) {
-      generationFlowRef.current = false;
-      generationCaptchaAttemptRef.current += 1;
-      setGenerationCaptchaOpen(false);
-      setGenerationCaptchaRetry(false);
-    }
-    setDraftDate(entry.diaryDate);
-    setDraftBody(entry.body);
-    setEditErrorStatus(null);
-    setError('');
-    setEditing(true);
-  }
-
-  function cancelEditing() {
-    if (!entry) return;
-    setDraftDate(entry.diaryDate);
-    setDraftBody(entry.body);
-    setEditErrorStatus(null);
-    setError('');
-    setEditing(false);
-  }
-
-  async function saveEdit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!entry || pending || !activeRef.current || actionInFlightRef.current) return;
-    const parsed = updateEntrySchema.safeParse({
-      expectedRevision: entry.revision,
-      diaryDate: draftDate,
-      body: draftBody,
-    });
-    if (!parsed.success) {
-      setValidationFailureCount((count) => count + 1);
-      setError('日付は今日以前、本文は1〜1,000文字で入力してください。');
-      setEditErrorStatus(null);
-      return;
-    }
-
-    setBusy(true);
-    setError('');
-    setEditErrorStatus(null);
-    actionInFlightRef.current = true;
-    try {
-      const updated = await api<Entry>(`/entries/${encodeURIComponent(entry.id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify(parsed.data),
-      });
-      if (!activeRef.current) return;
-      setEntry((current) =>
-        current
-          ? {
-              ...current,
-              ...updated,
-              latestGeneration:
-                current.latestGenerationId === updated.latestGenerationId
-                  ? current.latestGeneration
-                  : null,
-            }
-          : current,
-      );
-      setDraftDate(updated.diaryDate);
-      setDraftBody(updated.body);
-      setEditing(false);
-      try {
-        const latest = await readLatestEntry();
-        if (!activeRef.current) return;
-        setEntry(latest);
-        setDraftDate(latest.diaryDate);
-        setDraftBody(latest.body);
-      } catch {
-        if (activeRef.current)
-          setError('変更は保存しましたが、詳細の最新状態を読み込めませんでした。');
-      }
-    } catch (failure) {
-      if (activeRef.current) {
-        setError(failure instanceof Error ? failure.message : '変更を保存できませんでした。');
-        setEditErrorStatus(failure instanceof ApiClientError ? failure.status : null);
-      }
-    } finally {
-      if (activeRef.current) {
-        actionInFlightRef.current = false;
-        setBusy(false);
-      }
-    }
-  }
-
-  async function reloadLatest() {
-    if (!entry || !activeRef.current || actionInFlightRef.current) return;
-    setBusy(true);
-    setError('');
-    actionInFlightRef.current = true;
-    try {
-      const latest = await readLatestEntry();
-      if (!activeRef.current) return;
-      setEntry(latest);
-      setDraftDate(latest.diaryDate);
-      setDraftBody(latest.body);
-      const latestIsPending =
-        latest.latestGeneration?.status === 'queued' ||
-        latest.latestGeneration?.status === 'running';
-      setEditing(!latestIsPending);
-      if (latestIsPending) setError('この記録は生成中のため編集できません。');
-      setEditErrorStatus(null);
-    } catch (failure) {
-      if (activeRef.current)
-        setError(failure instanceof Error ? failure.message : '最新の記録を読み込めませんでした。');
-    } finally {
-      if (activeRef.current) {
-        actionInFlightRef.current = false;
-        setBusy(false);
-      }
-    }
-  }
-
-  function requestReloadLatest() {
-    if (draftDirty) {
-      setReloadLatestConfirmOpen(true);
-      return;
-    }
-    void reloadLatest();
-  }
-
-  function requestCancelEditing() {
-    if (busy || actionInFlightRef.current) return;
-    if (!draftDirty) {
-      cancelEditing();
-      return;
-    }
-    setDiscardEditConfirmOpen(true);
-  }
-
   function showOriginalDiary() {
     setJournalExpanded(true);
     window.requestAnimationFrame(() =>
@@ -721,40 +458,7 @@ function DetailContent({
     );
   }
 
-  useEffect(() => {
-    const generationId = generation?.id;
-    if (!pending || !generationId) return;
-    let active = true;
-    let fetching = false;
-    async function refresh() {
-      if (document.hidden || fetching) return;
-      fetching = true;
-      try {
-        const result = await getGeneration(generationId!);
-        if (active && activeRef.current) {
-          applyGeneration(result);
-          setError('');
-          if (result.status !== 'queued' && result.status !== 'running') void refreshQuota();
-        }
-      } catch (failure) {
-        if (active && activeRef.current)
-          setError(failure instanceof Error ? failure.message : '状態を取得できません。');
-      } finally {
-        fetching = false;
-      }
-    }
-    const timer = window.setInterval(() => void refresh(), 5000);
-    const onVisible = () => {
-      void refresh();
-    };
-    void refresh();
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      active = false;
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [generation?.id, pending, refreshQuota]);
+  useGenerationPolling(generation, activeRef, applyGeneration, setError, refreshQuota);
 
   async function removeEntry() {
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
@@ -779,97 +483,22 @@ function DetailContent({
   return (
     <div className={detailPageClass}>
       {entry && !editing && (
-        <header className="detail-toolbar">
-          <Link className="icon-button" to={backTo} aria-label="記録の一覧へ戻る">
-            <Icon name="back" />
-          </Link>
-          <div className="detail-title-group">
-            <h1 className={`detail-title${statusView ? ' detail-state-title' : ''}`}>
-              {statusView
-                ? statusTitle
-                : generation?.status === 'succeeded' && generationForCurrentRevision
-                  ? generation.comic.title
-                  : summarizeDiary(entry.body)}
-            </h1>
-            {statusView && <p className="detail-state-summary">{summarizeDiary(entry.body)}</p>}
-          </div>
-          <div className="detail-menu-anchor">
-            <button
-              ref={menuTriggerRef}
-              className="icon-button"
-              type="button"
-              aria-label="その他の操作"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-            >
-              <Icon name="more" />
-            </button>
-            {menuOpen && (
-              <div
-                ref={menuRef}
-                className="detail-menu"
-                role="menu"
-                aria-label="記録の操作"
-                tabIndex={-1}
-                onKeyDown={(event) => {
-                  const items = Array.from(
-                    event.currentTarget.querySelectorAll<HTMLButtonElement>(
-                      '[role="menuitem"]:not(:disabled)',
-                    ),
-                  );
-                  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    setMenuOpen(false);
-                    menuTriggerRef.current?.focus();
-                  } else if (event.key === 'ArrowDown' && items.length > 0) {
-                    event.preventDefault();
-                    items[(currentIndex + 1) % items.length]?.focus();
-                  } else if (event.key === 'ArrowUp' && items.length > 0) {
-                    event.preventDefault();
-                    items[(currentIndex - 1 + items.length) % items.length]?.focus();
-                  } else if (event.key === 'Home' && items.length > 0) {
-                    event.preventDefault();
-                    items[0]?.focus();
-                  } else if (event.key === 'End' && items.length > 0) {
-                    event.preventDefault();
-                    items.at(-1)?.focus();
-                  }
-                }}
-              >
-                {!pending && (
-                  <button
-                    className="detail-menu-item"
-                    type="button"
-                    role="menuitem"
-                    disabled={busy}
-                    onClick={() => {
-                      setMenuOpen(false);
-                      beginEditing();
-                    }}
-                  >
-                    <Icon name="edit" size={19} />
-                    <span>日記を編集</span>
-                  </button>
-                )}
-                <button
-                  className="detail-menu-item"
-                  type="button"
-                  role="menuitem"
-                  disabled={busy}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setDeleteConfirmOpen(true);
-                  }}
-                >
-                  <Icon name="trash" size={19} />
-                  <span>日記を削除</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </header>
+        <DetailToolbar
+          backTo={backTo}
+          title={
+            statusView
+              ? statusTitle
+              : generation?.status === 'succeeded' && generationForCurrentRevision
+                ? generation.comic.title
+                : summarizeDiary(entry.body)
+          }
+          summary={summarizeDiary(entry.body)}
+          statusView={statusView}
+          pending={pending}
+          busy={busy}
+          onEdit={beginEditing}
+          onDelete={() => setDeleteConfirmOpen(true)}
+        />
       )}
       {entry && editing && (
         <header className="detail-edit-toolbar">
@@ -897,12 +526,12 @@ function DetailContent({
         <>
           {!editing && !statusView && !draftSavedConfirmation && (
             <div className="detail-date-row">
-              <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
+              <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>
             </div>
           )}
           {!editing && draftSavedConfirmation && (
             <time className="detail-draft-saved-date" dateTime={entry.diaryDate}>
-              {formatEntryDate(entry.diaryDate)}
+              {formatDiaryDate(entry.diaryDate)}
             </time>
           )}
           {comicFromPreviousRevision && !statusView && (
@@ -917,46 +546,15 @@ function DetailContent({
             >
               <fieldset disabled={busy} className="entry-form-fields">
                 <div className="date-row">
-                  <div className="date-control">
-                    <label className="date-display" htmlFor="edit-date">
-                      <time dateTime={draftDate}>{formatEntryDate(draftDate)}</time>
-                      <Icon name="calendar" size={20} />
-                    </label>
-                    <input
-                      id="edit-date"
-                      aria-label="日付"
-                      className="date-picker-input"
-                      type="date"
-                      value={draftDate}
-                      max={jstToday()}
-                      onChange={(event) => setDraftDate(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') event.preventDefault();
-                      }}
-                      required
-                    />
-                  </div>
+                  <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
                 </div>
-                <div className="entry-editor-card">
-                  <label className="entry-editor-title" htmlFor="edit-body">
-                    今日はどんな日だった？
-                  </label>
-                  <textarea
-                    id="edit-body"
-                    rows={8}
-                    value={draftBody}
-                    onChange={(event) => setDraftBody(event.target.value)}
-                    placeholder="今日はどんな日だった？"
-                    required
-                    aria-describedby="edit-count"
-                  />
-                  <div className="entry-editor-footer">
-                    <span />
-                    <p id="edit-count" className="character-count">
-                      {[...draftBody.trim()].length} / 1,000
-                    </p>
-                  </div>
-                </div>
+                <DiaryBodyField
+                  id="edit-body"
+                  countId="edit-count"
+                  value={draftBody}
+                  onChange={setDraftBody}
+                  placeholder="今日はどんな日だった？"
+                />
               </fieldset>
               {editErrorStatus === 409 && (
                 <button
@@ -999,75 +597,10 @@ function DetailContent({
                   hideTitle={generationForCurrentRevision}
                 />
               )}
-              {generation?.status === 'queued' && (
-                <section className="generation-card" aria-live="polite">
-                  <Icon name="clock" size={40} />
-                  <h2>受付済み</h2>
-                  <p>順番に処理しています。</p>
-                  <p className="generation-card-note">画面を閉じても、あとで確認できます。</p>
-                </section>
-              )}
-              {generation?.status === 'running' && (
-                <section className="generation-card" aria-live="polite">
-                  <Icon name="clock" size={40} />
-                  <h2>
-                    {generation.stage === 'script'
-                      ? '構成を考えています'
-                      : generation.stage === 'images'
-                        ? '画像を描いています'
-                        : '漫画を保存しています'}
-                  </h2>
-                  <p>{generationStageMessage(generation)}</p>
-                  <ol className="generation-steps" aria-label="生成の進行段階">
-                    {['構成を考える', '絵を描く', '保存する'].map((label, index) => (
-                      <li
-                        key={label}
-                        className={
-                          index < stageIndex
-                            ? 'is-complete'
-                            : index === stageIndex
-                              ? 'is-current'
-                              : ''
-                        }
-                        aria-current={index === stageIndex ? 'step' : undefined}
-                      >
-                        <span className="generation-step-icon" aria-hidden="true">
-                          {index < stageIndex ? <Icon name="check" size={14} /> : null}
-                        </span>
-                        {label}
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              )}
-              {generation?.status === 'unknown' && (
-                <section className="generation-card" aria-live="polite">
-                  <Icon name="clock" size={40} />
-                  <h2>状態を再確認してください</h2>
-                  <p>{generationStateMessage(generation)}</p>
-                </section>
-              )}
-              {generation?.status === 'failed' && (
-                <section className="generation-card" role="alert">
-                  <Icon name="alert" size={40} />
-                  <h2>日記は保存されています</h2>
-                  <p>{generationStateMessage(generation)}</p>
-                </section>
-              )}
-              {generation?.status === 'cancelled' && (
-                <section className="generation-card">
-                  <Icon name="close" size={40} />
-                  <h2>日記は保存されています</h2>
-                  <p>{generationStateMessage(generation)}</p>
-                </section>
-              )}
-              {generationReferenceUnavailable && (
-                <section className="generation-card" role="alert">
-                  <Icon name="alert" size={40} />
-                  <h2>漫画の状態を確認できません</h2>
-                  <p>状態が確認できるまで新しい生成は受け付けません。</p>
-                </section>
-              )}
+              <GenerationStatusCard
+                generation={generation}
+                referenceUnavailable={generationReferenceUnavailable}
+              />
               {!generation && !generationReferenceUnavailable && !draftSavedConfirmation && (
                 <>
                   <section className="entry-draft-card">
@@ -1174,7 +707,7 @@ function DetailContent({
           {statusView && (
             <aside className="detail-meta-note">
               <div className="detail-date-row">
-                <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
+                <time dateTime={entry.diaryDate}>{formatDiaryDate(entry.diaryDate)}</time>
               </div>
             </aside>
           )}

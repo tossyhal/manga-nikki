@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
-import { clickEntryMenuItem } from './fixtures/ui';
+import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const today = jstToday();
@@ -245,44 +245,77 @@ test('pathname遷移ではmainへfocusし、記録タブのquery更新ではtab 
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
   await installMockUiRoutes(page);
 
-  for (const viewport of [
-    { width: 390, height: 700 },
-    { width: 393, height: 852 },
+  const viewports = [
     { width: 1280, height: 900 },
-  ]) {
-    await page.setViewportSize(viewport);
-    const routeBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
-    for (const path of ['/', `/entries/${entryId}`]) {
-      await page.goto(path);
-      const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    { width: 393, height: 852 },
+    { width: 390, height: 700 },
+  ];
+  await page.setViewportSize({ width: 390, height: 700 });
+  const routeBoundsByViewport = new Map<
+    string,
+    Array<{ path: string; bounds: { x: number; y: number; width: number; height: number } }>
+  >();
+  for (const path of ['/', `/entries/${entryId}`]) {
+    await page.goto(path);
+    const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      const expectedWidth = Math.min(390, viewport.width - 40);
+      await expect
+        .poll(async () => {
+          const bounds = await nav.boundingBox();
+          if (!bounds) return null;
+          return {
+            x: Math.round(bounds.x * 10) / 10,
+            y: Math.round(bounds.y * 10) / 10,
+            width: Math.round(bounds.width * 10) / 10,
+            height: Math.round(bounds.height * 10) / 10,
+          };
+        })
+        .toEqual({
+          x: (viewport.width - expectedWidth) / 2,
+          y: viewport.height - 80,
+          width: expectedWidth,
+          height: 68,
+        });
       const bounds = await nav.boundingBox();
       expect(bounds).not.toBeNull();
       if (!bounds) continue;
-      routeBounds.push(bounds);
+      const key = `${viewport.width}x${viewport.height}`;
+      const routeBounds = routeBoundsByViewport.get(key) ?? [];
+      routeBounds.push({ path, bounds });
+      routeBoundsByViewport.set(key, routeBounds);
       expect(bounds.height).toBe(68);
-      expect(bounds.width).toBe(Math.min(390, viewport.width - 40));
+      expect(bounds.width).toBe(expectedWidth);
       expect(bounds.x).toBeCloseTo((viewport.width - bounds.width) / 2, 0);
       expect(viewport.height - bounds.y - bounds.height).toBeCloseTo(12, 0);
     }
-    expect(routeBounds[1]?.x).toBe(routeBounds[0]?.x);
-    expect(routeBounds[1]?.y).toBe(routeBounds[0]?.y);
-    expect(routeBounds[1]?.width).toBe(routeBounds[0]?.width);
-    expect(routeBounds[1]?.height).toBe(routeBounds[0]?.height);
+  }
+  for (const viewport of viewports) {
+    const routeBounds = routeBoundsByViewport.get(`${viewport.width}x${viewport.height}`) ?? [];
+    const homeBounds = routeBounds.find(({ path }) => path === '/')?.bounds;
+    const detailBounds = routeBounds.find(({ path }) => path === `/entries/${entryId}`)?.bounds;
+    expect(detailBounds?.x).toBe(homeBounds?.x);
+    expect(detailBounds?.y).toBe(homeBounds?.y);
+    expect(detailBounds?.width).toBe(homeBounds?.width);
+    expect(detailBounds?.height).toBe(homeBounds?.height);
   }
 });
 
 test('Home・入力・記録・詳細は主要幅で横にはみ出さない', async ({ page }) => {
   await installMockUiRoutes(page);
 
-  const widths = [320, 393, 430, 1280];
+  const widths = [1280, 430, 393, 320];
+  await page.setViewportSize({ width: 320, height: 844 });
   const paths = ['/', '/new', '/library', `/entries/${entryId}`];
-  for (const width of widths) {
-    await page.setViewportSize({ width, height: 844 });
-    for (const path of paths) {
-      await page.goto(path);
+  for (const path of paths) {
+    await page.goto(path);
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 844 });
 
       if (path === '/') {
         await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
+        await expect(page.locator('.home-today-hero')).toBeVisible();
       } else if (path === '/new') {
         const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
         await expect(diary).toBeVisible();
@@ -295,13 +328,24 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
         await expect(page.locator('.entry-draft-card .diary')).toBeVisible();
       }
 
-      const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(scrollWidth).toBeLessThanOrEqual(width);
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+        .toBeLessThanOrEqual(width);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const main = document.querySelector('#main');
+            if (!(main instanceof HTMLElement)) throw new Error('本文領域がありません');
+            return main.scrollWidth - main.clientWidth;
+          }),
+        )
+        .toBeLessThanOrEqual(0);
 
       if (path === '/new') {
         const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
         await diary.fill('');
         await expect(diary).toHaveValue('');
+        await expect(page).toHaveURL(/\/new$/);
       }
     }
   }
@@ -312,69 +356,92 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
 }) => {
   await installMockUiRoutes(page, makeEntries(20));
 
-  for (const viewport of [
+  const viewports = [
     { width: 393, height: 852 },
     { width: 390, height: 769 },
     { width: 393, height: 724 },
     { width: 390, height: 700 },
-  ]) {
-    await page.setViewportSize(viewport);
-    for (const path of ['/', '/new', '/library']) {
-      await page.goto(path);
-      if (path === '/') {
+  ];
+  await page.setViewportSize({ width: 390, height: 700 });
+  const readPrimaryScroll = async () =>
+    page.evaluate(() => {
+      const main = document.querySelector('#main');
+      if (!main) throw new Error('本文領域がありません');
+      const overflow = (selector: string) => {
+        const element = document.querySelector(selector);
+        return element ? element.scrollHeight - element.clientHeight : 0;
+      };
+      return {
+        document: document.documentElement.scrollHeight - window.innerHeight,
+        main: main.scrollHeight - main.clientHeight,
+        libraryPage: overflow('.library-page'),
+        dayRecords: overflow('.library-day-records'),
+        listRecords: overflow('.library-list-records'),
+      };
+    });
+  const expectNoPrimaryScroll = async () => {
+    await expect
+      .poll(async () => Object.values(await readPrimaryScroll()).every((overflow) => overflow <= 1))
+      .toBe(true);
+    const scroll = await readPrimaryScroll();
+    expect(scroll.document).toBeLessThanOrEqual(1);
+    expect(scroll.main).toBeLessThanOrEqual(1);
+    expect(scroll.libraryPage).toBeLessThanOrEqual(1);
+    expect(scroll.dayRecords).toBeLessThanOrEqual(1);
+    expect(scroll.listRecords).toBeLessThanOrEqual(1);
+  };
+
+  for (const path of ['/', '/new', '/library']) {
+    await page.goto(path);
+    if (path === '/library') await expectDefaultLibraryLocation(page);
+
+    if (path === '/') {
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
         await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
         await expect(page.locator('.home-today-hero')).toBeVisible();
+        await expectNoPrimaryScroll();
       }
-      if (path === '/new')
-        await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
-      if (path === '/library') {
+    } else if (path === '/new') {
+      const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+      const cta = page.locator('.primary-action-dock > .button');
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await expect(diary).toBeVisible();
+        await expectNoPrimaryScroll();
+        await expect(cta).toBeVisible();
+        await expect.poll(() => gapAboveBottomNav(cta)).toBeGreaterThanOrEqual(14);
+      }
+    } else {
+      const tabs = page.getByRole('tablist', { name: '記録の表示方法' });
+      const calendarTab = tabs.getByRole('tab', { name: 'カレンダー' });
+      const listTab = tabs.getByRole('tab', { name: 'リスト' });
+      const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+      const calendarPager = calendarPanel.getByRole('navigation', {
+        name: '選択日の記録のページ送り',
+      });
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(6);
-      }
-
-      const expectNoPrimaryScroll = async () => {
-        const scroll = await page.evaluate(() => {
-          const main = document.querySelector('#main');
-          if (!main) throw new Error('本文領域がありません');
-          const overflow = (selector: string) => {
-            const element = document.querySelector(selector);
-            return element ? element.scrollHeight - element.clientHeight : 0;
-          };
-          return {
-            document: document.documentElement.scrollHeight - window.innerHeight,
-            main: main.scrollHeight - main.clientHeight,
-            libraryPage: overflow('.library-page'),
-            dayRecords: overflow('.library-day-records'),
-            listRecords: overflow('.library-list-records'),
-          };
-        });
-        expect(scroll.document).toBeLessThanOrEqual(1);
-        expect(scroll.main).toBeLessThanOrEqual(1);
-        expect(scroll.libraryPage).toBeLessThanOrEqual(1);
-        expect(scroll.dayRecords).toBeLessThanOrEqual(1);
-        expect(scroll.listRecords).toBeLessThanOrEqual(1);
-      };
-
-      await expectNoPrimaryScroll();
-      if (path === '/new') {
-        const cta = page.locator('.primary-action-dock > .button');
-        await expect(cta).toBeVisible();
-        expect(await gapAboveBottomNav(cta)).toBeGreaterThanOrEqual(14);
-      }
-      if (path === '/library') {
-        const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
-        const calendarPager = calendarPanel.getByRole('navigation', {
-          name: '選択日の記録のページ送り',
-        });
+        await expectNoPrimaryScroll();
         await expect(calendarPager).toBeVisible();
-        expect(await gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
-        await page.getByRole('tab', { name: 'リスト' }).click();
-        const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+        await expect.poll(() => gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
+      }
+
+      await listTab.click();
+      await expect(page).toHaveURL(/\/library\?view=list&/);
+      const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+      const listPager = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await expect(listTab).toHaveAttribute('aria-selected', 'true');
+        await expect(calendarTab).toHaveAttribute('aria-selected', 'false');
         await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
         await expectNoPrimaryScroll();
-        const listPager = listPanel.getByRole('navigation', { name: '記録一覧のページ送り' });
         await expect(listPager).toBeVisible();
-        expect(await gapAboveBottomNav(listPager)).toBeGreaterThanOrEqual(14);
+        await expect.poll(() => gapAboveBottomNav(listPager)).toBeGreaterThanOrEqual(14);
       }
     }
   }

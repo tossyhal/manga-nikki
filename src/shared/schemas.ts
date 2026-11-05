@@ -1,3 +1,5 @@
+import { jstToday } from './date';
+export { jstToday } from './date';
 import { z } from 'zod';
 
 const text = (min: number, max: number) =>
@@ -32,8 +34,6 @@ export const comicSchema = z.strictObject({
   ]),
 });
 export type ComicDocument = z.infer<typeof comicSchema>;
-export const jstToday = () =>
-  new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date());
 const diaryDate = z.iso.date().refine((date) => date <= jstToday(), '未来の日付は指定できません。');
 const body = z.string().trim().pipe(text(1, 1000));
 export const createEntrySchema = z.strictObject({

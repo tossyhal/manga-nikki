@@ -214,6 +214,7 @@ async function runBehindEntryUntilDeadline({
     );
     await holder.waitForOutput(lockMarker);
 
+    // ロック前の時刻を使う誤実装も検出するため、待機開始後に期限を設定する。
     queryPromise = sql(query, waiterName);
     await waitForLockWaiters(waiterName, 1);
 
@@ -821,7 +822,7 @@ try {
     entryId: timeCheckEntries[0],
     waiterName: 'mn-db-claim-entry-expiry',
     query: `set role service_role; select public.claim_generation('${expiryClaimGeneration}');`,
-    updateDeadlineSql: `update public.entries set expires_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${timeCheckEntries[0]}'`,
+    updateDeadlineSql: `update public.entries set expires_at = pg_catalog.clock_timestamp() + interval '250 milliseconds' where id = '${timeCheckEntries[0]}'`,
     deadlineExpression: `(select expires_at from public.entries where id = '${timeCheckEntries[0]}')`,
   });
   assert.equal(expiryClaimResult.code, 0, expiryClaimResult.stderr);
@@ -846,7 +847,7 @@ try {
     entryId: timeCheckEntries[1],
     waiterName: 'mn-db-begin-claim-expiry',
     query: `set role service_role; select public.begin_provider_attempt('${expiryBeginGeneration}','${expiryBeginClaim.claim_token}','script',1,true);`,
-    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${expiryBeginGeneration}'`,
+    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '250 milliseconds' where id = '${expiryBeginGeneration}'`,
     deadlineExpression: `(select deadline_at from public.generations where id = '${expiryBeginGeneration}')`,
   });
   assert.notEqual(expiryBeginResult.code, 0, expiryBeginResult.stdout);
@@ -871,7 +872,7 @@ try {
     entryId: timeCheckEntries[2],
     waiterName: 'mn-db-settle-claim-expiry',
     query: `set role service_role; select public.fail_or_hold_generation('${expirySettleGeneration}',null,'failed');`,
-    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '2 seconds' where id = '${expirySettleGeneration}'`,
+    updateDeadlineSql: `update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '250 milliseconds' where id = '${expirySettleGeneration}'`,
     deadlineExpression: `(select deadline_at from public.generations where id = '${expirySettleGeneration}')`,
   });
   assert.equal(expirySettleResult.code, 0, expirySettleResult.stderr);
