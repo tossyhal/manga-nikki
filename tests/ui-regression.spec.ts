@@ -463,6 +463,18 @@ test('短いデスクトップ画面の記録ビューは本文領域に収ま�
   await page.setViewportSize({ width: 1366, height: 650 });
   await page.goto('/library');
 
+  const toolbarCenters = await page.locator('.library-view-toolbar').evaluate((toolbar) => {
+    const tabs = toolbar.querySelector('.library-view-tabs');
+    const refresh = toolbar.querySelector('.library-refresh-button');
+    if (!tabs || !refresh) throw new Error('記録ツールバーの要素がありません');
+    const centerY = (element: Element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top + bounds.height / 2;
+    };
+    return { tabs: centerY(tabs), refresh: centerY(refresh) };
+  });
+  expect(Math.abs(toolbarCenters.tabs - toolbarCenters.refresh)).toBeLessThanOrEqual(0.5);
+
   const expectLibraryToFit = async (viewSelector: string) => {
     await expectMainToFit(page);
     await expect(page.locator('.library-page')).toHaveCSS('min-height', '0px');
