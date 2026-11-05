@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { MockScriptProvider, mockScriptModelProfile } from './ai/mock-script-provider';
 import { createEntrySchema, updateEntrySchema, generateSchema } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
+import type { SaveGeneratedComic } from './generation-save-handler';
 import { createMockRepository, type MockRepository } from './repositories/mock';
 import {
   createLiveEntry,
@@ -26,6 +27,8 @@ import {
   getLiveGenerationQuota,
   getLiveMockAssetUrl,
   LiveGenerationError,
+  openAIGenerationIngressConfigured,
+  reserveLiveOpenAIGeneration,
   reserveLiveMockGeneration,
 } from './live-generations';
 import {
@@ -44,6 +47,7 @@ export function createApp(
     authFetch?: typeof fetch;
     supabaseFetch?: typeof fetch;
     turnstileFetch?: typeof fetch;
+    saveGeneratedComic?: SaveGeneratedComic;
   } = {},
 ) {
   let repository = options.repository;
@@ -98,7 +102,9 @@ export function createApp(
     return c.json({
       generationAvailable:
         current === 'local-mock' ||
-        (current === 'local-connected' && generationIngressConfigured(c.env)),
+        (current === 'local-connected' && generationIngressConfigured(c.env)) ||
+        (current === 'live-demo' &&
+          openAIGenerationIngressConfigured(c.env, typeof options.saveGeneratedComic === 'function')),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
       consentVersion: 'v1',
@@ -189,7 +195,13 @@ export function createApp(
       return c.json(
         await getLiveGenerationQuota(
           liveContext(c),
-          current === 'local-connected' && generationIngressConfigured(c.env),
+          (current === 'local-connected' && generationIngressConfigured(c.env)) ||
+            (current === 'live-demo' &&
+              openAIGenerationIngressConfigured(
+                c.env,
+                typeof options.saveGeneratedComic === 'function',
+              )),
+          current !== 'live-demo',
         ),
       );
     return c.json(getMockQuota(getRepository(), c.get('owner')));
@@ -254,18 +266,23 @@ export function createApp(
   });
   app.post('/api/v1/entries/:id/generations', async (c) => {
     const current = mode(c.env);
-    if (current === 'live-demo') throw new LiveGenerationError(503, 'GENERATION_DISABLED');
     const input = generateSchema.parse(await jsonBody(c.req.raw));
     if (current !== 'local-mock') {
-      const receipt = await reserveLiveMockGeneration(
-        { ...liveContext(c), turnstileFetch: options.turnstileFetch },
-        {
-          entryId: z.uuid().parse(c.req.param('id')),
-          expectedRevision: input.expectedRevision,
-          idempotencyKey: z.uuid().parse(c.req.header('Idempotency-Key')),
-          captchaToken: input.captchaToken,
-        },
-      );
+      const context = { ...liveContext(c), turnstileFetch: options.turnstileFetch };
+      const request = {
+        entryId: z.uuid().parse(c.req.param('id')),
+        expectedRevision: input.expectedRevision,
+        idempotencyKey: z.uuid().parse(c.req.header('Idempotency-Key')),
+        captchaToken: input.captchaToken,
+      };
+      const receipt =
+        current === 'live-demo'
+          ? await reserveLiveOpenAIGeneration(
+              context,
+              request,
+              typeof options.saveGeneratedComic === 'function',
+            )
+          : await reserveLiveMockGeneration(context, request);
       return c.json(receipt, 202);
     }
     const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));

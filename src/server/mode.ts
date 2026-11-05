@@ -9,6 +9,7 @@ export const environmentSchema = z.object({
   SUPABASE_SECRET_KEY: z.string().optional(),
   TURNSTILE_SECRET_KEY: z.string().optional(),
   TURNSTILE_ALLOWED_HOSTNAMES: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   GENERATION_QUEUE: z.unknown().optional(),
 });
 export type Environment = z.infer<typeof environmentSchema>;

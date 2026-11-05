@@ -8,6 +8,11 @@ import {
   type GenerationQueueBinding,
 } from './live-generations';
 import { resolveMode } from './mode';
+import {
+  openAIGenerationConsumerReady,
+  runOpenAIGeneration,
+} from './openai-generation-runner';
+import type { OpenAIGenerationRuntime } from './openai-generation-runner';
 
 const queueBodySchema = z.strictObject({ generationId: z.uuid() });
 const claimIdentitySchema = z.object({
@@ -19,6 +24,7 @@ const claimSchema = z.object({
   entry_id: z.uuid(),
   owner_id: z.uuid(),
   entry_revision: z.number().int().positive(),
+  diary_date: z.iso.date(),
   is_mock: z.boolean(),
   input_snapshot: z.string().refine((value) => {
     const count = [...value].length;
@@ -149,14 +155,22 @@ export async function processGenerationMessage(
   environment: Environment,
   generationId: string,
   fetcher?: typeof fetch,
-): Promise<'ignored' | 'duplicate' | 'succeeded' | 'failed'> {
-  let isConnected = false;
+  runtime: OpenAIGenerationRuntime = {},
+): Promise<'ignored' | 'duplicate' | 'succeeded' | 'handed-off' | 'failed'> {
+  let currentMode;
   try {
-    isConnected = resolveMode(environment, false) === 'local-connected';
+    currentMode = resolveMode(environment, false);
   } catch {
     return 'ignored';
   }
-  if (!isConnected) return 'ignored';
+  if (currentMode === 'local-connected') {
+    // 固定mock経路は実AIの停止設定から独立させる。
+  } else if (
+    currentMode !== 'live-demo' ||
+    !openAIGenerationConsumerReady(environment, runtime)
+  ) {
+    return 'ignored';
+  }
 
   const claimValue = await rpc(environment, fetcher, 'claim_generation', {
     p_generation_id: generationId,
@@ -182,6 +196,11 @@ export async function processGenerationMessage(
   const claimToken = claim.data.claim_token;
 
   try {
+    if (currentMode === 'live-demo') {
+      await runOpenAIGeneration(environment, fetcher, claim.data, runtime);
+      return 'handed-off';
+    }
+
     const profile = profileSchema.safeParse(claim.data.model_profile_snapshot);
     if (!claim.data.is_mock || !profile.success) {
       await failClaimedGeneration(environment, fetcher, generationId, claimToken);
@@ -230,22 +249,24 @@ export async function consumeGenerationQueue(
   batch: GenerationQueueBatch,
   environment: Environment,
   fetcher?: typeof fetch,
+  runtime: OpenAIGenerationRuntime = {},
 ): Promise<void> {
-  let isConnected = false;
+  let processableMode = false;
   try {
-    isConnected = resolveMode(environment, false) === 'local-connected';
+    const currentMode = resolveMode(environment, false);
+    processableMode = currentMode === 'local-connected' || currentMode === 'live-demo';
   } catch {
     // Invalid or unconfigured modes must never start a generator.
   }
 
   for (const message of batch.messages) {
     const body = queueBodySchema.safeParse(message.body);
-    if (!body.success || !isConnected) {
+    if (!body.success || !processableMode) {
       message.ack();
       continue;
     }
     try {
-      await processGenerationMessage(environment, body.data.generationId, fetcher);
+      await processGenerationMessage(environment, body.data.generationId, fetcher, runtime);
       message.ack();
     } catch {
       message.retry();
@@ -256,15 +277,18 @@ export async function consumeGenerationQueue(
 export async function reconcileGenerationQueue(
   environment: Environment,
   fetcher?: typeof fetch,
+  runtime: OpenAIGenerationRuntime = {},
 ): Promise<void> {
-  let isConnected = false;
+  let canReconcile = false;
+  let currentMode: ReturnType<typeof resolveMode> | undefined;
   try {
-    isConnected = resolveMode(environment, false) === 'local-connected';
+    currentMode = resolveMode(environment, false);
+    canReconcile = currentMode === 'local-connected' || currentMode === 'live-demo';
   } catch {
     // Invalid or unconfigured modes must not inspect or change individual data.
   }
   const queue = getGenerationQueue(environment);
-  if (!isConnected || !queue) return;
+  if (!canReconcile) return;
 
   const rows = await rpc(environment, fetcher, 'list_generation_reconcile_candidates', {
     p_limit: 25,
@@ -272,20 +296,32 @@ export async function reconcileGenerationQueue(
   const parsed = reconcileSchema.safeParse(rows);
   if (!parsed.success) throw new Error('GENERATION_RECONCILE_RESULT_INVALID');
 
+  let candidateFailed = false;
   for (const candidate of parsed.data) {
-    if (candidate.action === 'enqueue') {
-      await queue.send({ generationId: candidate.generation_id });
-      await rpc(environment, fetcher, 'mark_generation_enqueued', {
+    try {
+      if (candidate.action === 'enqueue') {
+        if (!queue) continue;
+        if (
+          currentMode === 'live-demo' &&
+          !openAIGenerationConsumerReady(environment, runtime)
+        )
+          continue;
+        await queue.send({ generationId: candidate.generation_id });
+        await rpc(environment, fetcher, 'mark_generation_enqueued', {
+          p_generation_id: candidate.generation_id,
+        });
+        continue;
+      }
+      await rpc(environment, fetcher, 'fail_or_hold_generation', {
         p_generation_id: candidate.generation_id,
+        p_claim_token: null,
+        p_terminal_status: 'failed',
       });
-      continue;
+    } catch {
+      candidateFailed = true;
     }
-    await rpc(environment, fetcher, 'fail_or_hold_generation', {
-      p_generation_id: candidate.generation_id,
-      p_claim_token: null,
-      p_terminal_status: 'failed',
-    });
   }
+  if (candidateFailed) throw new Error('GENERATION_RECONCILE_FAILED');
 }
 
 export async function sendGenerationToQueue(

@@ -159,6 +159,18 @@ export function generationIngressConfigured(environment: Environment): boolean {
   );
 }
 
+export function openAIGenerationIngressConfigured(
+  environment: Environment,
+  saveHandlerReady: boolean,
+): boolean {
+  return Boolean(
+    environment.GENERATION_ENABLED === 'true' &&
+      environment.OPENAI_API_KEY?.trim() &&
+      saveHandlerReady &&
+      generationIngressConfigured(environment),
+  );
+}
+
 export async function findLiveGenerationReceipt(
   context: GenerationContext,
   input: { entryId: string; expectedRevision: number; idempotencyKey: string },
@@ -186,38 +198,43 @@ async function verifyGenerationCaptcha(context: GenerationContext, token: string
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
-  let response: Response;
   try {
     const body = new FormData();
     body.set('secret', secret);
     body.set('response', token);
-    response = await (context.turnstileFetch ?? fetch)(
+    const response = await (context.turnstileFetch ?? fetch)(
       'https://challenges.cloudflare.com/turnstile/v0/siteverify',
       { method: 'POST', body, signal: controller.signal },
     );
-  } catch {
+    if (!response.ok) throw unavailable();
+    let abortListener: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abortListener = () => reject(unavailable());
+      if (controller.signal.aborted) abortListener();
+      else controller.signal.addEventListener('abort', abortListener, { once: true });
+    });
+    let responseBody: unknown;
+    try {
+      responseBody = await Promise.race([response.json(), aborted]);
+    } finally {
+      if (abortListener) controller.signal.removeEventListener('abort', abortListener);
+    }
+    const parsed = turnstileResponseSchema.safeParse(responseBody);
+    if (!parsed.success) throw unavailable();
+    const result = parsed.data;
+    if (
+      !result.success ||
+      result.action !== 'generate' ||
+      !result.hostname ||
+      !hostnames.includes(result.hostname.toLowerCase())
+    )
+      throw new LiveGenerationError(403, 'CAPTCHA_FAILED');
+  } catch (error) {
+    if (error instanceof LiveGenerationError) throw error;
     throw unavailable();
   } finally {
     clearTimeout(timeout);
   }
-
-  let result: z.infer<typeof turnstileResponseSchema>;
-  try {
-    if (!response.ok) throw unavailable();
-    const parsed = turnstileResponseSchema.safeParse(await response.json());
-    if (!parsed.success) throw unavailable();
-    result = parsed.data;
-  } catch {
-    throw unavailable();
-  }
-
-  if (
-    !result.success ||
-    result.action !== 'generate' ||
-    !result.hostname ||
-    !hostnames.includes(result.hostname.toLowerCase())
-  )
-    throw new LiveGenerationError(403, 'CAPTCHA_FAILED');
 }
 
 export async function reserveLiveMockGeneration(
@@ -262,9 +279,53 @@ export async function reserveLiveMockGeneration(
   return receipt;
 }
 
+export async function reserveLiveOpenAIGeneration(
+  context: GenerationContext,
+  input: {
+    entryId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+    captchaToken: string;
+  },
+  saveHandlerReady: boolean,
+): Promise<GenerationReceipt> {
+  const existing = await findLiveGenerationReceipt(context, input);
+  if (existing) return existing;
+
+  if (!openAIGenerationIngressConfigured(context.environment, saveHandlerReady))
+    throw new LiveGenerationError(503, 'GENERATION_DISABLED');
+
+  await verifyGenerationCaptcha(context, input.captchaToken);
+  const value = await callGenerationRpc(
+    context.environment,
+    context.fetcher,
+    'reserve_openai_generation',
+    {
+      p_actor_id: context.owner,
+      p_entry_id: input.entryId,
+      p_expected_revision: input.expectedRevision,
+      p_idempotency_key: input.idempotencyKey,
+      p_generation_enabled: true,
+    },
+  );
+  const receipt = mapReceipt(value);
+  const queue = getGenerationQueue(context.environment);
+  if (!queue) throw new LiveGenerationError(503, 'GENERATION_DISABLED');
+  try {
+    await queue.send({ generationId: receipt.generationId });
+    await callGenerationRpc(context.environment, context.fetcher, 'mark_generation_enqueued', {
+      p_generation_id: receipt.generationId,
+    });
+  } catch {
+    // The reserved job remains authoritative and the scheduled reconciler will enqueue it later.
+  }
+  return receipt;
+}
+
 export async function getLiveGenerationQuota(
   context: GenerationContext,
   capableEnvironment: boolean,
+  expectedProfileIsMock = true,
 ): Promise<{
   remainingToday: number;
   activeGenerationId: string | null;
@@ -286,7 +347,9 @@ export async function getLiveGenerationQuota(
     activeGenerationId: parsed.data.active_generation_id,
     resetAt: new Date(parsed.data.reset_at).toISOString(),
     generationAvailable:
-      capableEnvironment && parsed.data.generation_available && parsed.data.profile_is_mock,
+      capableEnvironment &&
+      parsed.data.generation_available &&
+      parsed.data.profile_is_mock === expectedProfileIsMock,
   };
 }
 

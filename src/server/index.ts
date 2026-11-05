@@ -4,16 +4,25 @@ import { cleanRetainedEntriesForScheduledEnvironment } from './retention-cleanup
 import { createScheduledHandler } from './scheduled-handler';
 import type { GenerationQueueBatch } from './generation-queue';
 import type { Environment } from './mode';
-const app = createApp({ localDevelopment: import.meta.env.DEV });
+import type { OpenAIGenerationRuntime } from './openai-generation-runner';
 
-const scheduled = createScheduledHandler({
-  reconcileGenerationQueue,
-  cleanRetainedEntries: cleanRetainedEntriesForScheduledEnvironment,
-});
+export function createWorker(runtime: OpenAIGenerationRuntime = {}) {
+  const app = createApp({
+    localDevelopment: import.meta.env.DEV,
+    saveGeneratedComic: runtime.saveGeneratedComic,
+  });
+  const scheduled = createScheduledHandler({
+    reconcileGenerationQueue: (environment) =>
+      reconcileGenerationQueue(environment, undefined, runtime),
+    cleanRetainedEntries: cleanRetainedEntriesForScheduledEnvironment,
+  });
 
-export default {
-  fetch: app.fetch,
-  queue: (batch: GenerationQueueBatch, environment: Environment) =>
-    consumeGenerationQueue(batch, environment),
-  scheduled,
-};
+  return {
+    fetch: app.fetch,
+    queue: (batch: GenerationQueueBatch, environment: Environment) =>
+      consumeGenerationQueue(batch, environment, undefined, runtime),
+    scheduled,
+  };
+}
+
+export default createWorker();
