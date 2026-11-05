@@ -440,6 +440,7 @@ function App() {
       <BottomNav />
       <ConfirmDialog
         open={blockedActivity !== null && blocker.state === 'blocked'}
+        variant={blockedActivity !== null && !blockedActivity.busy ? 'navigation-exit' : 'default'}
         icon={blockedActivity?.busy ? 'alert' : null}
         title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
         description={

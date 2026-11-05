@@ -161,7 +161,7 @@ a {
   min-height: calc(100svh - 64px);
   margin: 0 auto;
   padding: calc(16px + env(safe-area-inset-top, 0px)) 24px
-    calc(76px + 54px + 14px + env(safe-area-inset-bottom, 0px) + 24px);
+    calc(76px + 54px + 14px + 12px + env(safe-area-inset-bottom, 0px) + 24px);
 }
 
 .app-main-home {
@@ -173,7 +173,7 @@ a {
   width: 100%;
   min-width: 0;
   min-height: 0;
-  padding: 8px 20px 12px;
+  padding: 8px 20px 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -250,7 +250,7 @@ p {
   display: block;
   margin: 8px 0 18px;
   color: #252525;
-  font-size: 25px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 1.4;
 }
@@ -1000,7 +1000,7 @@ p {
 .primary-action-dock {
   position: fixed;
   z-index: 15;
-  bottom: calc(76px + 14px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(76px + 12px + 14px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   width: min(382px, calc(100vw - 48px));
   transform: translateX(-50%);
@@ -1734,6 +1734,22 @@ p {
   min-height: 72px;
 }
 
+.confirm-dialog--navigation-exit .button-primary,
+.confirm-dialog--navigation-exit .button-text {
+  min-height: 54px;
+  padding: 10px 18px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.confirm-dialog--navigation-exit .button-text {
+  margin-top: 8px;
+  border: 1px solid #e4e4e4;
+  background: #efefef;
+}
+
 .pwa-notice {
   display: block;
   margin: 8px 20px 0;
@@ -1774,7 +1790,7 @@ p {
 .bottom-nav {
   position: fixed;
   z-index: 20;
-  bottom: env(safe-area-inset-bottom, 0px);
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   display: grid;
   width: min(398px, calc(100vw - 32px));
@@ -1816,15 +1832,15 @@ p {
 }
 
 .bottom-nav-label {
-  min-height: 18px;
+  display: none;
+  height: 18px;
   font-size: 11px;
   font-weight: 700;
   line-height: 18px;
-  visibility: hidden;
 }
 
 .bottom-nav-item.is-active .bottom-nav-label {
-  visibility: visible;
+  display: block;
 }
 
 .primary-shell .bottom-nav {
@@ -1833,9 +1849,9 @@ p {
   bottom: auto;
   left: auto;
   width: calc(100% - 40px);
-  height: calc(76px + env(safe-area-inset-bottom, 0px));
-  margin: 0 auto;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  height: 76px;
+  margin: 0 auto calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: 0;
   transform: none;
 }
 

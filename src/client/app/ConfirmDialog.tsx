@@ -3,6 +3,7 @@ import { Icon, type IconName } from './Icon';
 
 export function ConfirmDialog({
   open,
+  variant = 'default',
   title,
   description,
   confirmLabel,
@@ -14,6 +15,7 @@ export function ConfirmDialog({
   onCancel,
 }: {
   open: boolean;
+  variant?: 'default' | 'navigation-exit';
   title: string;
   description: string;
   confirmLabel: string;
@@ -38,7 +40,7 @@ export function ConfirmDialog({
   return (
     <dialog
       ref={dialogRef}
-      className={`confirm-dialog${icon === null ? ' confirm-dialog--plain' : ''}`}
+      className={`confirm-dialog${icon === null ? ' confirm-dialog--plain' : ''}${variant === 'navigation-exit' ? ' confirm-dialog--navigation-exit' : ''}`}
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       onCancel={(event) => {
