@@ -227,8 +227,11 @@ test('タブ復帰で利用枠を更新し、生成を自動で始めない', as
 });
 
 test('quota.resetAtの日次境界で再取得し、入力を保持する', async ({ page }) => {
+  const clockStart = new Date('2026-11-06T14:59:58.500Z');
+  const resetAt = new Date(clockStart.getTime() + 1500).toISOString();
   let quotaRequests = 0;
   let generationPosts = 0;
+  await page.clock.install({ time: clockStart });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', (route) => {
     quotaRequests++;
@@ -237,7 +240,7 @@ test('quota.resetAtの日次境界で再取得し、入力を保持する', asyn
         ? {
             remainingToday: 0,
             activeGenerationId: null,
-            resetAt: new Date(Date.now() + 1500).toISOString(),
+            resetAt,
             generationAvailable: true,
           }
         : availableQuota(null);
@@ -255,16 +258,16 @@ test('quota.resetAtの日次境界で再取得し、入力を保持する', asyn
   const draft = '日次更新後にも保つ架空の日記';
   await diary.fill(draft);
 
-  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled({
-    timeout: 7000,
-  });
+  await page.clock.runFor(2500);
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
   await expect(diary).toHaveValue(draft);
   expect(quotaRequests).toBe(2);
   expect(generationPosts).toBe(0);
 });
 
 test('日次境界前の利用枠要求が終わった後に一度だけ再取得する', async ({ page }) => {
-  const resetAt = new Date(Date.now() + 1000).toISOString();
+  const clockStart = new Date('2026-11-06T14:59:59.000Z');
+  const resetAt = new Date(clockStart.getTime() + 1000).toISOString();
   const oldQuota = {
     remainingToday: 0,
     activeGenerationId: null,
@@ -281,6 +284,7 @@ test('日次境界前の利用枠要求が終わった後に一度だけ再取�
     releaseRefresh = resolve;
   });
   let generationPosts = 0;
+  await page.clock.install({ time: clockStart });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', async (route) => {
     quotaRequests++;
@@ -304,7 +308,7 @@ test('日次境界前の利用枠要求が終わった後に一度だけ再取�
   await diary.fill(draft);
   const refreshClick = quotaStatus.getByRole('button', { name: '利用枠を再確認' }).click();
   await refreshRequested;
-  await page.waitForTimeout(2600);
+  await page.clock.runFor(2100);
   releaseRefresh();
   await refreshClick;
 
@@ -316,7 +320,8 @@ test('日次境界前の利用枠要求が終わった後に一度だけ再取�
 });
 
 test('初回の利用枠応答が日次境界を越えた場合も再取得する', async ({ page }) => {
-  const resetAt = new Date(Date.now() + 800).toISOString();
+  const clockStart = new Date('2026-11-06T14:59:59.000Z');
+  const resetAt = new Date(clockStart.getTime() + 1000).toISOString();
   const oldQuota = {
     remainingToday: 0,
     activeGenerationId: null,
@@ -333,6 +338,7 @@ test('初回の利用枠応答が日次境界を越えた場合も再取得す�
     releaseInitial = resolve;
   });
   let generationPosts = 0;
+  await page.clock.install({ time: clockStart });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', async (route) => {
     quotaRequests++;
@@ -353,7 +359,7 @@ test('初回の利用枠応答が日次境界を越えた場合も再取得す�
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '初回応答が日次境界を越えても保持する日記';
   await diary.fill(draft);
-  await page.waitForTimeout(1400);
+  await page.clock.runFor(1001);
   releaseInitial();
 
   await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
