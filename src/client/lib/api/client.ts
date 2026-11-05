@@ -98,14 +98,21 @@ async function authorizationFor(mode: 'mock' | 'live' | 'sample'): Promise<strin
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const fallback = '通信に失敗しました。入力内容を保持したまま再操作してください。';
+  init.signal?.throwIfAborted();
   const config = await getClientConfig().catch(() => {
+    init.signal?.throwIfAborted();
     throw new ApiClientError(
       '現在、読み込めません。通信を確認して再読み込みしてください。',
       null,
       'CONFIG_UNAVAILABLE',
     );
   });
-  const authorization = await authorizationFor(config.dataMode);
+  init.signal?.throwIfAborted();
+  const authorization = await authorizationFor(config.dataMode).catch((failure: unknown) => {
+    init.signal?.throwIfAborted();
+    throw failure;
+  });
+  init.signal?.throwIfAborted();
   let response: Response | undefined;
   let result: unknown;
   const headers = new Headers(init.headers);
@@ -117,7 +124,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       headers,
     });
     result = await response.json();
-  } catch {
+  } catch (failure) {
+    if (init.signal?.aborted) throw failure;
     throw new ApiClientError(fallback, response?.status ?? null);
   }
   if (!response.ok) {

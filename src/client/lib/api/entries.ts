@@ -2,11 +2,19 @@ import type { Entry, EntryDetail } from '../../../shared/schemas';
 import { api, ApiClientError } from './client';
 
 export const getEntry = (id: string) => api<EntryDetail>(`/entries/${encodeURIComponent(id)}`);
-export function getEntries({ cursor, limit }: { cursor?: string; limit?: number } = {}) {
+export function getEntries({
+  cursor,
+  limit,
+  signal,
+}: {
+  cursor?: string;
+  limit?: number;
+  signal?: AbortSignal;
+} = {}) {
   const query = new URLSearchParams();
   if (cursor) query.set('cursor', cursor);
   if (limit !== undefined) query.set('limit', String(limit));
-  return api<{ items: Entry[]; nextCursor: string | null }>(`/entries?${query}`);
+  return api<{ items: Entry[]; nextCursor: string | null }>(`/entries?${query}`, { signal });
 }
 
 export type CreateEntryInput = {
