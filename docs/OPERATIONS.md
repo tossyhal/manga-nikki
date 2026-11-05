@@ -1,8 +1,8 @@
 # 安全対策と公開条件（OPERATIONS）
 
-> 本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
+> PR#29までの変更は`main`へ統合済みです。PR#41でOpenAI白黒生成のQueue・attempt ledgerと保存復旧callback契約を加えていますが、画像private保存・asset登録・実生成の成功確定RPCは未実装です。保存taskのdurable記録と復旧callbackは保存担当の実装範囲です。段階ごとの詳細は[PLAN](PLAN.md)を参照してください。
 >
-> 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの接続・課金発生・有料化・本番公開は必ずチームでの別承認を必要とします。
+> 隔離Supabase等で行った部分的な過去検証は[README](../README.md)を参照してください。実Turnstile、共有DB、実Cloudflare Queue / Cron、生成画像のStorage保存/署名URL、最新branchの全経路は未確認です。この文書更新では再実行していません。通常の開発はモック（`mock`）で行い、実AIの課金・有料化・本番公開は別承認なしに行いません。
 
 ---
 
@@ -28,7 +28,7 @@
 - 読み取りと書き込みの分離
   - 読み取り（SELECT）には利用者JWTを付けたリクエスト単位のクライアントを使い、RLSで自分のデータだけを取得します。実装では`createUserSupabaseClient`と、secret keyだけを使う`createServerRpcClient`を別factoryにし、incoming Authorization headerをRPC clientへ渡しません。
   - 書き込み（INSERT / UPDATE / DELETE）はCloudflare Worker内のサーバー専用RPCからのみ行います。API側とRPC内の両方で所有者を二重確認し、Supabase secret keyを使うクライアントはサーバー内部だけに閉じます。
-  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・mock予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。実Turnstile結合、real profileの受付、live-demoの新しい実AI生成、生成画像のprivate Storage保存・署名URLは未接続です。
+  - 日記CRUDとgeneration / quota / status APIは実装済みです。読み取りには利用者JWTとRLS・API側owner条件を使い、書き込み・予約・状態確定はsecret専用RPC経由です。local-connectedでは生成専用Turnstile検証、mock profile限定予約、Queue、固定fixtureのstatus遷移、未配送再送・期限照合を使います。live-demoには固定OpenAI profile予約、脚本1回と画像4回のattempt ledger、Queue Consumerを実装しています。実Turnstile・共有DB・実Cloudflare Queue結合、画像private Storage保存・asset登録・実生成のsucceeded確定RPCは未接続です。新規生成は保存handlerまたは復旧callbackの片方でも未設定なら受付とConsumerをfail closedにします。保存が一時停止したjobは`running` / `saving`に残し、Queueをackします。Cronは保存復旧callbackからdurable taskを続けられます。
 - テーブル権限（Grants）とRLS
   - `public`スキーマの業務テーブルには、RLSとテーブル権限（grants）の両方を設定します。
   - `anon`ロールのアクセス、および`authenticated`ロールによる直接の`INSERT` / `UPDATE` / `DELETE`を禁止し、「自分のデータかつ未削除かつ有効期限内」の行だけを`SELECT`可能にします。
@@ -58,10 +58,10 @@
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
 - Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
 - `pnpm build:staging` / `pnpm build:production`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
-- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。
+- Workerの環境変数はstagingが`APP_ENV=staging`、productionが`APP_ENV=production`で、両方とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。実AI・Queue・Storage・Supabase設定は追加していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
 - release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
 - 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式またはJWTの`role=service_role`が見つかった場合に停止します。これは既知のSupabaseサーバー専用キー形式の誤設定対策であり、他の秘密情報形式まで検出する保証ではありません。
-- `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー）を配置します。
+- `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー。OpenAIを使う場合は`OPENAI_API_KEY`）を配置します。例ファイルは空値やplaceholderのみです。
 - local-connectedの例は`dev.vars.local-connected.example`です。値を設定して`.dev.vars.local-connected`へコピーし、`CLOUDFLARE_ENV=local-connected pnpm dev`で開発環境を選びます。`TURNSTILE_SECRET_KEY`と`TURNSTILE_ALLOWED_HOSTNAMES`がない場合、生成受付は停止します。例に含まれるSupabase URLはplaceholderで、実接続情報や秘密値はGitへ入れません。
 - Supabase secret keyまたは旧service_roleキーはRLSをすべて迂回できる特権を持つため、**ブラウザ側やGitリポジトリへ渡してはいけません。**万が一漏洩した場合は、直ちにキーを失効（revoke）・再発行します。
 
@@ -89,9 +89,9 @@
 
 - 制限設定の正本はDBの`private.generation_policy`テーブルです。
   - 初期値：`enabled = false`、全体の日次枠・全期間枠・金額予算はすべて`0`、ユーザーごとの上限は「1日2試行まで・同時実行1ジョブまで」（日付の切り替わりはサーバー側の日本時間JST基準）。
-- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃っている場合のみ実AIの生成を動かし、状態の取得に失敗したり不明な場合は安全側に倒して停止します。
+- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら新規受付を停止します。停止時点ですでにqueuedだったjobと`reserved`枠は維持し、releaseしません。Consumerはclaimや外部呼出しを始めず、handler復帰後にreconcileがQueueへ再送します。default Workerには両handlerを注入していません。
 - `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、`find_generation_receipt`と`reserve_generation`の既存同一要求照会は停止中も同じjobを返します。
-- `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。設定profileには`profile_id`、`is_mock`、整数の`max_cost_micro_usd`を含め、最大費用を予約します。`is_mock=false`では最大費用0を許可しません。provider/modelなどの追加設定は日記本文やHTTP bodyから受けず、profile snapshotへ保持します。
+- `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。現在コードが許可する実AI profileはOpenAI脚本`gpt-4.1-mini-2025-04-14` + 白黒画像`gpt-image-2.5-flare`、4 image callsです。profileには`profile_id`、`is_mock=false`、DB管理の正整数`max_cost_micro_usd`を含め、最大費用を予約します。provider/model/color modeなどは固定allowlistと一致しなければ停止し、日記本文やHTTP bodyから受けません。初期policyはdisabled・予算0で、費用負担者と実際の利用可能モデル権限は未確認です。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
 - policy設定を変える運用者は、単独の短いtransactionで更新してcommitします。更新triggerと予約RPCは同じ2整数advisory transaction lockを使い、変更中のpolicy snapshotで予約が進まないよう直列化します。
 - 匿名認証のユーザーIDは「ブラウザ単位」であり「人間1人」を保証しないため、ユーザー単位の上限だけでなくシステム全体の上限（全体枠・総予算）が必須です。
@@ -112,6 +112,8 @@
 | `held` | [用語集](../README.md#glossary)の予約保持状態。自動では返却しない |
 | `released` | 外部AIへ未送信であることが確認できた場合のみ取り消し。元の予約日のカウンターへ1回だけ枠を戻す |
 
+handler未設定による新規生成停止は、providerを未開始のqueued jobを`released`へ精算する条件ではありません。既存同一receiptは再照会でき、予約とqueued状態は維持して、readiness復帰後に再配送します。
+
 - 予算運用の厳守ルール：
   - 生成成功時に「事前見積もり（$C_{\max}$）と実際の消費額の差額」が出ても、MVPでは自動的に余り枠として再利用しません。
   - ユーザーが後から日記を削除したり日付を変更しても、過去に消費した回数や支出カウンターは減らしません。
@@ -123,7 +125,7 @@
 実際に課金されるAI生成を有効化する前に、「費用負担者・承認金額・利用プロバイダ/プロジェクト・モデルプロファイルと $C_{\max}$・日次/全期間枠・承認日」をこのドキュメントへ記録します。
 
 > 【現在の承認状態】
-> 費用負担者・採用モデルともに未決定、承認予算額は`0`、実AIでの生成は不可（停止中）です。
+> 費用負担者・承認予算は未決定、承認予算額は`0`です。コード上のモデルprofileは固定済みですが、OpenAIアカウントのモデル利用権限・品質・実費は未確認で、共有DB policyも停止中です。実AI生成を有効にしていません。
 > ※ 無料枠やクレジット特典を使う場合も、「請求先・対象API・残高・有効期限」が明確に確認できるまでは予算`0`として扱い、無料枠切れの際に別の有料モデルへ自動フォールバックさせません。
 
 ---
@@ -164,8 +166,8 @@
 | 同一`Idempotency-Key`の同時リクエスト / 異なる内容、最後の1枠への同時リクエスト | 生成ジョブと枠予約は1件だけ作られ、別内容は`409`、予算・回数上限の超過が起きない |
 | 匿名ユーザーIDの再作成、全体/期間/金額上限への到達、キルスイッチ停止時 | ユーザーを作り直しても全体上限で止まり、停止時は未開始のAIプロバイダを一切呼ばない |
 | サインアップ用と生成用のTurnstileトークン使い回し、会場等の同一IPからの多人数利用 | トークン使い回しは拒否され、IP制限時は意図通り架空サンプル画面へ案内される |
-| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mock重複配信はclaimで1回だけ処理し、未配送は照合で再送する。実AI経路は未接続で、将来は結果不明を`unknown` / `held`として安全に止める |
-| Storage保存成功後のDB失敗、古いジョブの遅延完了、生成中の日記削除 | AIの再生成が起きず、新しい`latest_generation_id`が巻き戻らず、削除済みデータが復活しない |
+| Queueの重複配信、DB予約後のQueue送信失敗、外部AI送信後の通信中断 | mockはclaimで1回だけ処理し、未配送は照合する。OpenAI各callは事前にattemptを開始し、結果不明なら`unknown` / `held`で保持して自動再実行しない |
+| Storage保存成功後のDB失敗、保存handler一時障害、古いjobの遅延完了、生成中の日記削除 | 保存障害はQueue ack後も`running` / `saving`に保持し、保存担当のdurable taskをCronの`recoverGeneratedComic`がgeneration IDから再開する。回復callbackはAIを呼ばず、owner・保存lease・期限・削除/cancelを再確認して保存または安全な終端化を行う。通常精算を保存復旧より先にし、削除済みデータを復活させない。保存handlerとcompletion RPCの結合試験が必要 |
 | JST日付境界（0時またぎ）、30日保存期限切れ / 削除処理中のStorage障害 | 元の予約日のカウンターだけで精算され、画面からは即座に非表示となり削除が裏で再試行される |
 | 通信切断・ページ再訪・PWA更新・キャッシュ・HTMLや命令文の入力 | 新規ジョブの勝手な作成、入力中の本文消失、個人データのキャッシュ残留、スクリプト実行が起きない |
 | スマートフォン実機・実際の生成画像・サーバーログの確認 | WorkerのCPU / メモリ / 容量が制限内に収まり、ログに日記本文や秘密情報が一切混入していない |
@@ -191,7 +193,9 @@
 
 - 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
 - `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
-- 1分のgeneration reconcileが動く環境では、取消済み・期限切れjobを既存の安全な精算RPCへ渡します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
+- 1分のgeneration reconcileは`list_generation_reconcile_candidates_v2(p_limit=25)`を使います。DB候補選択は通常精算→保存復旧→enqueueの順で、復旧候補は最大3件、enqueue候補がある場合は精算後の残枠のおよそ半分までを割り当て、残りでenqueueします。5分先の`save_recovery_retry_at`が未来のsaving jobは候補から外し、expire扱いにしません。Runtime実行順は通常精算→enqueue→保存復旧で、queue送信枠を先に確保します。
+- saving復旧callback前に`begin_generation_save_recovery(p_generation_id)`がDB lock下でstatus/stage/profile/owner/entry/claim deadline/reservation/retry dueを再検査し、成功時は`save_recovery_retry_at=now()+5分`を設定します。他workerに先に取得された・不適格なら`false`を返し、callbackは呼びません。元のprovider claim・attempt台帳は変更せず、AI providerは再実行しません。Cron一回あたりcallbackは最大3件、各最大120秒で、元のprovider claim deadlineから24時間以内に限ります。
+- live-demoでは復旧callbackが注入されていれば`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存saving taskをgeneration IDから再開します。`pending`または一時障害では`stage=saving`を維持し、24時間を超えたjobは通常expire精算で`failed` / `consumed`とし、予約をreleaseせず再生成もしません。取消・削除・entry期限切れjobは復旧候補より先に通常精算し、`unknown` jobは自動解放しません。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
 - Storage `remove`後に`list`でpath不在を確認できた時だけDB finalizeし、asset→job→entryを消します。remove/list障害ではDB metadata・jobを残し、すでに消えた画像は次回の`remove`と`list`確認で安全に再試行します。
 - 日次batch上限を超えたdue entryは次の日次実行以降に残ります。Storage障害のentryも15分lease失効後に再claim可能ですが、同じ日の日次Cronは再実行しないため、通常の再試行機会は次回日次実行です。active jobがsettleした後も、cleanup実行は次の日次枠まで待つことがあります。物理消去を30日以内に保証するものではありません。
 - cleanup結果のaggregate logは`claimed` / `deleted` / `retrying` / `stale`の件数だけで、owner・本文・object path・claim tokenは記録しません。claim/finalize RPCの依存障害は一般化したエラーでCron invocationを失敗扱いにします。retryingはStorage remove/list失敗、staleはlease/token/期限/path集合の再検証不一致です。

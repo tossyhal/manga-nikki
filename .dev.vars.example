@@ -14,6 +14,6 @@ SUPABASE_PUBLISHABLE_KEY=""
 SUPABASE_SECRET_KEY=""
 TURNSTILE_SECRET_KEY=""
 TURNSTILE_ALLOWED_HOSTNAMES="localhost,127.0.0.1"
-# 候補用・未承認。実モデルを選んだ場合のみ使う。Workers AIはbindingを別途設定する。
-GEMINI_API_KEY=""
+# Workerだけが使うOpenAI APIキー。VITE_*へ設定しない。
+OPENAI_API_KEY=""
 # 上限・モデルprofileはprivate.generation_policyで管理。承認までは0/disabled。

@@ -5,10 +5,10 @@
 日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
-> 現在の状態（2026-11-04時点）
-> この状態はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+> 現在の状態（2026-11-05時点）
+> PR#29までの変更は`main`へ統合済みです。現在のPR#41ではOpenAI白黒生成のQueue接続と保存復旧経路まで実装しています。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 >
-> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、Storage先行の期限削除、環境別sample buildと公開設定guardを実装しています。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。実AI用adapter、画像検証・private保存・署名URLは未接続で、新しい実AI生成は停止しています。
+> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、Storage先行の期限削除、環境別sample buildと公開設定guardを実装しています。PR#41ではOpenAIの脚本・白黒画像provider、profile制約、各API呼出しのattempt ledger、live Queue runnerと保存復旧callback契約を追加しています。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。生成画像のprivate Storage保存・assets登録・実生成のsucceeded確定RPCは未実装です。保存handlerまたは復旧callbackが未設定なら新規実AI生成を停止します。すでにqueuedのjobと`reserved`枠はreleaseせず保持し、ready復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・各120秒です。復旧callback未設定や24時間経過後は自動復旧しません。実AI課金・アカウント権限・品質、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、最新branchの全経路は未確認です。
 
 > 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
 

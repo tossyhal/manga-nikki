@@ -43,12 +43,21 @@ select test.assert(
     and not has_table_privilege('service_role', 'public.entries', 'TRIGGER')
     and has_table_privilege('service_role', 'public.generations', 'SELECT')
     and has_table_privilege('service_role', 'public.generations', 'INSERT')
-    and has_table_privilege('service_role', 'public.generations', 'UPDATE')
-    and has_column_privilege('service_role', 'public.generations', 'is_mock', 'UPDATE')
+    and not has_column_privilege('service_role', 'public.generations', 'is_mock', 'UPDATE')
     and not has_table_privilege('service_role', 'public.generations', 'DELETE')
     and not has_table_privilege('service_role', 'public.generations', 'TRUNCATE')
     and not has_table_privilege('service_role', 'public.generations', 'REFERENCES')
-    and not has_table_privilege('service_role', 'public.generations', 'TRIGGER'),
+    and not has_table_privilege('service_role', 'public.generations', 'TRIGGER')
+    and not exists (
+      select 1 from pg_catalog.pg_class table_row
+      cross join lateral pg_catalog.aclexplode(table_row.relacl) grant_row
+      where table_row.oid = 'public.generations'::regclass
+        and grant_row.grantee = 'service_role'::regrole
+        and grant_row.privilege_type = 'UPDATE'
+    )
+    and has_column_privilege('service_role', 'public.generations', 'status', 'UPDATE')
+    and has_column_privilege('service_role', 'public.generations', 'save_recovery_retry_at', 'UPDATE')
+    and not has_column_privilege('service_role', 'public.generations', 'model_profile_snapshot', 'UPDATE'),
   'service_roleには必要なDMLだけを付与');
 select test.expect_error('delete from public.entries where false', '42501');
 do $$
