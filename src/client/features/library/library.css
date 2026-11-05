@@ -14,7 +14,8 @@
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .library-calendar-view,
@@ -22,9 +23,9 @@
   display: flex;
   min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .library-view-toggle,
@@ -200,8 +201,8 @@
 
 .library-day-section {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: min-content;
+  flex: 1 0 auto;
   flex-direction: column;
   margin-top: 8px;
   padding-top: 8px;
@@ -227,8 +228,8 @@
 }
 
 .library-day-records {
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: min-content;
+  flex: 1 0 auto;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -236,8 +237,8 @@
 
 .library-day-empty {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: min-content;
+  flex: 1 0 auto;
   flex-direction: column;
   justify-content: center;
 }
@@ -277,8 +278,8 @@
 
 .library-day-unavailable {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: min-content;
+  flex: 1 0 auto;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -331,8 +332,8 @@
 }
 
 .library-list-records {
-  min-height: 0;
-  flex: 0 1 auto;
+  min-height: min-content;
+  flex: 0 0 auto;
 }
 
 .library-list-records .entry-history {
@@ -346,7 +347,7 @@
 .library-list-empty {
   display: grid;
   min-height: 96px;
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   place-items: center;
   color: #858585;
   font-size: 14px;
@@ -355,8 +356,8 @@
 
 .library-state-view {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: min-content;
+  flex: 1 0 auto;
   flex-direction: column;
   justify-content: center;
   gap: 16px;
@@ -365,7 +366,7 @@
 .library-state-card {
   display: flex;
   min-height: 180px;
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   flex-direction: column;
   align-items: center;
   justify-content: center;
