@@ -34,8 +34,42 @@ type AppContext = {
   configError: boolean;
   personalDataAvailable: boolean;
   onActivityChange: (activity: DiaryActivity) => void;
-  setHeaderAction: (action: ReactNode | null) => void;
+  retryConfig: () => void;
 };
+
+type AppStateCardProps = {
+  title: string;
+  description: string;
+  actions?: ReactNode;
+  role?: 'alert';
+  status?: boolean;
+  headingLevel?: 'h1' | 'h2';
+};
+
+function AppStateCard({
+  title,
+  description,
+  actions,
+  role,
+  status = false,
+  headingLevel = 'h1',
+}: AppStateCardProps) {
+  const Heading = headingLevel;
+  return (
+    <section
+      className="app-state-card"
+      role={role}
+      aria-labelledby="app-state-title"
+      aria-live={status ? 'polite' : undefined}
+      aria-atomic={status ? true : undefined}
+    >
+      <Icon name={role === 'alert' ? 'alert' : status ? 'clock' : 'book'} size={40} />
+      <Heading id="app-state-title">{title}</Heading>
+      <p>{description}</p>
+      {actions && <div className="app-state-actions">{actions}</div>}
+    </section>
+  );
+}
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
   return (
@@ -112,20 +146,34 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
           <Icon name="chevron-right" size={18} />
         </Link>
       </div>
-      <EntryThumbnail
-        preview={preview}
+      <Link
         className="home-today-image"
-        iconSize={32}
-        alt={`${comicTitle}の4コマ漫画`}
-        ariaHidden={false}
-        placeholderLabel={placeholder}
-      />
+        to={`/entries/${encodeURIComponent(entry.id)}`}
+        aria-label={`${comicTitle}の記録を読む`}
+      >
+        <EntryThumbnail
+          preview={preview}
+          className="home-today-image-preview"
+          iconSize={32}
+          ariaHidden
+          placeholderLabel={placeholder}
+        />
+      </Link>
     </div>
   );
 }
 
-function Home({ config, configError }: { config: ClientConfig | null; configError: boolean }) {
-  const records = useHomeRecords(config, configError);
+function Home({
+  config,
+  configError,
+  retryConfig,
+}: {
+  config: ClientConfig | null;
+  configError: boolean;
+  retryConfig: () => void;
+}) {
+  const [recordsRetry, setRecordsRetry] = useState(0);
+  const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
   const todayEntries = entries.filter((entry) => entry.diaryDate === jstToday());
@@ -147,7 +195,7 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
     return { date, label: `${monthDay} ${weekday}` };
   });
 
-  if (showSample && sampleOpen) {
+  if (showSample && !configError && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
@@ -185,37 +233,82 @@ function Home({ config, configError }: { config: ClientConfig | null; configErro
         </time>
       )}
       <section className="today-section" aria-labelledby="today-heading">
-        <h1 id="today-heading" className={showSample ? undefined : 'sr-only'}>
-          {showSample ? 'サンプル' : '今日の記録'}
+        <h1 id="today-heading" className={showSample && !configError ? undefined : 'sr-only'}>
+          {showSample && !configError ? 'サンプル' : '今日の記録'}
         </h1>
-        {showSample ? (
+        {configError ? (
+          <AppStateCard
+            headingLevel="h2"
+            title="読み込めませんでした"
+            description={configUnavailableMessage}
+            role="alert"
+            actions={
+              <button className="button button-secondary" type="button" onClick={retryConfig}>
+                再読み込み
+              </button>
+            }
+          />
+        ) : showSample ? (
           <div className="home-today-hero">
             <div className="home-today-content">
               <h2>{pageComic.title}</h2>
               <p>サンプル漫画</p>
-              <button
-                className="today-write-link"
-                type="button"
-                onClick={() => setSampleOpen(true)}
-              >
-                <span>漫画を読む</span>
-                <Icon name="chevron-right" size={18} />
-              </button>
+              <div className="home-today-actions">
+                <button
+                  className="today-write-link"
+                  type="button"
+                  onClick={() => setSampleOpen(true)}
+                >
+                  <span>漫画を読む</span>
+                  <Icon name="chevron-right" size={18} />
+                </button>
+                {config?.dataMode !== 'sample' && (
+                  <Link className="today-create-link" to="/new">
+                    <Icon name="plus" size={20} />
+                    <span>日記を書く</span>
+                  </Link>
+                )}
+              </div>
             </div>
             <div className="home-today-image">
               <img src="/sample-comic.svg" alt="架空の一日の4コマ漫画" loading="lazy" />
             </div>
           </div>
         ) : config === null ? (
-          <output className="today-card-loading">読み込んでいます…</output>
+          <AppStateCard
+            headingLevel="h2"
+            title="準備しています"
+            description="記録を読み込んでいます。"
+            status
+          />
         ) : records.status === 'loading' ? (
-          <output className="today-card-loading">読み込んでいます…</output>
+          <AppStateCard
+            headingLevel="h2"
+            title="記録を読み込んでいます"
+            description="少しお待ちください。"
+            status
+          />
         ) : records.status === 'error' ? (
-          <div className="today-unavailable-card" role="alert">
-            <Icon name="alert" size={24} />
-            <p>記録を読み込めませんでした。</p>
-            <span>{records.message}</span>
-          </div>
+          <AppStateCard
+            headingLevel="h2"
+            title="記録を読み込めませんでした"
+            description={records.message}
+            role="alert"
+            actions={
+              <>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => setRecordsRetry((retry) => retry + 1)}
+                >
+                  再読み込み
+                </button>
+                <Link className="button button-secondary" to="/new">
+                  日記を書く
+                </Link>
+              </>
+            }
+          />
         ) : todayEntry ? (
           <TodayEntryHero entry={todayEntry} />
         ) : (
@@ -241,19 +334,26 @@ type HomeRecords =
   | { status: 'ready'; entries: Entry[] }
   | { status: 'error'; message: string };
 
-function useHomeRecords(config: ClientConfig | null, configError: boolean): HomeRecords {
+function useHomeRecords(
+  config: ClientConfig | null,
+  configError: boolean,
+  retryKey: number,
+): HomeRecords {
   const { online } = useOnlineStatus();
   const [loaded, setLoaded] = useState<{
     config: ClientConfig | null;
     configError: boolean;
+    retryKey: number;
     records: HomeRecords;
-  }>({ config: null, configError: false, records: { status: 'loading' } });
+  }>({ config: null, configError: false, retryKey: -1, records: { status: 'loading' } });
   const records =
     configError || config?.dataMode === 'sample' || (config !== null && !online)
       ? { status: 'sample' as const }
       : !config
         ? { status: 'loading' as const }
-        : loaded.config === config && loaded.configError === configError
+        : loaded.config === config &&
+            loaded.configError === configError &&
+            loaded.retryKey === retryKey
           ? loaded.records
           : { status: 'loading' as const };
 
@@ -268,6 +368,7 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
             setLoaded({
               config: currentConfig,
               configError,
+              retryKey,
               records: { status: 'sample' },
             });
           return;
@@ -277,6 +378,7 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
           setLoaded({
             config: currentConfig,
             configError,
+            retryKey,
             records: { status: 'ready', entries: result.items },
           });
       } catch (failure) {
@@ -284,6 +386,7 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
           setLoaded({
             config: currentConfig,
             configError,
+            retryKey,
             records: !navigator.onLine
               ? { status: 'sample' }
               : {
@@ -297,50 +400,136 @@ function useHomeRecords(config: ClientConfig | null, configError: boolean): Home
     return () => {
       active = false;
     };
-  }, [config, configError, online]);
+  }, [config, configError, online, retryKey]);
   return records;
 }
 
 function HomeRoute() {
-  const { config, configError } = useOutletContext<AppContext>();
-  return <Home config={config} configError={configError} />;
+  const { config, configError, retryConfig } = useOutletContext<AppContext>();
+  return <Home config={config} configError={configError} retryConfig={retryConfig} />;
 }
 function NewEntryRoute() {
-  const { config, configError, personalDataAvailable, onActivityChange } =
+  const { config, configError, personalDataAvailable, onActivityChange, retryConfig } =
     useOutletContext<AppContext>();
-  if (!config && !configError) return <output>読み込んでいます…</output>;
-  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  if (!config && !configError)
+    return (
+      <AppStateCard title="準備しています" description="入力画面を読み込んでいます。" status />
+    );
+  if (configError)
+    return (
+      <AppStateCard
+        title="読み込めませんでした"
+        description={configUnavailableMessage}
+        role="alert"
+        actions={
+          <>
+            <button className="button button-secondary" type="button" onClick={retryConfig}>
+              再読み込み
+            </button>
+            <Link className="button button-secondary" to="/">
+              ホーム
+            </Link>
+          </>
+        }
+      />
+    );
   if (personalDataAvailable && config)
     return <NewEntry config={config} onActivityChange={onActivityChange} />;
   return (
-    <p>
-      保存機能は利用できません。<Link to="/">サンプルを見る</Link>
-    </p>
+    <AppStateCard
+      title="日記を保存できません"
+      description="この環境では個人の記録を保存できません。ホームから架空サンプルを確認できます。"
+      actions={
+        <Link className="button button-secondary" to="/">
+          サンプルを見る
+        </Link>
+      }
+    />
   );
 }
 
 function LibraryRoute() {
-  const { config, configError, personalDataAvailable, setHeaderAction } =
+  const { config, configError, personalDataAvailable, retryConfig } =
     useOutletContext<AppContext>();
-  if (!config && !configError) return <output>読み込んでいます…</output>;
-  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  if (!config && !configError)
+    return <AppStateCard title="準備しています" description="記録を読み込んでいます。" status />;
+  if (configError)
+    return (
+      <AppStateCard
+        title="読み込めませんでした"
+        description={configUnavailableMessage}
+        role="alert"
+        actions={
+          <>
+            <button className="button button-secondary" type="button" onClick={retryConfig}>
+              再読み込み
+            </button>
+            <Link className="button button-secondary" to="/">
+              ホーム
+            </Link>
+          </>
+        }
+      />
+    );
   return personalDataAvailable ? (
-    <Library setHeaderAction={setHeaderAction} />
+    <Library />
   ) : (
-    <p>記録の閲覧はこのサンプル環境では利用できません。</p>
+    <AppStateCard
+      title="個人の記録を表示できません"
+      description="この環境では個人の記録を読み込みません。ホームから架空サンプルを確認できます。"
+      actions={
+        <Link className="button button-secondary" to="/">
+          サンプルを見る
+        </Link>
+      }
+    />
   );
 }
 
 function DetailRoute() {
-  const { config, configError, personalDataAvailable, onActivityChange } =
+  const { config, configError, personalDataAvailable, onActivityChange, retryConfig } =
     useOutletContext<AppContext>();
-  if (!config && !configError) return <output>読み込んでいます…</output>;
-  if (configError) return <p role="alert">{configUnavailableMessage}</p>;
+  if (!config && !configError)
+    return <AppStateCard title="準備しています" description="記録を読み込んでいます。" status />;
+  if (configError)
+    return (
+      <AppStateCard
+        title="読み込めませんでした"
+        description={configUnavailableMessage}
+        role="alert"
+        actions={
+          <>
+            <button className="button button-secondary" type="button" onClick={retryConfig}>
+              再読み込み
+            </button>
+            <Link className="button button-secondary" to="/">
+              ホーム
+            </Link>
+          </>
+        }
+      />
+    );
   return personalDataAvailable && config ? (
     <Detail config={config} onActivityChange={onActivityChange} />
   ) : (
-    <p>記録の閲覧はこのサンプル環境では利用できません。</p>
+    <AppStateCard
+      title="記録を表示できません"
+      description="この環境では個人の記録を読み込みません。ホームから架空サンプルを確認できます。"
+      actions={
+        <Link className="button button-secondary" to="/">
+          サンプルを見る
+        </Link>
+      }
+    />
   );
+}
+
+function documentTitle(pathname: string) {
+  if (pathname === '/new') return '日記を書く | 漫画日記';
+  if (pathname === '/library') return '記録 | 漫画日記';
+  if (pathname.startsWith('/entries/')) return '記録の詳細 | 漫画日記';
+  if (pathname === '/') return 'ホーム | 漫画日記';
+  return 'ページが見つかりません | 漫画日記';
 }
 
 function NotFound() {
@@ -355,10 +544,10 @@ function NotFound() {
 function App() {
   const location = useLocation();
   const isPrimaryRoute = ['/', '/new', '/library'].includes(location.pathname);
-  const isLibraryRoute = location.pathname === '/library';
+  const mainRef = useRef<HTMLElement | null>(null);
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
-  const [headerAction, setHeaderActionState] = useState<ReactNode | null>(null);
+  const [configRetry, setConfigRetry] = useState(0);
   const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({ dirty: false, busy: false });
   const [blockedActivity, setBlockedActivity] = useState<DiaryActivity | null>(null);
   const diaryActivityRef = useRef(diaryActivity);
@@ -366,8 +555,10 @@ function App() {
     diaryActivityRef.current = activity;
     setDiaryActivity(activity);
   }, []);
-  const setHeaderAction = useCallback((action: ReactNode | null) => {
-    setHeaderActionState(() => action);
+  const retryConfig = useCallback(() => {
+    setConfig(null);
+    setConfigError(false);
+    setConfigRetry((retry) => retry + 1);
   }, []);
   const shouldBlockNavigation = useCallback<BlockerFunction>(
     ({ currentLocation, nextLocation }) => {
@@ -381,10 +572,22 @@ function App() {
   );
   const blocker = useBlocker(shouldBlockNavigation);
   useEffect(() => {
+    let active = true;
     void getClientConfig()
-      .then(setConfig)
-      .catch(() => setConfigError(true));
-  }, []);
+      .then((loadedConfig) => {
+        if (active) setConfig(loadedConfig);
+      })
+      .catch(() => {
+        if (active) setConfigError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [configRetry]);
+  useLayoutEffect(() => {
+    document.title = documentTitle(location.pathname);
+    mainRef.current?.focus({ preventScroll: true });
+  }, [location.pathname]);
   useEffect(() => {
     if (blocker.state === 'blocked') setBlockedActivity(diaryActivityRef.current);
     else setBlockedActivity(null);
@@ -404,27 +607,14 @@ function App() {
     configError,
     personalDataAvailable,
     onActivityChange: reportDiaryActivity,
-    setHeaderAction,
+    retryConfig,
   };
   return (
     <div className={`app-shell${isPrimaryRoute ? ' primary-shell' : ''}`}>
       <a className="skip" href="#main">
         本文へ移動
       </a>
-      {isPrimaryRoute && (
-        <header className="app-header">
-          <Link className="brand" to="/" aria-label="漫画日記 ホーム">
-            漫画日記
-          </Link>
-          <div className="app-header-action">{isLibraryRoute ? headerAction : null}</div>
-        </header>
-      )}
       <div className="app-notices">
-        {configError && (
-          <aside className="notice" role="alert">
-            {configUnavailableMessage}
-          </aside>
-        )}
         <PwaNotice
           diaryDirty={diaryActivity.dirty}
           diaryBusy={diaryActivity.busy}
@@ -433,6 +623,8 @@ function App() {
       </div>
       <main
         id="main"
+        ref={mainRef}
+        tabIndex={-1}
         className={`app-main${isPrimaryRoute ? ' primary-content' : ''}${location.pathname === '/' ? ' app-main-home' : ''}`}
       >
         <Outlet context={context} />

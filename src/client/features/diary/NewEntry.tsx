@@ -397,11 +397,13 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       )}
       <form
         className="entry-form new-entry-form"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
           void save(saveErrorIntent ?? canGenerate);
         }}
       >
+        <h1 className="sr-only">日記を書く</h1>
         <fieldset disabled={busy || saved !== null} className="entry-form-fields">
           <div className="date-row">
             <div className="date-control">
@@ -438,7 +440,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </label>
             <textarea
               id="body"
-              aria-label="日記"
               rows={8}
               value={body}
               onChange={(event) => setBody(event.target.value)}

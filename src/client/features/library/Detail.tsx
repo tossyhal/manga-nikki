@@ -384,6 +384,11 @@ function DetailContent({
   ]
     .filter(Boolean)
     .join(' ');
+  const savedDiaryCharacters = entry ? Array.from(entry.body) : [];
+  const savedDiaryHasMore = savedDiaryCharacters.length > 120;
+  const savedDiaryPreview = savedDiaryHasMore
+    ? `${savedDiaryCharacters.slice(0, 120).join('')}…`
+    : savedDiaryCharacters.join('');
   const showQuotaStatus = Boolean(
     quota &&
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
@@ -977,7 +982,13 @@ function DetailContent({
                     <Icon name="check" size={40} />
                   </div>
                   <h2 id="draft-saved-title">日記を保存しました</h2>
-                  <p className="diary">{entry.body}</p>
+                  <p className="diary">{savedDiaryPreview}</p>
+                  {savedDiaryHasMore && (
+                    <details className="original-diary draft-saved-original">
+                      <summary>日記の全文を読む</summary>
+                      <p className="diary">{entry.body}</p>
+                    </details>
+                  )}
                   {canStartGeneration && <p>続けて4コマにできます。</p>}
                 </section>
               )}
