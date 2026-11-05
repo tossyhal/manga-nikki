@@ -195,7 +195,7 @@ function Home({
     return { date, label: `${monthDay} ${weekday}` };
   });
 
-  if (showSample && !configError && sampleOpen) {
+  if (showSample && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
@@ -243,9 +243,18 @@ function Home({
             description={configUnavailableMessage}
             role="alert"
             actions={
-              <button className="button button-secondary" type="button" onClick={retryConfig}>
-                再読み込み
-              </button>
+              <>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => setSampleOpen(true)}
+                >
+                  サンプルを見る
+                </button>
+                <button className="button button-secondary" type="button" onClick={retryConfig}>
+                  再読み込み
+                </button>
+              </>
             }
           />
         ) : showSample ? (
