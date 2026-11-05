@@ -287,3 +287,231 @@ interface ImageProvider {
   - 保存service側が`RenderedComic`の画像をStorageへ保存して`assetId`に変換し、最終的な`ComicDocument`を組み立てます。
   - 巨大な画像Base64データをHTTPのJSONレスポンスやDBの`comic_json`カラムへ直接埋め込んではいけません。
   - AIプロバイダが画像バイナリではなく一時URLを返す場合のダウンロード制約は、[OPERATIONS.md](OPERATIONS.md)のセキュリティ規則に従います。
+
+
+## ローカル開発用の脚本サンプルAPI
+
+`GET /api/v1/dev/script` は `MockScriptProvider` を呼び出します。Providerが
+`docs/contracts/script.example.json` をimportし、既存の脚本用Zodスキーマで検証して `{ mock: true, script: { title, panels } }` を返します。
+日記を受け取らない固定サンプル専用のAPIです。画像生成・保存・Queue・外部AI呼び出しは行いません。
+
+利用条件は開発ビルド、`local-mock`モード、localhost / 127.0.0.1 / ::1です。
+Originが指定されている場合は同一Originのみ許可します。認証は不要です。
+既存の個人データAPIの認証条件は変更しません。条件外は404、不正な環境設定や
+サンプルのスキーマ違反は一般化した503、レスポンスは `Cache-Control: no-store` です。
+
+リポジトリで `pnpm dev` を実行し、表示されたポート（既定5173）で次を開きます。
+
+```text
+http://127.0.0.1:5173/api/v1/dev/script
+```
+
+サンプルJSONを編集すれば開発サーバーに取り込まれます。形式検証であり、
+日記への忠実さや物語の品質までは検証しません。
+
+
+### ScriptProviderのモック実装
+
+`src/server/ai/script-provider.ts` に、API.md §10を具体化したサーバー内部の型を定義します。
+共有の `ComicDocument` や既存HTTPレスポンスは変更しません。
+
+- `DiarySnapshot`: 日記の `id`・`diaryDate`・`body`・`revision` の読み取り専用スナップショット。
+- `ScriptResult`: `scriptSchema`から導出した `title` と4コマの `panels`。
+- `CallOptions`: `signal`、`generationId`、`callIndex`（初回は1）、
+  `modelProfile: { provider, modelId }`。モデル設定はサーバー側で選びます。
+- `ScriptProvider.createScript(input, options)`: `Promise<ScriptResult>` を返します。
+
+`MockScriptProvider` は入力本文に関係なく固定脚本を返し、外部通信・保存・利用枠操作を行いません。
+中断済みのsignal、不正な固定脚本、未対応のモデル設定では例外を返します。
+モデル設定は `mockScriptModelProfile`（mock / fixed-script-v1）だけを受け付けます。
+このmodelProfileの形はモック段階の最小定義であり、本物のAIモデルの許可・予算検査の代用ではありません。
+
+開発用GET APIは固定の架空日記と呼び出し設定をProviderへ渡します。
+利用者の日記の受け付け、生成ジョブ登録、Queue、DB保存への接続は今回の対象外です。
+結果の `mock: true` はHTTP側が付けます。将来は別のScriptProvider実装へ差し替えられます。
+
+
+### Gemini脚本生成のローカル実験
+
+`GeminiScriptProvider`は公式SDKの `models.generateContent` を使い、
+`gemini-3.5-flash-lite`へ日付と本文を送ります。モデルはサーバー側に固定します。
+JSON Schemaで4コマの出力形式を指定し、既存Zodスキーマで文字数と番号も検証します。
+タイムアウト120秒、自動再試行なし、最大出力4096トークンです。
+不完全な終了、空出力、不正JSON、スキーマ違反はエラーにします。
+プロバイダの生エラーや日記本文はログへ出しません。
+
+最初にAI Studioで対象プロジェクトがFreeであり、モデルの無料枠と利用上限を確認します。
+無料枠のキーかどうかをコードから判定することはできません。
+検証には個人情報のない架空の日記を使ってください。
+
+`.dev.vars`の既存のキー設定に加えて、実験を行うときだけ次を設定して開発サーバーを再起動します。
+
+```dotenv
+GEMINI_API_KEY="自分のキー"
+GEMINI_SCRIPT_ENABLED="true"
+```
+
+`APP_ENV=development`、`DATA_MODE=mock`、`AI_MODE=mock`、`GENERATION_ENABLED=false`のまま使います。
+`GEMINI_SCRIPT_ENABLED`省略時は実験APIを停止します。
+公開環境の実AI有効化とは別の、ローカル比較実験用の入口です。
+
+```powershell
+$payload = @{
+  diaryDate = '2026-10-29'
+  body = '架空の日記。図書館で本を読んだ。帰り道で猫を見かけた。'
+} | ConvertTo-Json
+$result = Invoke-RestMethod -Uri 'http://127.0.0.1:5173/api/v1/dev/gemini-script' `
+  -Method Post -Headers @{ 'X-Dev-Gemini' = '1' } `
+  -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($payload))
+$result | ConvertTo-Json -Depth 10
+```
+
+実行するとGemini APIへ1回送信します。成功時は `{ mock: false, modelId, script }` を返します。
+日記や生成結果のDB保存、画像生成はこの入口では行いません。
+開発ビルド・local-mock・loopbackホスト限定、Origin指定時は同一Originのみです。
+既存の固定サンプルGET APIは引き続き利用できます。
+ローカルWorker内で同時1件、起動中5試行までに制限します。このカウンターは再起動やHMRでリセットされ、
+クラウド側の予算制限の代わりにはなりません。失敗も1試行として数え、429や通信中断を自動再送しません。
+実験後は `GEMINI_SCRIPT_ENABLED=false` に戻してください。
+
+
+## ローカル開発用：脚本から4コマ画像を生成
+
+`POST /api/v1/dev/openai-comics` は検証済み脚本を受け取り、OpenAI Images APIで1コマずつ順に生成する開発用API。
+localhostの開発ビルド、local-mockモード、同一Origin限定。通常の生成API・Queue・DB・Storageには接続しない。
+既存の脚本生成プロンプトは変更しない。
+
+- 使用モデル：`gpt-image-2.5-flare`、1024×1024、quality=low、PNG。OpenAI APIの利用料金が発生する。
+- 実行前に課金設定・利用可能モデル・料金と予算の承認を確認する。実装時には実AIの呼び出しは行っていない。
+- `.dev.vars` の既存 `OPENAI_API_KEY` に加え、予算承認後に `OPENAI_IMAGE_ENABLED="true"` と `OPENAI_IMAGE_BUDGET_APPROVED="true"` を設定し、開発サーバーを再起動する。既定は無効。キーを `VITE_*` に置かない。
+- ヘッダー `X-Dev-OpenAI: 1` が必要。本文は `{ "script": { "title": "...", "panels": [...] } }`。既存のscriptSchemaで検証する。
+- 主人公は試作用の「白い二頭身の猫・黒いパーカー」固定。1コマ目を2〜4コマ目の外見参照として送る。外見の完全一致は保証されない。
+- 文字は画像に描かせず、HTMLプレビュー側でcaption/dialogueを表示する。4枚を縦に並べる方式で、結合PNGの出力ではない。
+- 同時1件・Worker起動中2試行まで。SDKの自動再送は無効。1リクエスト最大4回の画像生成で、後続コマへの参照画像入力にも料金がかかる。再起動で制限は戻るため、実予算の上限管理の代用にはしない。
+- 画像はPNG/JPEG/WebPのMIMEと先頭バイトを検証し、1枚8MiB・合計16MiBまで。Base64をJSONへ返さない。
+- 成功時は200、生成中の失敗は503。`status`, `previewUrl`, `panels[].url` を返す。失敗時は`error.code`, `failedPanel`, `retryable: false`も返す。成功済み画像は保持する。結果不明時はOpenAI API Platformの利用状況を確認し、むやみに再送しない。
+- プレビューと画像は生成終了から15分間、Workerメモリにだけ保持する。再起動・期限切れで消える。永続保存・公開用途には使用しない。
+
+PowerShellの実行例（課金と予算の確認・承認が済んだ場合のみ）：
+
+```powershell
+# 保存済みの脚本JSONを利用。ファイルの中身はtitleとpanelsを持つ脚本そのもの。
+$script = Get-Content './docs/contracts/script.example.generated.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+$comicPayload = @{ script = $script } | ConvertTo-Json -Depth 10
+$comic = Invoke-RestMethod `
+  -Uri 'http://127.0.0.1:5173/api/v1/dev/openai-comics' `
+  -Method Post `
+  -Headers @{ 'X-Dev-OpenAI' = '1' } `
+  -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($comicPayload)) `
+  -TimeoutSec 600 `
+  -SkipHttpErrorCheck
+$comic | ConvertTo-Json -Depth 10
+'http://127.0.0.1:5173' + $comic.previewUrl
+```
+
+最後に表示されるURLをブラウザで開く。既に`$result.script`に生成済み脚本がある場合は、上の`$script`への代入を`$script = $result.script`に置き換えられる。
+生成だけを試す場合は既存の`docs/contracts/script.example.json`も使用可能。
+料金・利用可能モデルは実行時に[公式の料金表](https://developers.openai.com/api/docs/pricing)で再確認する。
+
+
+### 保存済みのGemini脚本から生成するコマンド
+
+開発サーバーを既定ポート5173で起動したまま、別のターミナルで実行します。
+既定の入力は `docs/contracts/script.example.generated.json` です。
+
+```powershell
+# まず入力検証のみ。AIは呼びません。
+node scripts/render-comic.ts
+
+# 画像生成の予算承認・有効化後、最大4回の画像生成を実行します。
+node scripts/render-comic.ts --generate
+
+# 別の脚本JSONも指定できます。
+node scripts/render-comic.ts docs/contracts/script.example.json --generate
+```
+
+APIキーはWorkerの環境変数で管理します。コマンドは検証済み脚本だけをローカルAPIへ送り、
+画像を含むJSONを出力せずにプレビューURLと取得コマ数を表示します。
+部分失敗時も取得できたプレビューURLを表示し、終了コード1で終了します。
+自動再送は行いません。画像の品質・所要時間・実費は実モデルによる検証が必要です。
+
+
+脚本はGeminiで生成し、保存したJSONをOpenAIの画像Providerへ渡します。
+画像Providerの1コマ目は `images.generate`、2〜4コマ目は1コマ目のPNGを参照する
+`images.edit` を使います。Gemini用の画像生成フラグでは有効化されません。
+旧Gemini画像アダプターは既存コードとして残っていますが、開発APIからは呼び出しません。
+
+### OpenAI版の脚本生成コマンド（Gemini版とは別実装）
+
+`scripts/generate-script-openai.ts` は開発サーバーを経由せず、Node.jsからOpenAI Responses APIを1回呼ぶ比較用コマンドです。
+既存のGemini Provider・APIは変更しません。モデルは `gpt-4.1-mini-2025-04-14` 固定。
+Gemini版の指示・JSON Schemaを作成時点で複製し、主人公だけ人間の大学生に指定しています。
+今後片方のプロンプトを変更する場合、比較条件の差として記録してください。
+Structured Outputsの後に共通Zodで検証し、完成した脚本のみをJSONに書き込みます。
+120秒、最大出力4096トークン、SDK自動再送なし、`store: false`。本文や生エラーは表示しません。
+`store: false` はResponsesの保存設定であり、サービス全体のデータ保持を保証するものではありません。
+
+既存の `.dev.vars` の `OPENAI_API_KEY` をNodeの `--env-file` で読み込みます。環境変数の追加は不要です。
+Worker用の画像・Geminiの有効化フラグとは独立し、`--generate` がこのコマンドの送信スイッチです。
+費用確認後、リポジトリのルートで実行します。日記TXTは本文だけのUTF-8ファイルです。
+
+```powershell
+# 入力確認のみ。APIへの送信・出力ファイル作成はしません。
+node scripts/generate-script-openai.ts --date 2026-10-29
+
+# APIへ1回送信し、OpenAI専用のJSONへ保存します。
+node --env-file=.dev.vars scripts/generate-script-openai.ts --date 2026-10-29 --generate
+
+# 生成した脚本を使ってOpenAIで漫画を生成します。こちらはpnpm devが必要です。
+node scripts/render-comic.ts docs/contracts/script.example.openai.generated.json --generate
+
+# 別の日記・出力先も指定できます。
+node --env-file=.dev.vars scripts/generate-script-openai.ts docs/contracts/script.example.txt docs/contracts/script.openai.second.json --date 2026-10-29 --generate
+```
+
+日記の既定入力は `docs/contracts/script.example.txt`、出力は `docs/contracts/script.example.openai.generated.json`。
+日付の省略時は日本時間の当日。比較時は同じ本文と日付を指定してください。
+既存ファイルは送信前に拒否し、上書きしません。失敗時は空・不完全な出力ファイルが残る場合があります。
+API利用状況を確認し、ファイルを手動で整理するか別名を指定します。画像生成は自動開始しません。
+既存の `script.example.generated.json` を使うGemini脚本経路はそのままです。
+現時点で漫画のCLIが接続する先はOpenAI画像APIです。Geminiだけで脚本と画像を生成する経路はこの追加には含みません。
+
+参考：[OpenAI公式 Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、
+[GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini)。
+
+
+### Geminiだけで日記から漫画を生成する別コマンド
+
+`node --experimental-transform-types --env-file=.dev.vars scripts/generate-comic-gemini.ts --generate`で、Geminiの既存脚本Providerと画像Providerを順に呼び出します。
+OpenAI版とは別実装で、開発サーバーを経由せず、生成結果をローカルファイルへ保存します。
+既定は入力確認のみ。費用確認後に有効化フラグと`--generate`を指定します。
+詳しい準備・出力・失敗時の手順は[GEMINI_LOCAL.md](GEMINI_LOCAL.md)を参照してください。
+
+### OpenAIカラー漫画の比較用コマンド
+
+白黒版の `scripts/render-comic.ts` と `OpenAIImageProvider` を残し、
+カラー専用の `scripts/render-comic-color.ts` と `OpenAIColorImageProvider` を追加。
+同じモデル・解像度・品質で、フルカラーの彩色と全コマの色の統一を指示します。
+人間の大学生という主人公設定、1コマ目を後続の参照画像にする方式は白黒版と同じです。
+実際の彩色や外見の一致は実生成で確認が必要です。
+
+```powershell
+# pnpm devを起動した状態で、別のターミナルから入力確認
+node scripts/render-comic-color.ts docs/contracts/script.example.openai.generated.json
+
+# カラー漫画を生成（最大4回の画像生成で料金が発生）
+node scripts/render-comic-color.ts docs/contracts/script.example.openai.generated.json --generate
+
+# 同じ脚本の白黒版
+node scripts/render-comic.ts docs/contracts/script.example.openai.generated.json --generate
+```
+
+入力を省略すると白黒版と同じ `docs/contracts/script.example.generated.json` を使用。
+カラー版は `POST /api/v1/dev/openai-color-comics` に送信し、カラー専用URLでプレビューします。
+白黒・カラーで各々同時1件・起動中2試行までです。合計では最大4試行となります。
+既存の `OPENAI_API_KEY`、`OPENAI_IMAGE_ENABLED`、`OPENAI_IMAGE_BUDGET_APPROVED` を共用し、新しい環境変数は不要。
+ローカル限定・15分間のメモリ保存・部分失敗の回収・自動再送なしの条件も白黒版と同じです。
+コード変更や再起動で以前のプレビューは失われる場合があります。画像の永続保存は行いません。
+Geminiの生成スクリプトと脚本JSONは変更していません。

@@ -1,5 +1,13 @@
+import { createDevComicRoutes } from './dev-comic';
+import {
+  type GeminiDiagnostics,
+  GeminiScriptError,
+  GeminiScriptProvider,
+  geminiScriptModelProfile,
+} from './ai/gemini-script-provider';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { MockScriptProvider, mockScriptModelProfile } from './ai/mock-script-provider';
 import { pageComic } from '../shared/fixtures';
 import { createEntrySchema, updateEntrySchema, generateSchema, jstToday } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
@@ -9,11 +17,24 @@ class ApiError extends Error {
   constructor(
     public status: 400 | 401 | 404 | 409 | 413 | 429 | 503,
     public code: string,
+    public diagnostics?: GeminiDiagnostics,
   ) {
     super(code);
   }
 }
 const messages: Record<string, string> = {
+  GEMINI_SERVICE_UNAVAILABLE:
+    'Gemini側がサーバーエラーを返しました。diagnosticsのHTTPステータスを確認してください。',
+  GEMINI_TIMEOUT:
+    'Geminiの応答待ちがタイムアウトしました。実行状況を確認してから再操作してください。',
+  GEMINI_ABORTED: 'Geminiの応答待ちが中断されました。実行状況を確認してください。',
+  GEMINI_NETWORK_ERROR:
+    'Geminiとの通信でエラーになりました。実行状況とネットワークを確認してください。',
+  GEMINI_RATE_LIMIT: 'Geminiの利用上限に達しました。AI Studioで上限を確認してください。',
+  GEMINI_REQUEST_REJECTED: 'Geminiのキー、モデルの利用権限、リクエスト設定を確認してください。',
+  GEMINI_RESULT_UNKNOWN:
+    '送信後の結果を確認できません。自動再送せず、AI Studioで利用状況を確認してください。',
+  GEMINI_LOCAL_LIMIT: 'ローカル検証は同時1件、サーバー起動中5試行までです。',
   INVALID_INPUT: '入力内容を確認してください。',
   AUTH_REQUIRED: '開発用セッションを確認してください。',
   NOT_FOUND: '記録が見つかりません。',
@@ -61,7 +82,10 @@ export function createApp(
   options: { localDevelopment?: boolean; repository?: MockRepository } = {},
 ) {
   const repository = options.repository ?? createMockRepository();
-  const app = new Hono<{ Bindings: Environment; Variables: { owner: string } }>();
+  type Bindings = Environment & { GEMINI_API_KEY?: string; GEMINI_SCRIPT_ENABLED?: string };
+  const app = new Hono<{ Bindings: Bindings; Variables: { owner: string } }>();
+  let geminiBusy = false;
+  let geminiAttempts = 0;
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
     await next();
@@ -80,6 +104,9 @@ export function createApp(
           message: messages[failure.code],
           requestId: crypto.randomUUID(),
           retryable: false,
+          ...(options.localDevelopment && failure.diagnostics
+            ? { diagnostics: failure.diagnostics }
+            : {}),
         },
       },
       failure.status,
@@ -105,6 +132,94 @@ export function createApp(
       consentVersion: 'v1',
       retentionDays: 30,
     });
+  });
+  app.route(
+    '/api/v1/dev/openai-comics',
+    createDevComicRoutes({
+      localDevelopment: options.localDevelopment ?? false,
+      readJson: jsonBody,
+    }),
+  );
+
+  app.route(
+    '/api/v1/dev/openai-color-comics',
+    createDevComicRoutes({
+      localDevelopment: options.localDevelopment ?? false,
+      readJson: jsonBody,
+      color: true,
+    }),
+  );
+
+  // 実AIの比較実験専用。公開生成のモード・Queue・利用枠とは分離する。
+  app.post('/api/v1/dev/gemini-script', async (c) => {
+    const url = new URL(c.req.url);
+    if (!options.localDevelopment || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+      throw new ApiError(404, 'NOT_FOUND');
+    if (mode(c.env) !== 'local-mock') throw new ApiError(404, 'NOT_FOUND');
+    const origin = c.req.header('Origin');
+    if (origin && origin !== url.origin) throw new ApiError(404, 'NOT_FOUND');
+    if (c.env.GEMINI_SCRIPT_ENABLED !== 'true') throw new ApiError(503, 'GENERATION_DISABLED');
+    // カスタムヘッダーを要求し、他サイトの単純なフォーム送信を受け付けない。
+    if (c.req.header('X-Dev-Gemini') !== '1') throw new ApiError(400, 'INVALID_INPUT');
+    const input = z
+      .strictObject({
+        body: createEntrySchema.shape.body,
+        diaryDate: createEntrySchema.shape.diaryDate,
+      })
+      .parse(await jsonBody(c.req.raw));
+    if (!c.env.GEMINI_API_KEY?.trim()) throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    if (geminiBusy || geminiAttempts >= 5) throw new ApiError(429, 'GEMINI_LOCAL_LIMIT');
+    geminiBusy = true;
+    geminiAttempts += 1;
+    try {
+      const script = await new GeminiScriptProvider(c.env.GEMINI_API_KEY).createScript(
+        { id: crypto.randomUUID(), ...input, revision: 1 },
+        {
+          signal: c.req.raw.signal,
+          generationId: crypto.randomUUID(),
+          callIndex: 1,
+          modelProfile: geminiScriptModelProfile,
+        },
+      );
+      return c.json({ mock: false, modelId: geminiScriptModelProfile.modelId, script });
+    } catch (error) {
+      if (error instanceof GeminiScriptError && error.code in messages) {
+        throw new ApiError(
+          error.code === 'GEMINI_RATE_LIMIT' ? 429 : 503,
+          error.code,
+          error.diagnostics,
+        );
+      }
+      throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+    } finally {
+      geminiBusy = false;
+    }
+  });
+  // 固定サンプル専用。個人データAPIの認証とは分離してブラウザで確認する。
+  app.get('/api/v1/dev/script', async (c) => {
+    const url = new URL(c.req.url);
+    if (!options.localDevelopment || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+      throw new ApiError(404, 'NOT_FOUND');
+    if (mode(c.env) !== 'local-mock') throw new ApiError(404, 'NOT_FOUND');
+    const origin = c.req.header('Origin');
+    if (origin && origin !== url.origin) throw new ApiError(404, 'NOT_FOUND');
+
+    const provider = new MockScriptProvider();
+    const script = await provider.createScript(
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        diaryDate: '2026-10-29',
+        body: 'モック動作確認用の架空日記。',
+        revision: 1,
+      },
+      {
+        signal: c.req.raw.signal,
+        generationId: crypto.randomUUID(),
+        callIndex: 1,
+        modelProfile: mockScriptModelProfile,
+      },
+    );
+    return c.json({ mock: true, script });
   });
   app.use('/api/v1/*', async (c, next) => {
     const current = mode(c.env);
