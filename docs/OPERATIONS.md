@@ -132,6 +132,8 @@ handler未設定による新規生成停止は、providerを未開始のqueued j
 
 ## 4. 環境分離と公開までの手順
 
+dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](DEPLOYMENT.md)を参照してください。mainから明示的に起動する専用workflowで接続確認と最小Workerの作成を分け、workers.devとpreview URLを無効にします。作成中は別経路から同名Workerを作成・更新しないことを必須条件とします。これは通常CDやアプリ公開ではなく、既存Workerの検出時の上書き、Supabase接続、本番作成、実AI有効化は行いません。
+
 1. 環境の分離（local / staging / demo）
    - 変数の組み合わせは[動作モード対応表](ARCHITECTURE.md#mode-matrix)に従います。localはモック、stagingは架空データ、demoは別のSupabaseプロジェクト・APIキー・Queueを基本とします。
    - もしSupabaseの無料プロジェクト作成枠が足りない場合は、通常開発をローカルDBまたはモックで行い、ハッカソン参加者のデータが入る環境でDB resetを混在させないようにします。
@@ -143,7 +145,7 @@ handler未設定による新規生成停止は、providerを未開始のqueued j
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
    - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
-   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在デプロイ用scriptはありません。この作業では実デプロイを行っていません。
+   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在アプリ配信用のデプロイscriptはありません。最小Workerの初期作成手順は[DEPLOYMENT](DEPLOYMENT.md)に分けています。この作業では実デプロイを行っていません。
    - ストレージ容量・転送量・WorkerのCPU/メモリ・Queueの利用枠を実アカウントで確認します。
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
