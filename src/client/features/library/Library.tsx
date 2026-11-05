@@ -336,7 +336,6 @@ export function Library() {
     let active = true;
     mountedRef.current = true;
     loadingRef.current = true;
-    setBusy(true);
 
     async function loadInitialEntries() {
       try {
