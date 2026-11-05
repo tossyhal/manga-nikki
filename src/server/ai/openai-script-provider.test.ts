@@ -114,9 +114,7 @@ describe('OpenAI脚本Provider', () => {
     [{ status: 401 }, 'OPENAI_REQUEST_REJECTED'],
     [{ status: 503 }, 'OPENAI_RESULT_UNKNOWN'],
   ])('API失敗を安全なコードに変換する', async (error, code) => {
-    create.mockReturnValue(
-      apiRequest(Promise.reject({ ...error, message: 'PRIVATE_DIARY' })),
-    );
+    create.mockReturnValue(apiRequest(Promise.reject({ ...error, message: 'PRIVATE_DIARY' })));
     const result = new OpenAIScriptProvider('key').createScript(input, options());
     await expect(result).rejects.toMatchObject({ code, message: code });
     expect(create).toHaveBeenCalledTimes(1);

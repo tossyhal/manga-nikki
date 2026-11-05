@@ -730,7 +730,9 @@ describe('live generation HTTP API', () => {
       'queue',
       'rpc:mark_generation_enqueued',
     ]);
-    expect(boundary.rpcCalls.find((call) => call.name === 'reserve_openai_generation')?.body).toEqual({
+    expect(
+      boundary.rpcCalls.find((call) => call.name === 'reserve_openai_generation')?.body,
+    ).toEqual({
       p_actor_id: owner,
       p_entry_id: entryId,
       p_expected_revision: 3,

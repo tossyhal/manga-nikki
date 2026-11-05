@@ -104,7 +104,10 @@ export function createApp(
         current === 'local-mock' ||
         (current === 'local-connected' && generationIngressConfigured(c.env)) ||
         (current === 'live-demo' &&
-          openAIGenerationIngressConfigured(c.env, typeof options.saveGeneratedComic === 'function')),
+          openAIGenerationIngressConfigured(
+            c.env,
+            typeof options.saveGeneratedComic === 'function',
+          )),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
       consentVersion: 'v1',

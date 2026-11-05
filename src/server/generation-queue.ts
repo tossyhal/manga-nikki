@@ -8,10 +8,7 @@ import {
   type GenerationQueueBinding,
 } from './live-generations';
 import { resolveMode } from './mode';
-import {
-  openAIGenerationConsumerReady,
-  runOpenAIGeneration,
-} from './openai-generation-runner';
+import { openAIGenerationConsumerReady, runOpenAIGeneration } from './openai-generation-runner';
 import type { OpenAIGenerationRuntime } from './openai-generation-runner';
 
 const queueBodySchema = z.strictObject({ generationId: z.uuid() });
@@ -165,10 +162,7 @@ export async function processGenerationMessage(
   }
   if (currentMode === 'local-connected') {
     // 固定mock経路は実AIの停止設定から独立させる。
-  } else if (
-    currentMode !== 'live-demo' ||
-    !openAIGenerationConsumerReady(environment, runtime)
-  ) {
+  } else if (currentMode !== 'live-demo' || !openAIGenerationConsumerReady(environment, runtime)) {
     return 'ignored';
   }
 
@@ -301,10 +295,7 @@ export async function reconcileGenerationQueue(
     try {
       if (candidate.action === 'enqueue') {
         if (!queue) continue;
-        if (
-          currentMode === 'live-demo' &&
-          !openAIGenerationConsumerReady(environment, runtime)
-        )
+        if (currentMode === 'live-demo' && !openAIGenerationConsumerReady(environment, runtime))
           continue;
         await queue.send({ generationId: candidate.generation_id });
         await rpc(environment, fetcher, 'mark_generation_enqueued', {

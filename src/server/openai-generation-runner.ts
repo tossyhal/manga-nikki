@@ -15,10 +15,7 @@ import type { ImageProvider } from './ai/image-provider';
 import type { ScriptProvider } from './ai/script-provider';
 import { scriptSchema } from './ai/script-schema';
 import type { Environment } from './mode';
-import {
-  callGenerationRpc,
-  getGenerationQueue,
-} from './live-generations';
+import { callGenerationRpc, getGenerationQueue } from './live-generations';
 import type { SaveGeneratedComic } from './generation-save-handler';
 
 const providerAttemptSchema = z.strictObject({
@@ -86,14 +83,16 @@ export function openAIGenerationConsumerReady(
 ): boolean {
   return Boolean(
     environment.GENERATION_ENABLED === 'true' &&
-      environment.OPENAI_API_KEY?.trim() &&
-      getGenerationQueue(environment) &&
-      typeof runtime.saveGeneratedComic === 'function',
+    environment.OPENAI_API_KEY?.trim() &&
+    getGenerationQueue(environment) &&
+    typeof runtime.saveGeneratedComic === 'function',
   );
 }
 
 function expectedModel(stage: ProviderStage): string {
-  return stage === 'script' ? openaiGenerationProfile.scriptModel : openaiGenerationProfile.imageModel;
+  return stage === 'script'
+    ? openaiGenerationProfile.scriptModel
+    : openaiGenerationProfile.imageModel;
 }
 
 export async function runOpenAIGeneration(
@@ -226,16 +225,14 @@ export async function runOpenAIGeneration(
         modelProfile: {
           provider: openaiImageModelProfile.provider,
           modelId: openaiImageModelProfile.modelId,
-          },
+        },
         attemptHooks,
       }),
       openaiGenerationProfile.imageModel,
     );
 
     const scriptMetadata = metadata.get(key('script', 1));
-    const imageMetadata = [1, 2, 3, 4].map((callIndex) =>
-      metadata.get(key('images', callIndex)),
-    );
+    const imageMetadata = [1, 2, 3, 4].map((callIndex) => metadata.get(key('images', callIndex)));
     if (
       !scriptMetadata ||
       imageMetadata.some((item) => item === undefined) ||

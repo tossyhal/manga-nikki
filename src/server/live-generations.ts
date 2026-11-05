@@ -165,9 +165,9 @@ export function openAIGenerationIngressConfigured(
 ): boolean {
   return Boolean(
     environment.GENERATION_ENABLED === 'true' &&
-      environment.OPENAI_API_KEY?.trim() &&
-      saveHandlerReady &&
-      generationIngressConfigured(environment),
+    environment.OPENAI_API_KEY?.trim() &&
+    saveHandlerReady &&
+    generationIngressConfigured(environment),
   );
 }
 

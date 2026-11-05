@@ -101,22 +101,22 @@ export class OpenAIScriptProvider implements ScriptProvider {
     try {
       const result = await this.client.responses
         .create(
-        {
-          model: openaiScriptModelProfile.modelId,
-          instructions: systemInstruction,
-          input: JSON.stringify({ diaryDate: input.diaryDate, diary: input.body }),
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'comic_script',
-              strict: true,
-              schema: responseJsonSchema,
+          {
+            model: openaiScriptModelProfile.modelId,
+            instructions: systemInstruction,
+            input: JSON.stringify({ diaryDate: input.diaryDate, diary: input.body }),
+            text: {
+              format: {
+                type: 'json_schema',
+                name: 'comic_script',
+                strict: true,
+                schema: responseJsonSchema,
+              },
             },
+            max_output_tokens: 4096,
+            store: false,
           },
-          max_output_tokens: 4096,
-          store: false,
-        },
-        { signal: options.signal },
+          { signal: options.signal },
         )
         .withResponse();
       response = result.data;

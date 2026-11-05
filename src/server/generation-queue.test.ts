@@ -465,8 +465,16 @@ describe('generation queue consumer', () => {
       'finish_provider_attempt',
       'mark_generation_saving',
     ]);
-    expect(calls.filter((call) => call.name === 'begin_provider_attempt').map((call) => call.body)).toEqual([
-      { p_generation_id: generationId, p_claim_token: claimToken, p_stage: 'script', p_call_index: 1, p_generation_enabled: true },
+    expect(
+      calls.filter((call) => call.name === 'begin_provider_attempt').map((call) => call.body),
+    ).toEqual([
+      {
+        p_generation_id: generationId,
+        p_claim_token: claimToken,
+        p_stage: 'script',
+        p_call_index: 1,
+        p_generation_enabled: true,
+      },
       ...[1, 2, 3, 4].map((callIndex) => ({
         p_generation_id: generationId,
         p_claim_token: claimToken,
@@ -493,12 +501,9 @@ describe('generation queue consumer', () => {
       }),
     ).resolves.toBe('ignored');
     await expect(
-      processGenerationMessage(
-        { ...enabled, OPENAI_API_KEY: undefined },
-        generationId,
-        fetcher,
-        { saveGeneratedComic: vi.fn() },
-      ),
+      processGenerationMessage({ ...enabled, OPENAI_API_KEY: undefined }, generationId, fetcher, {
+        saveGeneratedComic: vi.fn(),
+      }),
     ).resolves.toBe('ignored');
     expect(fetcher).not.toHaveBeenCalled();
     expect(provider).not.toHaveBeenCalled();
@@ -545,7 +550,10 @@ describe('generation queue consumer', () => {
       throw new Error(`unexpected rpc: ${name}`);
     }, calls);
     const createScriptProvider = vi.fn(() => ({
-      createScript: async (_input: unknown, options: import('./ai/script-provider').CallOptions) => {
+      createScript: async (
+        _input: unknown,
+        options: import('./ai/script-provider').CallOptions,
+      ) => {
         const id = await options.attemptHooks!.begin('script', 1);
         await options.attemptHooks!.finish('script', 1, id, {
           state: 'unknown',
