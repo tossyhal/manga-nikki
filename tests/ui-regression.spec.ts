@@ -458,6 +458,42 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     .toBeLessThanOrEqual(1280);
 });
 
+test('短いデスクトップ画面の記録ビューは本文領域に収まる', async ({ page }) => {
+  await installMockUiRoutes(page, makeEntries(20));
+  await page.setViewportSize({ width: 1366, height: 650 });
+  await page.goto('/library');
+
+  const expectLibraryToFit = async (viewSelector: string) => {
+    await expectMainToFit(page);
+    await expect(page.locator('.library-page')).toHaveCSS('min-height', '0px');
+    await expect(page.locator(viewSelector)).toHaveCSS('min-height', '0px');
+  };
+
+  await expect(page.locator('.library-calendar')).toBeVisible();
+  await expectLibraryToFit('.library-calendar-view');
+
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  await expect(page.getByRole('tabpanel', { name: 'リスト' })).toBeVisible();
+  await expectLibraryToFit('.library-list-view');
+
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request-id',
+          retryable: true,
+        },
+      },
+    }),
+  );
+  await page.goto('/library');
+  await expect(page.locator('.library-tab-panel:not([hidden]) .library-state-view')).toBeVisible();
+  await expectLibraryToFit('.library-tab-panel:not([hidden]) .library-state-view');
+});
+
 test('960x540の保存エラー時は本文をスクロールできCTAと下部ナビを離す', async ({ page }) => {
   await installMockUiRoutes(page);
   await page.route('**/api/v1/entries', (route) => {

@@ -776,6 +776,13 @@
     max-width: 960px;
   }
 
+  .library-page,
+  .library-calendar-view,
+  .library-list-view,
+  .library-state-view {
+    min-height: 0;
+  }
+
   .library-view-tabs {
     margin-bottom: 14px;
   }
