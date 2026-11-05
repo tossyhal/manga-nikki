@@ -71,13 +71,36 @@ function positiveDimensions(width: number, height: number): ImageDimensions {
   return { width, height };
 }
 
+const pngCrcTable = Uint32Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  return crc >>> 0;
+});
+
 function pngCrc32(bytes: Uint8Array, start: number, end: number): number {
   let crc = 0xffffffff;
-  for (let index = start; index < end; index += 1) {
-    crc ^= bytes[index]!;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-  }
+  for (let index = start; index < end; index += 1)
+    crc = pngCrcTable[(crc ^ bytes[index]!) & 0xff]! ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function validPngHeader(bytes: Uint8Array): boolean {
+  const bitDepth = bytes[24]!;
+  const colorType = bytes[25]!;
+  if (bytes[26] !== 0 || bytes[27] !== 0 || bytes[28]! > 1) return false;
+  switch (colorType) {
+    case 0:
+      return [1, 2, 4, 8, 16].includes(bitDepth);
+    case 2:
+      return bitDepth === 8 || bitDepth === 16;
+    case 3:
+      return [1, 2, 4, 8].includes(bitDepth);
+    case 4:
+    case 6:
+      return bitDepth === 8 || bitDepth === 16;
+    default:
+      return false;
+  }
 }
 
 function pngDimensions(bytes: Uint8Array): ImageDimensions {
@@ -89,7 +112,8 @@ function pngDimensions(bytes: Uint8Array): ImageDimensions {
     bytes[13] !== 72 ||
     bytes[14] !== 68 ||
     bytes[15] !== 82 ||
-    pngCrc32(bytes, 12, 29) !== readUint32BigEndian(bytes, 29)
+    pngCrc32(bytes, 12, 29) !== readUint32BigEndian(bytes, 29) ||
+    !validPngHeader(bytes)
   )
     throw new Error('INVALID_IMAGE');
 
@@ -100,24 +124,37 @@ function pngDimensions(bytes: Uint8Array): ImageDimensions {
   let offset = 8;
   let hasHeader = false;
   let hasImageData = false;
+  let hasImageDataChunk = false;
+  let imageDataEnded = false;
   while (offset + 12 <= bytes.byteLength) {
     const length = readUint32BigEndian(bytes, offset);
     const dataOffset = offset + 8;
     const nextOffset = dataOffset + length + 4;
     if (nextOffset > bytes.byteLength) throw new Error('INVALID_IMAGE');
+    const crcOffset = dataOffset + length;
+    if (pngCrc32(bytes, offset + 4, crcOffset) !== readUint32BigEndian(bytes, crcOffset))
+      throw new Error('INVALID_IMAGE');
     const type = String.fromCharCode(
       bytes[offset + 4]!,
       bytes[offset + 5]!,
       bytes[offset + 6]!,
       bytes[offset + 7]!,
     );
+    if (!/^[A-Za-z]{4}$/.test(type) || (type.charCodeAt(2)! & 0x20) !== 0)
+      throw new Error('INVALID_IMAGE');
     if (!hasHeader) {
       if (type !== 'IHDR' || length !== 13) throw new Error('INVALID_IMAGE');
       hasHeader = true;
     } else if (type === 'IHDR') {
       throw new Error('INVALID_IMAGE');
     }
-    if (type === 'IDAT' && length > 0) hasImageData = true;
+    if (type === 'IDAT') {
+      if (imageDataEnded) throw new Error('INVALID_IMAGE');
+      hasImageDataChunk = true;
+      if (length > 0) hasImageData = true;
+    } else if (hasImageDataChunk && type !== 'IEND') {
+      imageDataEnded = true;
+    }
     if (type === 'IEND') {
       if (
         length !== 0 ||
@@ -144,25 +181,75 @@ function jpegDimensions(bytes: Uint8Array): ImageDimensions {
     throw new Error('INVALID_IMAGE');
 
   let offset = 2;
+  let dimensions: ImageDimensions | null = null;
+  let componentCount = 0;
+  let hasScanData = false;
   while (offset < bytes.byteLength) {
     if (bytes[offset] !== 0xff) throw new Error('INVALID_IMAGE');
     while (bytes[offset] === 0xff) offset += 1;
     const marker = bytes[offset];
     offset += 1;
-    if (marker === undefined || marker === 0x00 || marker === 0xd9 || marker === 0xda)
+    if (marker === undefined || marker === 0x00 || marker === 0xd8)
       throw new Error('INVALID_IMAGE');
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue;
+    if (marker === 0xd9) {
+      if (!dimensions || !hasScanData || offset !== bytes.byteLength)
+        throw new Error('INVALID_IMAGE');
+      return dimensions;
+    }
+    if (marker === 0x01) continue;
+    if (marker >= 0xd0 && marker <= 0xd7) throw new Error('INVALID_IMAGE');
     if (offset + 2 > bytes.byteLength) throw new Error('INVALID_IMAGE');
 
     const segmentLength = readUint16BigEndian(bytes, offset);
     if (segmentLength < 2 || offset + segmentLength > bytes.byteLength)
       throw new Error('INVALID_IMAGE');
     if (isJpegStartOfFrame(marker)) {
-      if (segmentLength < 7) throw new Error('INVALID_IMAGE');
-      return positiveDimensions(
+      if (dimensions || segmentLength < 8) throw new Error('INVALID_IMAGE');
+      componentCount = bytes[offset + 7]!;
+      if (componentCount < 1 || componentCount > 4 || segmentLength !== 8 + 3 * componentCount)
+        throw new Error('INVALID_IMAGE');
+      dimensions = positiveDimensions(
         readUint16BigEndian(bytes, offset + 5),
         readUint16BigEndian(bytes, offset + 3),
       );
+    }
+    if (marker === 0xda) {
+      const scanComponentCount = bytes[offset + 2]!;
+      if (
+        !dimensions ||
+        scanComponentCount < 1 ||
+        scanComponentCount > componentCount ||
+        segmentLength !== 6 + 2 * scanComponentCount
+      )
+        throw new Error('INVALID_IMAGE');
+
+      offset += segmentLength;
+      let scanLength = 0;
+      let nextMarkerFound = false;
+      while (offset < bytes.byteLength) {
+        if (bytes[offset] !== 0xff) {
+          offset += 1;
+          scanLength += 1;
+          continue;
+        }
+        const markerOffset = offset;
+        while (bytes[offset] === 0xff) offset += 1;
+        if (offset >= bytes.byteLength) throw new Error('INVALID_IMAGE');
+        const scanMarker = bytes[offset]!;
+        if (scanMarker === 0x00) {
+          offset += 1;
+          scanLength += 1;
+        } else if (scanMarker >= 0xd0 && scanMarker <= 0xd7) {
+          offset += 1;
+        } else {
+          offset = markerOffset;
+          nextMarkerFound = true;
+          break;
+        }
+      }
+      if (!nextMarkerFound) throw new Error('INVALID_IMAGE');
+      if (scanLength > 0) hasScanData = true;
+      continue;
     }
     offset += segmentLength;
   }

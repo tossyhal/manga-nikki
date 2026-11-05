@@ -115,7 +115,7 @@ class PermanentSaveError extends Error {
 function statusCode(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const value = error as { status?: unknown; statusCode?: unknown };
-  for (const candidate of [value.status, value.statusCode]) {
+  for (const candidate of [value.statusCode, value.status]) {
     if (typeof candidate === 'number' && Number.isInteger(candidate)) return candidate;
     if (typeof candidate === 'string' && /^\d{3}$/.test(candidate)) return Number(candidate);
   }
@@ -132,12 +132,12 @@ function serviceErrorCode(error: unknown): string | undefined {
 
 function isMissingStorageObject(error: unknown): boolean {
   if (!(error instanceof GenerationSaveDependencyError) || error.kind !== 'storage') return false;
-  return (
-    error.status === 404 ||
-    error.serviceCode === '404' ||
-    error.serviceCode === 'NoSuchKey' ||
-    error.serviceCode === 'ObjectNotFound'
-  );
+  return error.serviceCode === 'NoSuchKey' || error.serviceCode === 'ObjectNotFound';
+}
+
+function dependencyStatus(error: GenerationSaveDependencyError): number | undefined {
+  if (error.serviceCode && /^\d{3}$/.test(error.serviceCode)) return Number(error.serviceCode);
+  return error.status;
 }
 
 function combineAbortSignals(parent: AbortSignal, input?: AbortSignal): AbortSignal {
@@ -443,7 +443,7 @@ async function failSave(
 function isTemporary(error: unknown): boolean {
   if (error instanceof GenerationSaveDependencyError && error.kind === 'rpc') return true;
   if (error instanceof GenerationSaveDependencyError && error.kind === 'storage') {
-    const status = error.status;
+    const status = dependencyStatus(error);
     return (
       status === undefined ||
       status === 401 ||
