@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
-import { clickEntryMenuItem } from './fixtures/ui';
+import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
 const today = jstToday();
@@ -328,6 +328,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
       if (path === '/new')
         await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
       if (path === '/library') {
+        await expectDefaultLibraryLocation(page);
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(6);
       }
@@ -369,6 +370,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
         await expect(calendarPager).toBeVisible();
         expect(await gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
         await page.getByRole('tab', { name: 'リスト' }).click();
+        await expect(page).toHaveURL(/\/library\?view=list&/);
         const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
         await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
         await expectNoPrimaryScroll();
