@@ -88,7 +88,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
    - 保存handlerのthrow・不正結果はQueue messageをackし、jobを`running` / `saving`のまま保ちます。DBは通常精算、復旧、enqueue候補の順に選び、復旧は最大3件、enqueue候補がある場合は残枠のおよそ半分までに制限します。retry futureのsaving jobは候補から外し、24時間を超えたjobは通常expireへ回します。
    - Runtimeの実行順は通常精算→enqueue→保存復旧です。Queue送信枠を先に確保し、復旧callbackの前に`begin_generation_save_recovery`でDB markerを取得します。1回のCronでは最大3 callback、各最大120秒、原claim deadlineから24時間以内に実行します。RPCがmarkerを5分先へ進めるため、保存復旧の各試行には5分のbackoffがあります。
    - 保存handlerはscript・asset/taskの再開情報をdurableに早期記録します。復旧callbackは保存済みdurable情報とgeneration IDから保存だけを再開し、新しいAI呼出しをしません。未保存の画像bytes保持は保証されず、復旧情報が足りない場合は保存担当が安全な失敗・取消を確定します。
-   - live-demo Cronの保存復旧は`recoverGeneratedComic`があれば`GENERATION_ENABLED=false`やOpenAI API key不在でも動作します。新規AI呼出しのready条件とは分離し、復旧callbackはowner・保存用lease・期限・削除/cancelを検証して保存完了または安全な終端状態を確定します。5分の待機中はsaving jobをexpireやterminal statusへ進めません。復旧期限の24時間を過ぎた場合は通常expireでfailed / consumedとして精算し、予約をreleaseせずAI再実行もしません。
+   - live-demo Cronの保存復旧は`recoverGeneratedComic`があれば`GENERATION_ENABLED=false`やOpenAI API key不在でも動作します。新規AI呼出しのready条件とは分離します。`save_recovery_retry_at`の5分backoffが抑制するのは復旧callbackの再試行だけで、取消・削除・entry期限切れ・元claim deadlineから24時間超の通常精算は待機中も行われます。このmarkerは保存専用leaseではありません。保存担当が実装する完了RPCはlock下で`status=running`、owner、期限（元claim deadlineから24時間以内の復旧期限を含む）、削除/cancel、保存専用leaseを再検証し、終端化済み・削除済みgenerationを`succeeded`へ戻してはいけません。復旧期限を過ぎたjobは通常expireでfailed / consumedとして精算し、予約をreleaseせずAI再実行もしません。
 
 ### キューとタイムアウトの初期設定値
 
