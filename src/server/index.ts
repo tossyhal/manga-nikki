@@ -10,6 +10,7 @@ export function createWorker(runtime: OpenAIGenerationRuntime = {}) {
   const app = createApp({
     localDevelopment: import.meta.env.DEV,
     saveGeneratedComic: runtime.saveGeneratedComic,
+    recoverGeneratedComic: runtime.recoverGeneratedComic,
   });
   const scheduled = createScheduledHandler({
     reconcileGenerationQueue: (environment) =>

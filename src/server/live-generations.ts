@@ -162,11 +162,13 @@ export function generationIngressConfigured(environment: Environment): boolean {
 export function openAIGenerationIngressConfigured(
   environment: Environment,
   saveHandlerReady: boolean,
+  recoveryHandlerReady: boolean,
 ): boolean {
   return Boolean(
     environment.GENERATION_ENABLED === 'true' &&
     environment.OPENAI_API_KEY?.trim() &&
     saveHandlerReady &&
+    recoveryHandlerReady &&
     generationIngressConfigured(environment),
   );
 }
@@ -288,11 +290,18 @@ export async function reserveLiveOpenAIGeneration(
     captchaToken: string;
   },
   saveHandlerReady: boolean,
+  recoveryHandlerReady: boolean,
 ): Promise<GenerationReceipt> {
   const existing = await findLiveGenerationReceipt(context, input);
   if (existing) return existing;
 
-  if (!openAIGenerationIngressConfigured(context.environment, saveHandlerReady))
+  if (
+    !openAIGenerationIngressConfigured(
+      context.environment,
+      saveHandlerReady,
+      recoveryHandlerReady,
+    )
+  )
     throw new LiveGenerationError(503, 'GENERATION_DISABLED');
 
   await verifyGenerationCaptcha(context, input.captchaToken);

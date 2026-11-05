@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { MockScriptProvider, mockScriptModelProfile } from './ai/mock-script-provider';
 import { createEntrySchema, updateEntrySchema, generateSchema } from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
-import type { SaveGeneratedComic } from './generation-save-handler';
+import type { RecoverGeneratedComic, SaveGeneratedComic } from './generation-save-handler';
 import { createMockRepository, type MockRepository } from './repositories/mock';
 import {
   createLiveEntry,
@@ -48,6 +48,7 @@ export function createApp(
     supabaseFetch?: typeof fetch;
     turnstileFetch?: typeof fetch;
     saveGeneratedComic?: SaveGeneratedComic;
+    recoverGeneratedComic?: RecoverGeneratedComic;
   } = {},
 ) {
   let repository = options.repository;
@@ -107,6 +108,7 @@ export function createApp(
           openAIGenerationIngressConfigured(
             c.env,
             typeof options.saveGeneratedComic === 'function',
+            typeof options.recoverGeneratedComic === 'function',
           )),
       dataMode:
         current === 'preview-sample' ? 'sample' : current === 'local-mock' ? 'mock' : 'live',
@@ -203,6 +205,7 @@ export function createApp(
               openAIGenerationIngressConfigured(
                 c.env,
                 typeof options.saveGeneratedComic === 'function',
+                typeof options.recoverGeneratedComic === 'function',
               )),
           current !== 'live-demo',
         ),
@@ -284,6 +287,7 @@ export function createApp(
               context,
               request,
               typeof options.saveGeneratedComic === 'function',
+              typeof options.recoverGeneratedComic === 'function',
             )
           : await reserveLiveMockGeneration(context, request);
       return c.json(receipt, 202);

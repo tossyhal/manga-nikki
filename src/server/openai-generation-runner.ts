@@ -14,9 +14,13 @@ import type {
 import type { ImageProvider } from './ai/image-provider';
 import type { ScriptProvider } from './ai/script-provider';
 import { scriptSchema } from './ai/script-schema';
-import type { Environment } from './mode';
+import { resolveMode, type Environment } from './mode';
 import { callGenerationRpc, getGenerationQueue } from './live-generations';
-import type { SaveGeneratedComic } from './generation-save-handler';
+import {
+  GenerationSavePendingError,
+  type RecoverGeneratedComic,
+  type SaveGeneratedComic,
+} from './generation-save-handler';
 
 const providerAttemptSchema = z.strictObject({
   attempt_id: z.uuid(),
@@ -73,6 +77,7 @@ export type ClaimedOpenAIGeneration = Readonly<{
 
 export type OpenAIGenerationRuntime = Readonly<{
   saveGeneratedComic?: SaveGeneratedComic;
+  recoverGeneratedComic?: RecoverGeneratedComic;
   createScriptProvider?: (apiKey: string) => ScriptProvider;
   createImageProvider?: (apiKey: string) => ImageProvider;
 }>;
@@ -85,7 +90,8 @@ export function openAIGenerationConsumerReady(
     environment.GENERATION_ENABLED === 'true' &&
     environment.OPENAI_API_KEY?.trim() &&
     getGenerationQueue(environment) &&
-    typeof runtime.saveGeneratedComic === 'function',
+    typeof runtime.saveGeneratedComic === 'function' &&
+    typeof runtime.recoverGeneratedComic === 'function',
   );
 }
 
@@ -101,12 +107,18 @@ export async function runOpenAIGeneration(
   claim: ClaimedOpenAIGeneration,
   runtime: OpenAIGenerationRuntime,
 ): Promise<'handed-off'> {
+  if (
+    resolveMode(environment, false) !== 'live-demo' ||
+    !openAIGenerationConsumerReady(environment, runtime)
+  )
+    throw new Error('OPENAI_GENERATION_DISABLED');
+
   const profile = openaiGenerationSnapshotSchema.safeParse(claim.model_profile_snapshot);
   if (claim.is_mock || !profile.success) throw new Error('OPENAI_GENERATION_PROFILE_INVALID');
 
   const saveGeneratedComic = runtime.saveGeneratedComic;
   const apiKey = environment.OPENAI_API_KEY?.trim();
-  if (!saveGeneratedComic || !apiKey || environment.GENERATION_ENABLED !== 'true')
+  if (!saveGeneratedComic || !apiKey)
     throw new Error('OPENAI_GENERATION_DISABLED');
 
   const claimDeadlineMs = Date.parse(claim.deadline_at);
@@ -249,30 +261,35 @@ export async function runOpenAIGeneration(
     if (!parsedSaving.success || parsedSaving.data.generation_id !== claim.generation_id)
       throw new Error('GENERATION_SAVING_TRANSITION_INVALID');
 
-    const result = await saveGeneratedComic(
-      {
-        generation: {
-          generationId: claim.generation_id,
-          entryId: claim.entry_id,
-          ownerId: claim.owner_id,
-          entryRevision: claim.entry_revision,
-          diaryDate: claim.diary_date,
-          claimToken: claim.claim_token,
-          deadlineAt: claim.deadline_at,
+    let result: Awaited<ReturnType<SaveGeneratedComic>>;
+    try {
+      result = await saveGeneratedComic(
+        {
+          generation: {
+            generationId: claim.generation_id,
+            entryId: claim.entry_id,
+            ownerId: claim.owner_id,
+            entryRevision: claim.entry_revision,
+            diaryDate: claim.diary_date,
+            claimToken: claim.claim_token,
+            deadlineAt: claim.deadline_at,
+          },
+          profileId: profile.data.profile_id,
+          script,
+          rendered,
+          providerCalls: {
+            script: scriptMetadata,
+            images: imageMetadata as ProviderCallMetadata[],
+          },
         },
-        profileId: profile.data.profile_id,
-        script,
-        rendered,
-        providerCalls: {
-          script: scriptMetadata,
-          images: imageMetadata as ProviderCallMetadata[],
-        },
-      },
-      { environment, signal: generationController.signal },
-    );
+        { environment, signal: generationController.signal },
+      );
+    } catch {
+      throw new GenerationSavePendingError();
+    }
     const parsedResult = saveResultSchema.safeParse(result);
     if (!parsedResult.success || parsedResult.data.generationId !== claim.generation_id)
-      throw new Error('GENERATION_SAVE_RESULT_INVALID');
+      throw new GenerationSavePendingError();
     return 'handed-off';
   } finally {
     clearTimeout(overallTimer);

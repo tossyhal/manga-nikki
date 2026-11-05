@@ -10,6 +10,7 @@ import {
 import { resolveMode } from './mode';
 import { openAIGenerationConsumerReady, runOpenAIGeneration } from './openai-generation-runner';
 import type { OpenAIGenerationRuntime } from './openai-generation-runner';
+import { GenerationSavePendingError } from './generation-save-handler';
 
 const queueBodySchema = z.strictObject({ generationId: z.uuid() });
 const claimIdentitySchema = z.object({
@@ -48,9 +49,13 @@ const attemptSchema = z.object({
 const reconcileSchema = z.array(
   z.strictObject({
     generation_id: z.uuid(),
-    action: z.enum(['enqueue', 'cancel', 'expire']),
+    action: z.enum(['enqueue', 'cancel', 'expire', 'recover-saving']),
   }),
 );
+const recoverResultSchema = z.strictObject({
+  generationId: z.uuid(),
+  status: z.enum(['pending', 'succeeded', 'failed', 'cancelled']),
+});
 
 export interface GenerationQueueMessage {
   readonly body: unknown;
@@ -153,7 +158,7 @@ export async function processGenerationMessage(
   generationId: string,
   fetcher?: typeof fetch,
   runtime: OpenAIGenerationRuntime = {},
-): Promise<'ignored' | 'duplicate' | 'succeeded' | 'handed-off' | 'failed'> {
+): Promise<'ignored' | 'duplicate' | 'succeeded' | 'handed-off' | 'saving-pending' | 'failed'> {
   let currentMode;
   try {
     currentMode = resolveMode(environment, false);
@@ -233,7 +238,8 @@ export async function processGenerationMessage(
     )
       throw new Error('MOCK_COMPLETION_INVALID');
     return 'succeeded';
-  } catch {
+  } catch (error) {
+    if (error instanceof GenerationSavePendingError) return 'saving-pending';
     await failClaimedGeneration(environment, fetcher, generationId, claimToken);
     return 'failed';
   }
@@ -284,7 +290,7 @@ export async function reconcileGenerationQueue(
   const queue = getGenerationQueue(environment);
   if (!canReconcile) return;
 
-  const rows = await rpc(environment, fetcher, 'list_generation_reconcile_candidates', {
+  const rows = await rpc(environment, fetcher, 'list_generation_reconcile_candidates_v2', {
     p_limit: 25,
   });
   const parsed = reconcileSchema.safeParse(rows);
@@ -301,6 +307,33 @@ export async function reconcileGenerationQueue(
         await rpc(environment, fetcher, 'mark_generation_enqueued', {
           p_generation_id: candidate.generation_id,
         });
+        continue;
+      }
+      if (candidate.action === 'recover-saving') {
+        if (currentMode !== 'live-demo' || !runtime.recoverGeneratedComic) continue;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120_000);
+        let abortListener: (() => void) | undefined;
+        const aborted = new Promise<never>((_, reject) => {
+          abortListener = () => reject(new Error('GENERATION_RECOVERY_TIMEOUT'));
+          if (controller.signal.aborted) abortListener();
+          else controller.signal.addEventListener('abort', abortListener, { once: true });
+        });
+        try {
+          const result = await Promise.race([
+            runtime.recoverGeneratedComic(candidate.generation_id, {
+              environment,
+              signal: controller.signal,
+            }),
+            aborted,
+          ]);
+          const recovered = recoverResultSchema.safeParse(result);
+          if (!recovered.success || recovered.data.generationId !== candidate.generation_id)
+            throw new Error('GENERATION_RECOVERY_RESULT_INVALID');
+        } finally {
+          clearTimeout(timeout);
+          if (abortListener) controller.signal.removeEventListener('abort', abortListener);
+        }
         continue;
       }
       await rpc(environment, fetcher, 'fail_or_hold_generation', {

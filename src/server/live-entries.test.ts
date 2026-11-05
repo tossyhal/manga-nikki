@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { pageComic } from '../shared/fixtures';
 import { createApp } from './app';
-import type { SaveGeneratedComic } from './generation-save-handler';
+import type { RecoverGeneratedComic, SaveGeneratedComic } from './generation-save-handler';
 import { mockEnvironment, type Environment } from './mode';
 
 const signingKeyId = 'live-api-test-key';
@@ -214,12 +214,14 @@ function appWith(
   boundary: ReturnType<typeof createSupabaseBoundary>,
   turnstileFetch?: typeof fetch,
   saveGeneratedComic?: SaveGeneratedComic,
+  recoverGeneratedComic?: RecoverGeneratedComic,
 ) {
   return createApp({
     authFetch: boundary.authFetch,
     supabaseFetch: boundary.supabaseFetch,
     turnstileFetch,
     saveGeneratedComic,
+    recoverGeneratedComic,
   });
 }
 
@@ -703,7 +705,17 @@ describe('live generation HTTP API', () => {
       generationId,
       status: 'succeeded',
     });
-    const app = createApp({ authFetch, supabaseFetch, turnstileFetch, saveGeneratedComic });
+    const recoverGeneratedComic: RecoverGeneratedComic = async (requestedId) => ({
+      generationId: requestedId,
+      status: 'pending',
+    });
+    const app = createApp({
+      authFetch,
+      supabaseFetch,
+      turnstileFetch,
+      saveGeneratedComic,
+      recoverGeneratedComic,
+    });
 
     const response = await apiRequest(
       app,
