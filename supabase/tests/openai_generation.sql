@@ -48,11 +48,12 @@ create table test.reconcile_fixture (
   entry_id uuid,
   generation_id uuid
 );
+grant select on test.reconcile_fixture to service_role;
 insert into test.reconcile_fixture (ordinal, owner_id, create_request_id)
 select ordinal,
   pg_catalog.md5('reconcile-owner-' || ordinal::text)::uuid,
   pg_catalog.md5('reconcile-entry-' || ordinal::text)::uuid
-from pg_catalog.generate_series(1, 58) ordinal;
+from pg_catalog.generate_series(1, 59) ordinal;
 insert into auth.users(id) select owner_id from test.reconcile_fixture;
 insert into public.entries (owner_id, create_request_id, create_request_hash,
   diary_date, body, consent_version)
@@ -78,7 +79,7 @@ select pg_catalog.md5('reconcile-generation-' || fixture.ordinal::text)::uuid,
   'reconcile-request-' || fixture.ordinal::text,
   '照合候補の架空日記 ' || fixture.ordinal::text,
   case
-    when fixture.ordinal between 28 and 56 then test.openai_profile(1)
+    when fixture.ordinal between 28 and 56 or fixture.ordinal = 59 then test.openai_profile(1)
     when fixture.ordinal = 57 then '{"profile_id":"reconcile-mock","is_mock":true,"max_cost_micro_usd":1}'::jsonb
     when fixture.ordinal = 58 then '{"profile_id":"reconcile-unsupported","is_mock":false,"max_cost_micro_usd":1}'::jsonb
     else '{"profile_id":"reconcile-queue","is_mock":true,"max_cost_micro_usd":1}'::jsonb
@@ -88,6 +89,7 @@ select pg_catalog.md5('reconcile-generation-' || fixture.ordinal::text)::uuid,
   case when fixture.ordinal <= 27 then null else 'saving' end,
   case when fixture.ordinal <= 27 then null else pg_catalog.gen_random_uuid() end,
   case when fixture.ordinal <= 27 then null
+    when fixture.ordinal = 59 then pg_catalog.statement_timestamp() - interval '25 hours'
     else pg_catalog.statement_timestamp() - interval '2 minutes' end,
   fixture.ordinal in (27, 56),
   pg_catalog.statement_timestamp(),
@@ -104,6 +106,19 @@ update test.reconcile_fixture fixture set generation_id = generation.id
 from public.generations generation
 where generation.entry_id = fixture.entry_id;
 
+insert into private.reservations (generation_id, owner_id, reserved_day, max_cost_micro_usd, state)
+select fixture.generation_id, fixture.owner_id,
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date, 1, 'reserved'
+from test.reconcile_fixture fixture;
+insert into private.quota_counters (scope, subject, day_key, count, committed_micro_usd)
+values ('global_total', null, null, 59, 59);
+insert into private.quota_counters (scope, subject, day_key, count, committed_micro_usd)
+values ('global_day', null, (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date, 59, 59);
+insert into private.quota_counters (scope, subject, day_key, count, committed_micro_usd)
+select 'user_day', fixture.owner_id,
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date, 1, 1
+from test.reconcile_fixture fixture;
+
 select public.list_generation_reconcile_candidates(25) as prioritized_candidates \gset
 select test.assert(pg_catalog.jsonb_array_length(:'prioritized_candidates'::jsonb) = 25
   and (select count(*) = 1 from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb) item
@@ -115,46 +130,55 @@ select test.assert(pg_catalog.jsonb_array_length(:'prioritized_candidates'::json
       with ordinality item(value, ordinal)
     where item.value ->> 'action' = 'enqueue'
   )
-  and (select count(*) = 6
+  and (select count(*) = 7
     from pg_catalog.jsonb_array_elements(:'prioritized_candidates'::jsonb)
       with ordinality item(value, ordinal)
-    where item.ordinal <= 6 and item.value ->> 'action' in ('cancel', 'expire')
-  ), 'cancel/expireと有効saving回復候補は古いenqueue候補より優先してlimit内に入る');
+    where item.ordinal <= 7 and item.value ->> 'action' in ('cancel', 'expire')
+  ), 'cancel/expireはsaving復旧・enqueueより優先してlimit内に入る');
+select public.list_generation_reconcile_candidates_v2(10) as capacity_candidates \gset
+select test.assert(pg_catalog.jsonb_array_length(:'capacity_candidates'::jsonb) = 10
+  and (select count(*) = 7 from pg_catalog.jsonb_array_elements(:'capacity_candidates'::jsonb) item
+    where item ->> 'action' in ('cancel', 'expire'))
+  and (select count(*) = 1 from pg_catalog.jsonb_array_elements(:'capacity_candidates'::jsonb) item
+    where item ->> 'action' = 'recover-saving')
+  and (select count(*) = 2 from pg_catalog.jsonb_array_elements(:'capacity_candidates'::jsonb) item
+    where item ->> 'action' = 'enqueue'),
+  '精算後の残枠がある場合、復旧は半分以下に制限してenqueue枠を残す');
 select public.list_generation_reconcile_candidates_v2(50) as recovery_candidates \gset
-select test.assert(pg_catalog.jsonb_array_length(:'recovery_candidates'::jsonb) = 50
+select test.assert(pg_catalog.jsonb_array_length(:'recovery_candidates'::jsonb) = 36
   and (select count(*) = 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     where item ->> 'action' = 'cancel')
-  and (select count(*) = 5 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+  and (select count(*) = 6 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     where item ->> 'action' = 'expire')
-  and (select count(*) = 26 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+  and (select count(*) = 3 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     where item ->> 'action' = 'recover-saving')
-  and (select count(*) = 18 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+  and (select count(*) = 26 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     where item ->> 'action' = 'enqueue')
   and not exists (
     select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
       with ordinality item(value, ordinal)
-    where item.ordinal <= 6 and item.value ->> 'action' not in ('cancel', 'expire')
+    where item.ordinal <= 7 and item.value ->> 'action' not in ('cancel', 'expire')
   )
   and not exists (
     select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
       with ordinality item(value, ordinal)
-    where item.ordinal between 7 and 32 and item.value ->> 'action' <> 'recover-saving'
+    where item.ordinal between 8 and 10 and item.value ->> 'action' <> 'recover-saving'
   )
   and not exists (
     select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb)
       with ordinality item(value, ordinal)
-    where item.ordinal > 32 and item.value ->> 'action' <> 'enqueue'
+    where item.ordinal > 10 and item.value ->> 'action' <> 'enqueue'
   ), 'v2は精算・有効OpenAI saving回復・enqueueの順で候補を返す');
-select test.assert((select count(*) = 26
+select test.assert((select count(*) = 3
     from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     join test.reconcile_fixture fixture
       on fixture.generation_id = (item ->> 'generation_id')::uuid
-    where fixture.ordinal between 28 and 53 and item ->> 'action' = 'recover-saving')
-  and (select count(*) = 5
+    where fixture.ordinal between 28 and 30 and item ->> 'action' = 'recover-saving')
+  and (select count(*) = 6
     from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     join test.reconcile_fixture fixture
       on fixture.generation_id = (item ->> 'generation_id')::uuid
-    where fixture.ordinal between 54 and 58 and item ->> 'action' = 'expire')
+    where fixture.ordinal between 54 and 59 and item ->> 'action' = 'expire')
   and not exists (
     select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
     where item ->> 'action' = 'recover-saving'
@@ -163,12 +187,123 @@ select test.assert((select count(*) = 26
         where fixture.ordinal between 28 and 53
           and fixture.generation_id = (item ->> 'generation_id')::uuid
       )
-  ), 'v2は有効なOpenAI savingだけ復旧し、削除/cancel/期限・mock・未対応profileは従来expireを返す');
+  ), 'v2は有効なOpenAI savingを最大3件返し、削除/cancel/期限・mock・未対応profileはexpireへ回す');
+select test.assert(not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'recovery_candidates'::jsonb) item
+    join public.generations generation on generation.id = (item ->> 'generation_id')::uuid
+    left join public.entries entry
+      on entry.id = generation.entry_id and entry.owner_id = generation.owner_id
+    left join private.reservations reservation
+      on reservation.generation_id = generation.id
+        and reservation.owner_id = generation.owner_id and reservation.state = 'reserved'
+    where item ->> 'action' = 'recover-saving'
+      and (entry.id is null or reservation.generation_id is null)
+  ), 'recover-saving候補はownerが一致するentryとreserved ledgerを必ず持つ');
+
+set local role service_role;
+select test.assert(public.begin_generation_save_recovery(
+  (select generation_id from test.reconcile_fixture where ordinal = 28))
+  and public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 29))
+  and public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 30)),
+  '1回の復旧候補にある3件のsavingをbackoff付きで取得する');
+select test.assert(not public.begin_generation_save_recovery(
+  (select generation_id from test.reconcile_fixture where ordinal = 28))
+  and (select save_recovery_retry_at > pg_catalog.statement_timestamp() + interval '4 minutes'
+    from public.generations where id = (
+      select generation_id from test.reconcile_fixture where ordinal = 28
+    )), '復旧markerは5分待機を設定し重複試行を拒む');
+select test.assert(not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 54))
+  and not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 55))
+  and not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 56))
+  and not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 57))
+  and not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 58))
+  and not public.begin_generation_save_recovery(
+    (select generation_id from test.reconcile_fixture where ordinal = 59)),
+  '削除・entry期限・cancel・mock・未対応profile・24時間超のsavingは復旧できない');
+reset role;
+update public.generations set save_recovery_retry_at = pg_catalog.clock_timestamp() - interval '1 second'
+where id = (select generation_id from test.reconcile_fixture where ordinal = 28);
+set local role service_role;
+select test.assert(public.begin_generation_save_recovery(
+  (select generation_id from test.reconcile_fixture where ordinal = 28)),
+  'backoff期限後は同じsavingを再試行できる');
+select public.list_generation_reconcile_candidates_v2(50) as next_recovery_candidates \gset
+select test.assert((select count(*) = 3
+    from pg_catalog.jsonb_array_elements(:'next_recovery_candidates'::jsonb) item
+    join test.reconcile_fixture fixture
+      on fixture.generation_id = (item ->> 'generation_id')::uuid
+    where fixture.ordinal between 31 and 33 and item ->> 'action' = 'recover-saving')
+  and (select count(*) = 26
+    from pg_catalog.jsonb_array_elements(:'next_recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'enqueue')
+  and not exists (
+    select 1 from pg_catalog.jsonb_array_elements(:'next_recovery_candidates'::jsonb) item
+    where (item ->> 'generation_id')::uuid in (
+      select generation_id from test.reconcile_fixture where ordinal between 28 and 30
+    )
+  ), 'pending相当の先行savingをmarkerで除外し、後続savingとenqueueを次回に含める');
+do $$
+declare
+  v_candidates jsonb;
+  v_generation_id uuid;
+begin
+  for batch_index in 1..7 loop
+    v_candidates := public.list_generation_reconcile_candidates_v2(50);
+    for v_generation_id in
+      select (candidate ->> 'generation_id')::uuid
+      from pg_catalog.jsonb_array_elements(v_candidates) candidate
+      where candidate ->> 'action' = 'recover-saving'
+    loop
+      if not public.begin_generation_save_recovery(v_generation_id) then
+        raise exception '復旧markerのfixture取得に失敗';
+      end if;
+    end loop;
+  end loop;
+end;
+$$;
+select public.list_generation_reconcile_candidates_v2(50) as late_recovery_candidates \gset
+select test.assert((select count(*) = 2
+    from pg_catalog.jsonb_array_elements(:'late_recovery_candidates'::jsonb) item
+    join test.reconcile_fixture fixture
+      on fixture.generation_id = (item ->> 'generation_id')::uuid
+    where fixture.ordinal between 52 and 53 and item ->> 'action' = 'recover-saving'),
+  '先行25件にbackoffを付けた後は26件目以降が候補へ進む');
+select test.assert(public.begin_generation_save_recovery(
+  (select generation_id from test.reconcile_fixture where ordinal = 52)),
+  '26件目相当のsavingも期限内なら取得できる');
+select public.list_generation_reconcile_candidates_v2(50) as after_late_recovery_candidates \gset
+select test.assert((select count(*) = 1
+    from pg_catalog.jsonb_array_elements(:'after_late_recovery_candidates'::jsonb) item
+    join test.reconcile_fixture fixture
+      on fixture.generation_id = (item ->> 'generation_id')::uuid
+    where fixture.ordinal = 53 and item ->> 'action' = 'recover-saving')
+  and (select count(*) = 26
+    from pg_catalog.jsonb_array_elements(:'after_late_recovery_candidates'::jsonb) item
+    where item ->> 'action' = 'enqueue'),
+  '25件分を進めた後も26件目とqueued再送候補がlimit内に入る');
+reset role;
+delete from private.reservations where generation_id in (
+  select generation_id from test.reconcile_fixture
+);
+delete from private.quota_counters where scope = 'user_day' and subject in (
+  select owner_id from test.reconcile_fixture
+);
+delete from private.quota_counters where scope = 'global_total'
+  or (scope = 'global_day' and day_key = (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date);
 
 select test.assert(has_function_privilege('service_role',
   'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and has_function_privilege('service_role',
     'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
+  and has_function_privilege('service_role',
+    'public.begin_generation_save_recovery(uuid)', 'EXECUTE')
   and has_function_privilege('service_role',
     'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE')
   and not has_function_privilege('anon',
@@ -178,10 +313,26 @@ select test.assert(has_function_privilege('service_role',
   and not has_function_privilege('anon', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
   and not has_function_privilege('anon',
+    'public.begin_generation_save_recovery(uuid)', 'EXECUTE')
+  and not has_function_privilege('authenticated',
+    'public.begin_generation_save_recovery(uuid)', 'EXECUTE')
+  and not has_function_privilege('anon',
     'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE')
   and not has_function_privilege('authenticated',
     'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE'),
   'OpenAI予約とsaving移行RPCはservice_role専用');
+select test.assert(not exists (
+    select 1 from pg_catalog.pg_class table_row
+    cross join lateral pg_catalog.aclexplode(table_row.relacl) grant_row
+    where table_row.oid = 'public.generations'::regclass
+      and grant_row.grantee = 'service_role'::regrole
+      and grant_row.privilege_type = 'UPDATE'
+  )
+  and has_column_privilege('service_role', 'public.generations', 'save_recovery_retry_at', 'UPDATE')
+  and has_column_privilege('service_role', 'public.generations', 'status', 'UPDATE')
+  and not has_column_privilege('anon', 'public.generations', 'save_recovery_retry_at', 'UPDATE')
+  and not has_column_privilege('authenticated', 'public.generations', 'save_recovery_retry_at', 'UPDATE'),
+  'service_roleは必要なgeneration列だけ更新でき、復旧markerは一般roleへ公開しない');
 select test.assert(not has_function_privilege('anon',
   'private.is_valid_openai_generation_profile(jsonb)', 'EXECUTE')
   and not has_function_privilege('authenticated',
@@ -386,6 +537,39 @@ select test.expect_error(format('select public.mark_generation_saving(%L,%L)',
 select test.assert((select status = 'running' and stage = 'saving'
   from public.generations where id = :'generation_id'::uuid),
   '別claimからの再送ではsaving状態を変更しない');
+update public.generations set deadline_at = pg_catalog.clock_timestamp() - interval '1 minute'
+  where id = :'generation_id'::uuid;
+select test.assert(public.begin_generation_save_recovery(:'generation_id'::uuid),
+  '最初のsaving復旧marker取得に成功する');
+select test.assert(not public.begin_generation_save_recovery(:'generation_id'::uuid),
+  '同じsaving復旧markerの重複取得を拒否する');
+select test.assert((select save_recovery_retry_at > pg_catalog.statement_timestamp() + interval '4 minutes'
+      and claim_token = :'claim_token'::uuid
+      and deadline_at <= pg_catalog.statement_timestamp()
+    from public.generations where id = :'generation_id'::uuid)
+  and (select state = 'reserved' from private.reservations
+    where generation_id = :'generation_id'::uuid)
+  and (select count(*) = 5 from private.provider_attempts
+    where generation_id = :'generation_id'::uuid),
+  '保存復旧markerはclaim期限・token・attempt・予約を変えず5分backoffを原子的に設定する');
+update public.generations set save_recovery_retry_at = pg_catalog.clock_timestamp() - interval '1 second'
+  where id = :'generation_id'::uuid;
+select test.assert(public.begin_generation_save_recovery(:'generation_id'::uuid),
+  'retry_at到達後は復旧markerを再取得できる');
+update public.generations set deadline_at = pg_catalog.clock_timestamp() - interval '25 hours'
+  where id = :'generation_id'::uuid;
+select test.assert(not public.begin_generation_save_recovery(:'generation_id'::uuid),
+  '元claim期限から24時間を超えたsavingは復旧対象にしない');
+select public.fail_or_hold_generation(:'generation_id'::uuid, null, 'failed') as aged_saving \gset
+select test.assert(:'aged_saving'::jsonb ->> 'status' = 'failed'
+  and :'aged_saving'::jsonb ->> 'reservation_state' = 'consumed'
+  and (select status = 'failed' and stage is null
+    from public.generations where id = :'generation_id'::uuid)
+  and (select state = 'consumed' from private.reservations
+    where generation_id = :'generation_id'::uuid)
+  and (select count = 1 and committed_micro_usd = 17
+    from private.quota_counters where scope = 'global_total'),
+  '24時間を超えたknown savingはfailed/consumedとして精算し予約額を返さない');
 
 reset role;
 update private.generation_policy set model_profile_json = test.openai_profile(17) where id = 1;
@@ -487,12 +671,14 @@ select public.fail_or_hold_generation(:'amount_generation'::uuid, :'amount_token
 set local role anon;
 select test.expect_error('select public.reserve_openai_generation(null,null,null,null,true)', '42501');
 select test.expect_error('select public.mark_generation_saving(gen_random_uuid(),gen_random_uuid())', '42501');
+select test.expect_error('select public.begin_generation_save_recovery(gen_random_uuid())', '42501');
 select test.expect_error('select public.list_generation_reconcile_candidates_v2(25)', '42501');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'aaaaaaaa-1111-4111-8111-111111111111', true);
 select test.expect_error('select public.reserve_openai_generation(null,null,null,null,true)', '42501');
 select test.expect_error('select public.mark_generation_saving(gen_random_uuid(),gen_random_uuid())', '42501');
+select test.expect_error('select public.begin_generation_save_recovery(gen_random_uuid())', '42501');
 select test.expect_error('select public.list_generation_reconcile_candidates_v2(25)', '42501');
 reset role;
 rollback;

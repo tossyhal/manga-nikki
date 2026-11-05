@@ -1,5 +1,15 @@
 begin;
 
+alter table public.generations add column save_recovery_retry_at timestamptz;
+create index generations_save_recovery_candidates
+  on public.generations (save_recovery_retry_at, deadline_at, updated_at, id)
+  where status = 'running' and stage = 'saving' and is_mock is false;
+revoke update on public.generations from service_role;
+grant update (
+  cancel_requested, claim_token, completed_at, deadline_at, enqueued_at, error_code,
+  save_recovery_retry_at, stage, started_at, status, updated_at, comic_json
+) on public.generations to service_role;
+
 create function private.is_valid_openai_generation_profile(value jsonb)
 returns boolean language plpgsql immutable strict security invoker set search_path = ''
 as $$
@@ -281,6 +291,63 @@ revoke all on function public.mark_generation_saving(uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.mark_generation_saving(uuid, uuid) to service_role;
 
+create function public.begin_generation_save_recovery(p_generation_id uuid)
+returns boolean language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_generation public.generations;
+  v_entry public.entries;
+  v_reservation private.reservations;
+  v_now timestamptz;
+begin
+  if p_generation_id is null then return false; end if;
+
+  select * into v_generation from public.generations g where g.id = p_generation_id;
+  if not found then return false; end if;
+  select * into v_reservation from private.reservations r
+    where r.generation_id = p_generation_id;
+  if not found or v_reservation.owner_id is distinct from v_generation.owner_id
+    or v_reservation.state <> 'reserved' then
+    return false;
+  end if;
+
+  v_reservation := private.lock_generation_quota(p_generation_id);
+  select * into v_entry from public.entries e
+    where e.id = v_generation.entry_id and e.owner_id = v_generation.owner_id for update;
+  if not found then return false; end if;
+  select * into v_generation from public.generations g where g.id = p_generation_id for update;
+  select * into v_reservation from private.reservations r
+    where r.generation_id = p_generation_id for update;
+  v_now := pg_catalog.clock_timestamp();
+
+  if v_generation.status is distinct from 'running'
+    or v_generation.stage is distinct from 'saving'
+    or v_generation.is_mock is distinct from false
+    or private.is_valid_openai_generation_profile(v_generation.model_profile_snapshot) is not true
+    or v_generation.claim_token is null
+    or v_generation.deadline_at is null
+    or v_generation.deadline_at > v_now
+    or v_generation.deadline_at + interval '24 hours' <= v_now
+    or (v_generation.save_recovery_retry_at is not null
+      and v_generation.save_recovery_retry_at > v_now)
+    or v_generation.cancel_requested
+    or v_entry.deleted_at is not null
+    or v_entry.expires_at <= v_now
+    or v_reservation.owner_id is distinct from v_generation.owner_id
+    or v_reservation.state <> 'reserved' then
+    return false;
+  end if;
+
+  update public.generations set save_recovery_retry_at = v_now + interval '5 minutes',
+    updated_at = v_now
+    where id = p_generation_id;
+  return found;
+end;
+$$;
+revoke all on function public.begin_generation_save_recovery(uuid)
+  from public, anon, authenticated;
+grant execute on function public.begin_generation_save_recovery(uuid) to service_role;
+
 create or replace function public.list_generation_reconcile_candidates(p_limit integer default 25)
 returns jsonb language plpgsql stable security invoker set search_path = ''
 as $$
@@ -307,11 +374,16 @@ begin
       case
         when g.status = 'running' and g.stage = 'saving' and g.is_mock is false
           and not g.cancel_requested
+          and g.deadline_at + interval '24 hours' > pg_catalog.statement_timestamp()
           and private.is_valid_openai_generation_profile(g.model_profile_snapshot)
           and exists (
             select 1 from public.entries e
             where e.id = g.entry_id and e.owner_id = g.owner_id
               and private.is_live_generation_entry(e)
+          )
+          and exists (
+            select 1 from private.reservations r
+            where r.generation_id = g.id and r.owner_id = g.owner_id and r.state = 'reserved'
           ) then 1
         when g.status = 'queued' and not g.cancel_requested and exists (
           select 1 from public.entries e
@@ -347,40 +419,124 @@ revoke all on function public.list_generation_reconcile_candidates(integer)
 grant execute on function public.list_generation_reconcile_candidates(integer)
   to service_role;
 
-create function public.list_generation_reconcile_candidates_v2(p_limit integer default 25)
+create or replace function public.list_generation_reconcile_candidates_v2(p_limit integer default 25)
 returns jsonb language plpgsql stable security invoker set search_path = ''
 as $$
 declare
-  v_existing_candidates jsonb;
   v_candidates jsonb;
 begin
-  v_existing_candidates := public.list_generation_reconcile_candidates(p_limit);
+  if p_limit is null or p_limit < 1 or p_limit > 50 then
+    raise exception using message = 'INVALID_INPUT';
+  end if;
 
+  with settlement as materialized (
+    select g.id, g.status, g.cancel_requested, g.updated_at,
+      case
+        when g.status = 'running' then 'expire'
+        when g.cancel_requested or not exists (
+          select 1 from public.entries e
+          where e.id = g.entry_id and e.owner_id = g.owner_id
+            and private.is_live_generation_entry(e)
+        ) then 'cancel'
+        else 'enqueue'
+      end as action
+    from public.generations g
+    where (
+      g.status = 'queued' and (
+        g.cancel_requested
+        or not exists (
+          select 1 from public.entries e
+          where e.id = g.entry_id and e.owner_id = g.owner_id
+            and private.is_live_generation_entry(e)
+        )
+      )
+    ) or (
+      g.status = 'running'
+      and g.deadline_at <= pg_catalog.statement_timestamp()
+      and not (
+        g.stage = 'saving'
+        and g.is_mock is false
+        and not g.cancel_requested
+        and g.deadline_at + interval '24 hours' > pg_catalog.statement_timestamp()
+        and private.is_valid_openai_generation_profile(g.model_profile_snapshot)
+        and exists (
+          select 1 from public.entries e
+          where e.id = g.entry_id and e.owner_id = g.owner_id
+            and private.is_live_generation_entry(e)
+        )
+        and exists (
+          select 1 from private.reservations r
+          where r.generation_id = g.id and r.owner_id = g.owner_id and r.state = 'reserved'
+        )
+      )
+    )
+    order by g.updated_at, g.id
+    limit p_limit
+  ), enqueue_candidates as materialized (
+    select g.id, g.updated_at
+    from public.generations g
+    where g.status = 'queued' and not g.cancel_requested
+      and coalesce(g.enqueued_at, g.created_at)
+        <= pg_catalog.statement_timestamp() - interval '1 minute'
+      and exists (
+        select 1 from public.entries e
+        where e.id = g.entry_id and e.owner_id = g.owner_id
+          and private.is_live_generation_entry(e)
+      )
+    order by g.updated_at, g.id
+    limit p_limit
+  ), candidate_counts as (
+    select
+      (select count(*)::integer from settlement) as settlement_count,
+      (select count(*)::integer from enqueue_candidates) as enqueue_count
+  ), recovery_limit as (
+    select case when enqueue_count > 0
+      then least(3, greatest(0, (p_limit - settlement_count) / 2))
+      else least(3, greatest(0, p_limit - settlement_count))
+    end as row_limit
+    from candidate_counts
+  ), recoveries as materialized (
+    select g.id, g.updated_at,
+    coalesce(g.save_recovery_retry_at, g.deadline_at) as priority_at
+    from public.generations g
+    join public.entries e on e.id = g.entry_id and e.owner_id = g.owner_id
+    join private.reservations r on r.generation_id = g.id and r.owner_id = g.owner_id
+    where g.status = 'running' and g.stage = 'saving'
+      and g.is_mock is false and not g.cancel_requested
+      and g.deadline_at <= pg_catalog.statement_timestamp()
+      and g.deadline_at + interval '24 hours' > pg_catalog.statement_timestamp()
+      and (g.save_recovery_retry_at is null
+        or g.save_recovery_retry_at <= pg_catalog.statement_timestamp())
+      and private.is_valid_openai_generation_profile(g.model_profile_snapshot)
+      and e.deleted_at is null and e.expires_at > pg_catalog.statement_timestamp()
+      and r.state = 'reserved'
+    order by coalesce(g.save_recovery_retry_at, g.deadline_at), g.updated_at, g.id
+    limit (select row_limit from recovery_limit)
+  ), recovery_counts as (
+    select count(*)::integer as recovery_count from recoveries
+  ), selected_enqueues as (
+    select q.id, q.updated_at
+    from enqueue_candidates q
+    order by q.updated_at, q.id
+    limit greatest(0, p_limit
+      - (select settlement_count from candidate_counts)
+      - (select recovery_count from recovery_counts))
+  ), candidates as (
+    select s.id, s.action, 0 as priority, s.updated_at as priority_at
+    from settlement s
+    union all
+    select r.id, 'recover-saving'::text, 1, r.priority_at
+    from recoveries r
+    union all
+    select q.id, 'enqueue'::text, 2, q.updated_at
+    from selected_enqueues q
+  )
   select coalesce(pg_catalog.jsonb_agg(
-    pg_catalog.jsonb_build_object(
-      'generation_id', candidate.value -> 'generation_id',
-      'action', case
-        when candidate.value ->> 'action' = 'expire'
-          and generation.status = 'running'
-          and generation.stage = 'saving'
-          and generation.is_mock is false
-          and private.is_valid_openai_generation_profile(generation.model_profile_snapshot)
-          and not generation.cancel_requested
-          and entry.id is not null
-          and entry.deleted_at is null
-          and entry.expires_at > pg_catalog.statement_timestamp()
-        then 'recover-saving'
-        else candidate.value ->> 'action'
-      end
-    ) order by candidate.ordinality
+    pg_catalog.jsonb_build_object('generation_id', id, 'action', action)
+    order by priority, priority_at, id
   ), '[]'::jsonb)
   into v_candidates
-  from pg_catalog.jsonb_array_elements(v_existing_candidates) with ordinality
-    as candidate(value, ordinality)
-  left join public.generations generation
-    on generation.id = (candidate.value ->> 'generation_id')::uuid
-  left join public.entries entry
-    on entry.id = generation.entry_id and entry.owner_id = generation.owner_id;
+  from candidates;
 
   return v_candidates;
 end;
