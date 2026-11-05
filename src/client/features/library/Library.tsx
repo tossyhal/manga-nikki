@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Link } from 'react-router';
 import type { Entry } from '../../../shared/schemas';
 import { jstToday } from '../../../shared/schemas';
@@ -7,7 +15,13 @@ import { ApiClientError, getEntries } from '../../lib/api';
 import { EntryHistory } from './EntryHistory';
 
 const pageSize = 20;
+const listPageSize = 3;
+const dayPageSize = 2;
 const weekDays = ['日', '月', '火', '水', '木', '金', '土'];
+
+type LibraryProps = {
+  setHeaderAction: (action: ReactNode | null) => void;
+};
 
 function dateParts(value: string) {
   const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
@@ -45,9 +59,7 @@ function calendarDays(value: string) {
   const { year, month } = dateParts(`${value}-01`);
   const offset = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
   const count = daysInMonth(value);
-  const cellCount = Math.ceil((offset + count) / 7) * 7;
-
-  return Array.from({ length: cellCount }, (_, index) => {
+  return Array.from({ length: 42 }, (_, index) => {
     const day = index - offset + 1;
     return day < 1 || day > count ? null : `${value}-${String(day).padStart(2, '0')}`;
   });
@@ -122,7 +134,37 @@ function ListViewIcon() {
   );
 }
 
-export function Library() {
+function PageControls({
+  page,
+  canGoPrevious,
+  canGoNext,
+  busy,
+  label,
+  onPrevious,
+  onNext,
+}: {
+  page: number;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  busy: boolean;
+  label: string;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <nav className="library-page-controls" aria-label={label}>
+      <button type="button" disabled={!canGoPrevious || busy} onClick={onPrevious}>
+        前へ
+      </button>
+      <span aria-live="polite">{page + 1}ページ目</span>
+      <button type="button" disabled={!canGoNext || busy} onClick={onNext}>
+        次へ
+      </button>
+    </nav>
+  );
+}
+
+export function Library({ setHeaderAction }: LibraryProps) {
   const [today] = useState(() => jstToday());
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -132,12 +174,33 @@ export function Library() {
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
   const [visibleMonth, setVisibleMonth] = useState(() => monthKey(today));
   const [selectedDate, setSelectedDate] = useState(() => today);
+  const [listPage, setListPage] = useState(0);
+  const [dayPage, setDayPage] = useState(0);
 
   const entriesRef = useRef<Entry[] | null>(null);
   const cursorRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const mountedRef = useRef(true);
   const currentMonth = monthKey(today);
+  const headerAction = useMemo(
+    () => (
+      <button
+        type="button"
+        className="library-view-toggle"
+        aria-label={view === 'calendar' ? '一覧で見る' : 'カレンダーで見る'}
+        aria-pressed={view === 'list'}
+        onClick={() => setView((current) => (current === 'calendar' ? 'list' : 'calendar'))}
+      >
+        {view === 'calendar' ? <ListViewIcon /> : <Icon name="calendar" />}
+      </button>
+    ),
+    [view],
+  );
+
+  useLayoutEffect(() => {
+    setHeaderAction(headerAction);
+    return () => setHeaderAction(null);
+  }, [headerAction, setHeaderAction]);
 
   const syncEntries = useCallback((items: Entry[], cursor: string | null) => {
     entriesRef.current = items;
@@ -210,17 +273,10 @@ export function Library() {
   }, [entries]);
   const days = useMemo(() => calendarDays(visibleMonth), [visibleMonth]);
   const monthCovered = hasMonthCoverage(entries ?? [], nextCursor, visibleMonth);
-  function retry() {
-    setBusy(true);
-    setError('');
-    setSessionUnavailable(false);
-    void loadThroughMonth(visibleMonth);
-  }
-
   async function loadMore() {
     const cursor = cursorRef.current;
     const current = entriesRef.current;
-    if (!cursor || current === null || loadingRef.current) return;
+    if (!cursor || current === null || loadingRef.current) return false;
     loadingRef.current = true;
     setBusy(true);
     setError('');
@@ -232,6 +288,7 @@ export function Library() {
         throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
       }
       syncEntries(mergeEntries(current, page.items), page.nextCursor);
+      return true;
     } catch (failure) {
       if (!mountedRef.current) return;
       if (isSessionUnavailable(failure)) setSessionUnavailable(true);
@@ -240,6 +297,36 @@ export function Library() {
       loadingRef.current = false;
       if (mountedRef.current) setBusy(false);
     }
+    return false;
+  }
+
+  function retry() {
+    setBusy(true);
+    setError('');
+    setSessionUnavailable(false);
+    if (view === 'list' && entriesRef.current !== null && cursorRef.current) {
+      void loadMore();
+    } else {
+      void loadThroughMonth(visibleMonth);
+    }
+  }
+
+  function goToNextListPage() {
+    const loadedPages = Math.ceil((entries?.length ?? 0) / listPageSize);
+    if (listPage + 1 < loadedPages) {
+      setListPage((page) => page + 1);
+      return;
+    }
+    if (!nextCursor || !entries) return;
+    const pageIsFull = entries.length % listPageSize === 0;
+    void loadMore().then((loaded) => {
+      if (loaded && pageIsFull) setListPage((page) => page + 1);
+    });
+  }
+
+  function selectDate(date: string) {
+    setSelectedDate(date);
+    setDayPage(0);
   }
 
   function navigateMonth(amount: number) {
@@ -247,103 +334,82 @@ export function Library() {
     if (targetMonth > currentMonth || busy) return;
     setVisibleMonth(targetMonth);
     setSelectedDate(moveDateToMonth(selectedDate, targetMonth));
+    setDayPage(0);
     setBusy(true);
     setError('');
     setSessionUnavailable(false);
     void loadThroughMonth(targetMonth);
   }
 
-  if (sessionUnavailable) {
-    return (
-      <section className="library-session" aria-labelledby="library-title">
-        <h1 className="library-title" id="library-title">
-          記録
-        </h1>
-        <div className="library-state-card">
-          <Icon name="alert" size={44} />
-          <h2>記録を表示できません</h2>
-          <p>以前の記録にはアクセスできない状態です。</p>
-        </div>
-        <Link className="library-primary-link" to="/new">
-          <Icon name="plus" size={20} />
-          <span>新しい日記を書く</span>
-        </Link>
-      </section>
-    );
-  }
-
-  if (entries === null) {
-    return (
-      <section className="library-page" aria-labelledby="library-title">
-        <h1 className="library-title" id="library-title">
-          記録
-        </h1>
-        {error ? (
-          <div className="library-load-error" role="alert">
-            <p>{error}</p>
-            <button type="button" className="library-secondary-button" onClick={retry}>
-              もう一度読み込む
-            </button>
-          </div>
-        ) : (
-          <output className="library-loading">記録を読み込んでいます…</output>
-        )}
-      </section>
-    );
-  }
-
-  if (entries.length === 0 && !nextCursor) {
-    return (
-      <section className="library-empty" aria-labelledby="library-empty-title">
-        <h1 className="library-title">記録</h1>
-        <div className="library-empty-card">
-          <Icon name="book" size={52} />
-          <h2 id="library-empty-title">まだ記録がありません</h2>
-          <p>日記を書くとここに並びます</p>
-        </div>
-        <Link className="library-primary-link" to="/new">
-          <Icon name="plus" size={20} />
-          <span>日記を書く</span>
-        </Link>
-      </section>
-    );
-  }
-
   const selectedLabel = (() => {
     const { month, day } = dateParts(selectedDate);
     return `${month}月${day}日`;
   })();
+  const selectedPageCount = Math.ceil(dayEntries.length / dayPageSize);
+  const activeDayPage = Math.min(dayPage, Math.max(0, selectedPageCount - 1));
+  const visibleDayEntries = dayEntries.slice(
+    activeDayPage * dayPageSize,
+    (activeDayPage + 1) * dayPageSize,
+  );
+  const listPageCount = Math.ceil((entries?.length ?? 0) / listPageSize);
+  const activeListPage = Math.min(listPage, Math.max(0, listPageCount - 1));
+  const visibleListEntries = (entries ?? []).slice(
+    activeListPage * listPageSize,
+    (activeListPage + 1) * listPageSize,
+  );
 
   return (
     <section className="library-page" aria-labelledby="library-title">
-      <header className="library-header">
-        <h1 className="library-title" id="library-title">
-          記録
-        </h1>
-        <button
-          type="button"
-          className="library-view-toggle"
-          aria-label={view === 'calendar' ? '一覧で見る' : 'カレンダーで見る'}
-          aria-pressed={view === 'list'}
-          onClick={() => setView((current) => (current === 'calendar' ? 'list' : 'calendar'))}
-        >
-          {view === 'calendar' ? <ListViewIcon /> : <Icon name="calendar" />}
-        </button>
-      </header>
+      <h1 className="sr-only" id="library-title">
+        記録
+      </h1>
 
-      {error && (
-        <div className="library-inline-error" role="alert">
-          <p>{error}</p>
-          {nextCursor && (
-            <button type="button" className="library-text-button" onClick={retry}>
-              再読み込み
-            </button>
-          )}
+      {sessionUnavailable ? (
+        <div className="library-state-view">
+          <div className="library-state-card">
+            <Icon name="alert" size={44} />
+            <h2>記録を表示できません</h2>
+            <p>以前の記録にはアクセスできない状態です。</p>
+          </div>
+          <button type="button" className="library-secondary-button" onClick={retry}>
+            もう一度読み込む
+          </button>
+          <Link className="library-primary-link" to="/new">
+            <Icon name="plus" size={20} />
+            <span>新しい日記を書く</span>
+          </Link>
         </div>
-      )}
-
-      {view === 'calendar' ? (
-        <>
+      ) : entries === null ? (
+        <div className="library-state-view">
+          <div className="library-state-card" aria-live="polite">
+            {error ? (
+              <>
+                <Icon name="alert" size={44} />
+                <h2>記録を読み込めません</h2>
+                <p>{error}</p>
+                <button type="button" className="library-secondary-button" onClick={retry}>
+                  もう一度読み込む
+                </button>
+              </>
+            ) : (
+              <output className="library-loading">記録を読み込んでいます…</output>
+            )}
+          </div>
+        </div>
+      ) : entries.length === 0 && !nextCursor ? (
+        <div className="library-state-view">
+          <div className="library-state-card">
+            <Icon name="book" size={52} />
+            <h2>まだ記録がありません</h2>
+            <p>日記を書くとここに並びます</p>
+          </div>
+          <Link className="library-primary-link" to="/new">
+            <Icon name="plus" size={20} />
+            <span>日記を書く</span>
+          </Link>
+        </div>
+      ) : view === 'calendar' ? (
+        <div className="library-calendar-view">
           <div className="library-month-toolbar">
             <button
               type="button"
@@ -366,13 +432,21 @@ export function Library() {
             </button>
           </div>
 
-          {!monthCovered && (
-            <output className="library-calendar-status" aria-live="polite">
-              {busy
-                ? 'この月の記録を読み込んでいます…'
-                : 'この月の記録を確認できません。再読み込みしてください。'}
-            </output>
-          )}
+          <div className="library-inline-error" role={error ? 'alert' : undefined}>
+            {error && (
+              <>
+                <p>{error}</p>
+                <button type="button" className="library-secondary-button" onClick={retry}>
+                  再試行
+                </button>
+              </>
+            )}
+          </div>
+
+          <output className="library-calendar-status" aria-live="polite">
+            {!monthCovered &&
+              (busy ? 'この月の記録を読み込んでいます…' : 'この月の記録を確認できません。')}
+          </output>
 
           <table
             className="library-calendar"
@@ -412,7 +486,7 @@ export function Library() {
                           aria-pressed={isSelected}
                           aria-current={date === today ? 'date' : undefined}
                           disabled={busy || !monthCovered}
-                          onClick={() => setSelectedDate(date)}
+                          onClick={() => selectDate(date)}
                         >
                           <span>{day}</span>
                           {count > 0 && <span className="library-day-dot" aria-hidden="true" />}
@@ -431,7 +505,9 @@ export function Library() {
               {monthCovered && dayEntries.length > 1 && <span>・{dayEntries.length}件</span>}
             </h2>
             {monthCovered && dayEntries.length > 0 ? (
-              <EntryHistory entries={dayEntries} compact={dayEntries.length > 1} showDate={false} />
+              <div className="library-day-records">
+                <EntryHistory entries={visibleDayEntries} compact showDate={false} />
+              </div>
             ) : monthCovered ? (
               <div className="library-day-empty">
                 <p>この日の記録はありません</p>
@@ -452,16 +528,53 @@ export function Library() {
                 )}
               </output>
             )}
+            {monthCovered && dayEntries.length > 0 ? (
+              <PageControls
+                page={activeDayPage}
+                canGoPrevious={activeDayPage > 0}
+                canGoNext={activeDayPage + 1 < selectedPageCount}
+                busy={busy}
+                label="選択日の記録のページ送り"
+                onPrevious={() => setDayPage((page) => Math.max(0, page - 1))}
+                onNext={() => setDayPage((page) => page + 1)}
+              />
+            ) : (
+              <div
+                className="library-page-controls library-page-controls--placeholder"
+                aria-hidden="true"
+              />
+            )}
           </section>
-        </>
+        </div>
       ) : (
         <div className="library-list-view">
-          <EntryHistory
-            entries={entries}
-            nextCursor={nextCursor}
-            onLoadMore={() => void loadMore()}
+          <div className="library-inline-error" role={error ? 'alert' : undefined}>
+            {error && (
+              <>
+                <p>{error}</p>
+                <button type="button" className="library-secondary-button" onClick={retry}>
+                  再試行
+                </button>
+              </>
+            )}
+          </div>
+          {visibleListEntries.length > 0 ? (
+            <div className="library-list-records">
+              <EntryHistory entries={visibleListEntries} />
+            </div>
+          ) : (
+            <div className="library-list-empty" aria-live="polite">
+              {busy ? '記録を読み込んでいます…' : '記録を表示できません。再試行してください。'}
+            </div>
+          )}
+          <PageControls
+            page={activeListPage}
+            canGoPrevious={activeListPage > 0}
+            canGoNext={activeListPage + 1 < listPageCount || Boolean(nextCursor)}
             busy={busy}
-            monthHeadings
+            label="記録一覧のページ送り"
+            onPrevious={() => setListPage((page) => Math.max(0, page - 1))}
+            onNext={goToNextListPage}
           />
         </div>
       )}
