@@ -390,7 +390,11 @@ export function Library() {
     activeListPage * listPageSize,
   );
   const listRestorePending =
-    view === 'list' && listPage > listPageCount && Boolean(nextCursor) && busy;
+    view === 'list' &&
+    entries !== null &&
+    Boolean(nextCursor) &&
+    entries.length < targetEntryCount(listPage) &&
+    busy;
 
   useEffect(() => {
     if (entries === null || busy) return;
@@ -405,7 +409,11 @@ export function Library() {
       updateSearch({ listPage: loadedPages });
       return;
     }
-    if (listPage <= listPageCount || !nextCursor || attemptedListRestoreRef.current === listPage) {
+    if (
+      entries.length >= targetEntryCount(listPage) ||
+      !nextCursor ||
+      attemptedListRestoreRef.current === listPage
+    ) {
       return;
     }
 
@@ -451,15 +459,9 @@ export function Library() {
   }
 
   async function goToNextListPage() {
-    if (!entries || !nextCursor || listPage >= Number.MAX_SAFE_INTEGER) return;
-    const targetPage = listPage + 1;
-    const loadedPages = Math.max(1, listPageCount);
-    if (listPage < loadedPages) {
-      updateSearch({ listPage: targetPage });
-      return;
-    }
+    if (!entries || listPage >= Number.MAX_SAFE_INTEGER) return;
 
-    if (entries.length < listPage * listPageSize) {
+    if (nextCursor && entries.length < targetEntryCount(listPage)) {
       const result = await loadThroughListPage(listPage);
       if (result && !result.reachedTarget && result.cursor) {
         setError(
@@ -469,17 +471,27 @@ export function Library() {
       return;
     }
 
+    const targetPage = listPage + 1;
+    if (
+      entries.length >= targetEntryCount(targetPage) ||
+      (!nextCursor && targetPage <= Math.max(1, listPageCount))
+    ) {
+      updateSearch({ listPage: targetPage });
+      return;
+    }
+    if (!nextCursor) return;
+
     const result = await loadThroughListPage(targetPage);
     if (!result || !mountedRef.current) return;
     const loadedPageCount = Math.max(1, Math.ceil(result.entries.length / listPageSize));
     const targetHasEntries = result.entries.length > (targetPage - 1) * listPageSize;
-    if (targetHasEntries) {
+    const targetPageCovered =
+      result.entries.length >= targetEntryCount(targetPage) || result.cursor === null;
+    if (targetHasEntries && targetPageCovered) {
       updateSearch({ listPage: targetPage });
-    } else if (!result.cursor) {
-      updateSearch({ listPage: loadedPageCount });
     } else if (!result.reachedTarget) {
       setError('記録が多いため、読み込めた続きのページを表示しています。次のページから読めます。');
-      updateSearch({ listPage: loadedPageCount });
+      if (!targetHasEntries) updateSearch({ listPage: loadedPageCount });
     }
   }
 
