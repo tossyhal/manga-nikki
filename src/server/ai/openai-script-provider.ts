@@ -143,7 +143,10 @@ export class OpenAIScriptProvider implements ScriptProvider {
           ? 'OPENAI_QUOTA_EXCEEDED'
           : detail?.status === 429
             ? 'OPENAI_RATE_LIMIT'
-            : typeof detail?.status === 'number' && detail.status < 500
+            : typeof detail?.status === 'number' &&
+                detail.status < 500 &&
+                detail.status !== 408 &&
+                detail.status !== 409
               ? 'OPENAI_REQUEST_REJECTED'
               : 'OPENAI_RESULT_UNKNOWN',
       );

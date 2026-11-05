@@ -58,7 +58,12 @@ export function providerFailureOutcome(error: unknown): {
   const status = isRecord(error) ? error.status : undefined;
   const outcome: { state: 'failed' | 'unknown'; requestId?: string } = {
     state:
-      typeof status === 'number' && Number.isInteger(status) && status >= 400 && status < 500
+      typeof status === 'number' &&
+      Number.isInteger(status) &&
+      status >= 400 &&
+      status < 500 &&
+      status !== 408 &&
+      status !== 409
         ? 'failed'
         : 'unknown',
   };

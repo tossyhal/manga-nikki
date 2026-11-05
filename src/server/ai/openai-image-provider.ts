@@ -112,7 +112,10 @@ export class OpenAIImageProvider implements ImageProvider {
             ? 'IMAGE_QUOTA_EXCEEDED'
             : providerStatus === 429
               ? 'IMAGE_RATE_LIMIT'
-              : providerStatus !== undefined && providerStatus < 500
+              : providerStatus !== undefined &&
+                  providerStatus < 500 &&
+                  providerStatus !== 408 &&
+                  providerStatus !== 409
                 ? 'IMAGE_REQUEST_REJECTED'
                 : 'IMAGE_RESULT_UNKNOWN';
           throw new ImageGenerationError(code, panel.index, panels, providerStatus);

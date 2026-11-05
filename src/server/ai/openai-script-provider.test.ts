@@ -112,6 +112,8 @@ describe('OpenAI脚本Provider', () => {
     [{ status: 429, code: 'insufficient_quota' }, 'OPENAI_QUOTA_EXCEEDED'],
     [{ status: 429, code: 'rate_limit_exceeded' }, 'OPENAI_RATE_LIMIT'],
     [{ status: 401 }, 'OPENAI_REQUEST_REJECTED'],
+    [{ status: 408 }, 'OPENAI_RESULT_UNKNOWN'],
+    [{ status: 409 }, 'OPENAI_RESULT_UNKNOWN'],
     [{ status: 503 }, 'OPENAI_RESULT_UNKNOWN'],
   ])('API失敗を安全なコードに変換する', async (error, code) => {
     create.mockReturnValue(apiRequest(Promise.reject({ ...error, message: 'PRIVATE_DIARY' })));
@@ -121,6 +123,8 @@ describe('OpenAI脚本Provider', () => {
   });
   it.each([
     [{ status: 401, requestID: 'request-rejected' }, 'failed'],
+    [{ status: 408, requestID: 'request-timeout' }, 'unknown'],
+    [{ status: 409, requestID: 'request-conflict' }, 'unknown'],
     [{ status: 503, requestID: 'request-unknown' }, 'unknown'],
     [new Error('network failure'), 'unknown'],
   ] as const)('APIの失敗状態を再送せず台帳へ渡す', async (error, state) => {

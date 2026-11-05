@@ -346,6 +346,32 @@ describe('OpenAIの利用制限エラーの分類', () => {
     );
   });
 
+  it.each([
+    [{ status: 401, requestID: 'request-rejected' }, 'IMAGE_REQUEST_REJECTED', 'failed'],
+    [{ status: 408, requestID: 'request-timeout' }, 'IMAGE_RESULT_UNKNOWN', 'unknown'],
+    [{ status: 409, requestID: 'request-conflict' }, 'IMAGE_RESULT_UNKNOWN', 'unknown'],
+  ] as const)('既知の拒否と結果不明を区別して再送しない', async (error, code, state) => {
+    const hooks = {
+      begin: vi.fn(async () => 'attempt-1'),
+      finish: vi.fn(async () => undefined),
+    };
+    imageCall.mockRejectedValue(error);
+
+    await expect(
+      new OpenAIImageProvider('test-key').render(sample, { ...options(), attemptHooks: hooks }),
+    ).rejects.toMatchObject({ code, failedPanel: 1, completedPanels: [] });
+
+    expect(hooks.finish).toHaveBeenCalledExactlyOnceWith(
+      'images',
+      1,
+      'attempt-1',
+      expect.objectContaining({ state, requestId: error.requestID }),
+    );
+    expect(generateCall).toHaveBeenCalledOnce();
+    expect(imageCall).toHaveBeenCalledOnce();
+    expect(editCall).not.toHaveBeenCalled();
+  });
+
   it('API経由でも残高不足を返し、生のエラー情報を出さない', async () => {
     imageCall.mockRejectedValue({
       status: 429,
