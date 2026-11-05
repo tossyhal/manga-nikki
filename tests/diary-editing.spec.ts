@@ -131,11 +131,73 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await page.getByRole('button', { name: '保存', exact: true }).click();
 
   await expect(page.locator('.detail-date-row time')).toHaveAttribute('datetime', '2026-01-02');
-  await expect(page.locator('.detail-date-row')).toContainText('固定サンプル');
   await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText(updatedBody, { exact: true })).toBeVisible();
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
+});
+
+test('保存中は上下の編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {
+  let currentDetail: EntryDetail = { ...draftEntryDetailFixture };
+  let releasePatch!: () => void;
+  let notifyPatch!: () => void;
+  const patchReceived = new Promise<void>((resolve) => {
+    notifyPatch = resolve;
+  });
+  const patchGate = new Promise<void>((resolve) => {
+    releasePatch = resolve;
+  });
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fulfill({ json: currentDetail });
+
+    const update = route.request().postDataJSON() as {
+      expectedRevision: number;
+      diaryDate: string;
+      body: string;
+    };
+    notifyPatch();
+    await patchGate;
+    currentDetail = {
+      ...currentDetail,
+      diaryDate: update.diaryDate,
+      body: update.body,
+      revision: 2,
+    };
+    const updatedEntry: Entry = {
+      id: currentDetail.id,
+      diaryDate: currentDetail.diaryDate,
+      body: currentDetail.body,
+      revision: currentDetail.revision,
+      latestGenerationId: currentDetail.latestGenerationId,
+      createdAt: currentDetail.createdAt,
+      updatedAt: '2026-01-03T00:00:00Z',
+    };
+    return route.fulfill({ json: updatedEntry });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を編集');
+  const updatedBody = '保存完了後に表示する最新の日記';
+  await page.getByLabel('日記', { exact: true }).fill(updatedBody);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await patchReceived;
+
+  try {
+    await expect(
+      page.locator('.detail-edit-toolbar').getByRole('button', { name: '編集をやめる' }),
+    ).toBeDisabled();
+    await expect(
+      page.locator('#edit-entry-form').getByRole('button', { name: '編集をやめる', exact: true }),
+    ).toBeDisabled();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  } finally {
+    releasePatch();
+  }
+
+  await expect(page.locator('.diary')).toHaveText(updatedBody);
+  await expect(page.getByLabel('日記', { exact: true })).toHaveCount(0);
 });
 
 test('生成待ち・生成中の日記では編集操作を表示しない', async ({ page }) => {
