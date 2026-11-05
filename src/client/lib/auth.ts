@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getClientConfig } from './config';
 
 export class ClientAuthError extends Error {
@@ -13,27 +13,30 @@ const sessionUnavailableMessage =
 const configUnavailableMessage =
   '現在、保存を利用できません。入力した本文はこの画面に残っています。時間をおいて、もう一度お試しください。';
 
-let supabaseClient: SupabaseClient | null = null;
+let supabaseClientPromise: Promise<SupabaseClient> | null = null;
 let registrationInFlight: Promise<string> | null = null;
 
-function getSupabaseClient(): SupabaseClient {
+async function getSupabaseClient(): Promise<SupabaseClient> {
   const url = import.meta.env.VITE_SUPABASE_URL?.trim();
   const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!url || !publishableKey) throw new ClientAuthError(configUnavailableMessage);
-  if (!supabaseClient) {
-    try {
-      supabaseClient = createClient(url, publishableKey, {
-        auth: {
-          autoRefreshToken: true,
-          persistSession: true,
-          detectSessionInUrl: false,
-        },
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('@supabase/supabase-js')
+      .then(({ createClient }) =>
+        createClient(url, publishableKey, {
+          auth: {
+            autoRefreshToken: true,
+            persistSession: true,
+            detectSessionInUrl: false,
+          },
+        }),
+      )
+      .catch(() => {
+        supabaseClientPromise = null;
+        throw new ClientAuthError(configUnavailableMessage);
       });
-    } catch {
-      throw new ClientAuthError(configUnavailableMessage);
-    }
   }
-  return supabaseClient;
+  return supabaseClientPromise;
 }
 
 async function assertLiveMode(): Promise<void> {
@@ -45,9 +48,10 @@ async function assertLiveMode(): Promise<void> {
 
 async function readCurrentSession(): Promise<{ accessToken: string } | null> {
   await assertLiveMode();
-  let result: Awaited<ReturnType<ReturnType<typeof getSupabaseClient>['auth']['getSession']>>;
+  let result: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>;
   try {
-    result = await getSupabaseClient().auth.getSession();
+    const client = await getSupabaseClient();
+    result = await client.auth.getSession();
   } catch (error) {
     if (error instanceof ClientAuthError) throw error;
     throw new ClientAuthError(sessionUnavailableMessage);
@@ -72,11 +76,10 @@ export async function registerAnonymousSession(captchaToken: string): Promise<st
     const existing = await readCurrentSession();
     if (existing) return existing.accessToken;
 
-    let result: Awaited<
-      ReturnType<ReturnType<typeof getSupabaseClient>['auth']['signInAnonymously']>
-    >;
+    let result: Awaited<ReturnType<SupabaseClient['auth']['signInAnonymously']>>;
     try {
-      result = await getSupabaseClient().auth.signInAnonymously({
+      const client = await getSupabaseClient();
+      result = await client.auth.signInAnonymously({
         options: { captchaToken },
       });
     } catch {

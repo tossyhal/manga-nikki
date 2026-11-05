@@ -59,9 +59,21 @@ assert.match(worker, /SKIP_WAITING/);
 assert.equal((worker.match(/self\.skipWaiting\(\)/g) ?? []).length, 1);
 assert.doesNotMatch(worker, /clientsClaim/);
 
-const appBundle = files.find((file) => /^index-.+\.js$/.test(file));
-assert.ok(appBundle, 'アプリケーションのバージョン付きJSがありません。');
-const appSource = await readFile(`${clientDir}assets/${appBundle}`, 'utf8');
+for (const file of files.filter((file) => /\.(?:js|css)$/.test(file))) {
+  assert.ok(
+    precacheUrls.includes(`assets/${file}`),
+    `静的コードがキャッシュ一覧にありません: ${file}`,
+  );
+}
+const html = await readFile(`${clientDir}index.html`, 'utf8');
+const entryScripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/g)].map(
+  (match) => match[1],
+);
+assert.equal(entryScripts.length, 1, 'アプリケーションの入口JSを一意に特定できません。');
+const appBundle = entryScripts[0];
+assert.match(appBundle, /^\/assets\/index-[a-zA-Z0-9_-]+\.js$/);
+assert.ok(precacheUrls.includes(appBundle.slice(1)), '入口JSがキャッシュ一覧にありません。');
+const appSource = await readFile(`${clientDir}${appBundle.slice(1)}`, 'utf8');
 assert.match(appSource, /updateServiceWorker/);
 assert.doesNotMatch(appSource, /autoUpdate/);
 

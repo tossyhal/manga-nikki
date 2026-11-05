@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from './app';
 import { getBearerToken, verifySupabaseAccessToken } from './auth';
 import { mockEnvironment, type Environment } from './mode';
@@ -114,7 +114,14 @@ describe('Supabase access token boundary', () => {
     await expect(
       verifySupabaseAccessToken(environment, token, jwksFetch(environment)),
     ).resolves.toBe(claims.sub);
-    expect((await liveRequest(environment, token, jwksFetch(environment))).status).toBe(503);
+    // SDKのGET再試行は実行し、backoffだけを仮想時間で進める。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.setTimerTickMode('nextTimerAsync');
+    try {
+      expect((await liveRequest(environment, token, jwksFetch(environment))).status).toBe(503);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 15000);
 
   it('rejects a token when the Auth server no longer returns its user', async () => {

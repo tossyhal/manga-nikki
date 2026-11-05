@@ -1,3 +1,4 @@
+import { generationRowSchema, parseGenerationRow } from './generation-row';
 import { z } from 'zod';
 import { comicSchema, type Entry, type Generation } from '../shared/schemas';
 import type { Environment } from './mode';
@@ -22,15 +23,6 @@ const quotaSchema = z.strictObject({
   reset_at: z.iso.datetime({ offset: true }),
   generation_available: z.boolean(),
   profile_is_mock: z.boolean(),
-});
-const generationRowSchema = z.object({
-  id: z.uuid(),
-  entry_id: z.uuid(),
-  entry_revision: z.number().int().positive(),
-  status: generationStatusSchema,
-  stage: z.enum(['script', 'images', 'saving']).nullable(),
-  comic_json: z.unknown().nullable(),
-  is_mock: z.boolean().nullable(),
 });
 const entryRowSchema = z.object({
   id: z.uuid(),
@@ -315,50 +307,14 @@ function toEntry(value: unknown): Entry {
 }
 
 function mapGeneration(value: unknown, entry: Entry, allowHistorical: boolean): Generation {
-  const parsed = generationRowSchema.safeParse(value);
-  if (!parsed.success) throw unavailable();
-  const row = parsed.data;
+  const generation = parseGenerationRow(value);
   if (
-    row.entry_id !== entry.id ||
-    (!allowHistorical && row.id !== entry.latestGenerationId) ||
-    row.is_mock === null
+    !generation ||
+    generation.entryId !== entry.id ||
+    (!allowHistorical && generation.id !== entry.latestGenerationId)
   )
     throw unavailable();
-
-  const base = {
-    id: row.id,
-    entryId: row.entry_id,
-    entryRevision: row.entry_revision,
-    mock: row.is_mock,
-  };
-  if (row.status === 'queued') {
-    if (row.stage !== null) throw unavailable();
-    return { ...base, status: 'queued', stage: null };
-  }
-  if (row.status === 'running') {
-    if (!row.stage) throw unavailable();
-    return { ...base, status: 'running', stage: row.stage };
-  }
-  if (row.stage !== null) throw unavailable();
-  if (row.status === 'succeeded') {
-    const comic = comicSchema.safeParse(row.comic_json);
-    if (!comic.success) throw unavailable();
-    return { ...base, status: 'succeeded', stage: null, comic: comic.data };
-  }
-  if (row.status === 'failed' || row.status === 'unknown') {
-    const unknown = row.status === 'unknown';
-    return {
-      ...base,
-      status: row.status,
-      stage: null,
-      error: {
-        code: unknown ? 'RESULT_UNKNOWN' : 'GENERATION_FAILED',
-        message: unknown ? '生成結果を確認できません。' : '漫画を作成できませんでした。',
-        retryable: false,
-      },
-    };
-  }
-  return { ...base, status: 'cancelled', stage: null };
+  return generation;
 }
 
 export async function getLiveGeneration(
