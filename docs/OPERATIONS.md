@@ -89,7 +89,7 @@
 
 - 制限設定の正本はDBの`private.generation_policy`テーブルです。
   - 初期値：`enabled = false`、全体の日次枠・全期間枠・金額予算はすべて`0`、ユーザーごとの上限は「1日2試行まで・同時実行1ジョブまで」（日付の切り替わりはサーバー側の日本時間JST基準）。
-- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら必ずfail closedにします。default Workerには両handlerを注入していません。
+- 環境変数の`GENERATION_ENABLED="true"`と、DBの`enabled = true`の両方が揃い、正しい固定OpenAI profile・予算・枠がある場合のみ実AIを予約できます。さらにWorker専用API key・Turnstile secret/hostname・Queue・保存handler・復旧callbackが必要で、quota・policy状態の取得に失敗したり不明な場合は停止します。保存系handlerの片方でも未設定なら新規受付を停止します。停止時点ですでにqueuedだったjobと`reserved`枠は維持し、releaseしません。Consumerはclaimや外部呼出しを始めず、handler復帰後にreconcileがQueueへ再送します。default Workerには両handlerを注入していません。
 - `reserve_generation`はサーバー専用RPCの`p_generation_enabled`に環境変数の値を渡します。ブラウザからこの値や予算/profileを受けません。環境変数またはDB policyがfalseなら新規予約を拒否し、`find_generation_receipt`と`reserve_generation`の既存同一要求照会は停止中も同じjobを返します。
 - `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。現在コードが許可する実AI profileはOpenAI脚本`gpt-4.1-mini-2025-04-14` + 白黒画像`gpt-image-2.5-flare`、4 image callsです。profileには`profile_id`、`is_mock=false`、DB管理の正整数`max_cost_micro_usd`を含め、最大費用を予約します。provider/model/color modeなどは固定allowlistと一致しなければ停止し、日記本文やHTTP bodyから受けません。初期policyはdisabled・予算0で、費用負担者と実際の利用可能モデル権限は未確認です。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
@@ -111,6 +111,8 @@
 | `consumed` | 外部AI呼び出しの結果が確定。予約していた最大金額分を消費済みとして確定する |
 | `held` | [用語集](../README.md#glossary)の予約保持状態。自動では返却しない |
 | `released` | 外部AIへ未送信であることが確認できた場合のみ取り消し。元の予約日のカウンターへ1回だけ枠を戻す |
+
+handler未設定による新規生成停止は、providerを未開始のqueued jobを`released`へ精算する条件ではありません。既存同一receiptは再照会でき、予約とqueued状態は維持して、readiness復帰後に再配送します。
 
 - 予算運用の厳守ルール：
   - 生成成功時に「事前見積もり（$C_{\max}$）と実際の消費額の差額」が出ても、MVPでは自動的に余り枠として再利用しません。
@@ -191,7 +193,9 @@
 
 - 本人の削除操作はすぐ、また作成から30日で、RLS/APIの閲覧と新しい署名URLの発行を止めます。これは即時の物理消去を意味しません。
 - `0 15 * * *` UTC（JST 0時）のCronは最大10entryずつ処理します。削除対象はactive generationが無いentryに限り、claim tokenと15分leaseでStorage通信を保護します。cleanupはactive jobの状態を直接変更せず、active jobが残るentryを後回しにします。
-- 1分のgeneration reconcileは`list_generation_reconcile_candidates_v2`を使い、取消・削除・entry期限切れjobの通常精算、期限切れOpenAI saving jobの復旧、未配送queued jobの再送の順で処理します。live-demoのsaving復旧は`recoverGeneratedComic`が注入されていれば`GENERATION_ENABLED=false`またはOpenAI API keyなしでも続行し、保存側のdurable taskをgeneration IDから再開します。復旧callbackはAI providerを呼びません。`pending`または一時障害では`stage=saving`を保持し、`failed` / `cancelled`へ進める場合は保存側が安全な終端状態を確定します。`unknown` jobと予約枠は自動解放せず、active jobのままなら期限削除も保留されます。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
+- 1分のgeneration reconcileは`list_generation_reconcile_candidates_v2(p_limit=25)`を使います。DB候補選択は通常精算→保存復旧→enqueueの順で、復旧候補は最大3件、enqueue候補がある場合は精算後の残枠のおよそ半分までを割り当て、残りでenqueueします。5分先の`save_recovery_retry_at`が未来のsaving jobは候補から外し、expire扱いにしません。Runtime実行順は通常精算→enqueue→保存復旧で、queue送信枠を先に確保します。
+- saving復旧callback前に`begin_generation_save_recovery(p_generation_id)`がDB lock下でstatus/stage/profile/owner/entry/claim deadline/reservation/retry dueを再検査し、成功時は`save_recovery_retry_at=now()+5分`を設定します。他workerに先に取得された・不適格なら`false`を返し、callbackは呼びません。元のprovider claim・attempt台帳は変更せず、AI providerは再実行しません。Cron一回あたりcallbackは最大3件、各最大120秒で、元のprovider claim deadlineから24時間以内に限ります。
+- live-demoでは復旧callbackが注入されていれば`GENERATION_ENABLED=false`またはOpenAI API keyなしでも既存saving taskをgeneration IDから再開します。`pending`または一時障害では`stage=saving`を維持し、24時間を超えたjobは通常expire精算で`failed` / `consumed`とし、予約をreleaseせず再生成もしません。取消・削除・entry期限切れjobは復旧候補より先に通常精算し、`unknown` jobは自動解放しません。Queue/reconcileがない環境でもcleanupがjob状態を強制変更することはありません。
 - Storage `remove`後に`list`でpath不在を確認できた時だけDB finalizeし、asset→job→entryを消します。remove/list障害ではDB metadata・jobを残し、すでに消えた画像は次回の`remove`と`list`確認で安全に再試行します。
 - 日次batch上限を超えたdue entryは次の日次実行以降に残ります。Storage障害のentryも15分lease失効後に再claim可能ですが、同じ日の日次Cronは再実行しないため、通常の再試行機会は次回日次実行です。active jobがsettleした後も、cleanup実行は次の日次枠まで待つことがあります。物理消去を30日以内に保証するものではありません。
 - cleanup結果のaggregate logは`claimed` / `deleted` / `retrying` / `stale`の件数だけで、owner・本文・object path・claim tokenは記録しません。claim/finalize RPCの依存障害は一般化したエラーでCron invocationを失敗扱いにします。retryingはStorage remove/list失敗、staleはlease/token/期限/path集合の再検証不一致です。

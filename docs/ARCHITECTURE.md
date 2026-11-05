@@ -85,9 +85,10 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
    - 保存handler・Storage・実AI用completion RPC・復旧handler本体は未接続です。`createWorker({ saveGeneratedComic, recoverGeneratedComic })`でどちらか一方でもhandlerを注入しない場合、新規live生成の可用性はfalseとなり、ConsumerはAI providerを呼びません。
 5. 中断・障害時の扱い
    - 外部AIへリクエストを送信した後に処理が中断した場合は、[用語集](../README.md#glossary)の`unknown`として記録・照合します（`running`状態のジョブを自動的に`queued`へ戻して再実行することはしません）。
-   - 保存handlerのthrow・不正結果はQueue messageをackし、jobを`running` / `saving`のまま保ちます。Cronは取消・削除・entry期限切れの通常精算を先に行い、次に期限切れOpenAI saving jobを`recoverGeneratedComic`へ渡し、最後に未配送jobを再送します。
+   - 保存handlerのthrow・不正結果はQueue messageをackし、jobを`running` / `saving`のまま保ちます。DBは通常精算、復旧、enqueue候補の順に選び、復旧は最大3件、enqueue候補がある場合は残枠のおよそ半分までに制限します。retry futureのsaving jobは候補から外し、24時間を超えたjobは通常expireへ回します。
+   - Runtimeの実行順は通常精算→enqueue→保存復旧です。Queue送信枠を先に確保し、復旧callbackの前に`begin_generation_save_recovery`でDB markerを取得します。1回のCronでは最大3 callback、各最大120秒、原claim deadlineから24時間以内に実行します。RPCがmarkerを5分先へ進めるため、保存復旧の各試行には5分のbackoffがあります。
    - 保存handlerはscript・asset/taskの再開情報をdurableに早期記録します。復旧callbackは保存済みdurable情報とgeneration IDから保存だけを再開し、新しいAI呼出しをしません。未保存の画像bytes保持は保証されず、復旧情報が足りない場合は保存担当が安全な失敗・取消を確定します。
-   - live-demo Cronの保存復旧は`recoverGeneratedComic`があれば`GENERATION_ENABLED=false`やOpenAI API key不在でも動作します。新規AI呼出しのready条件とは分離し、復旧callbackはowner・保存用lease・期限・削除/cancelを検証して保存完了または安全な終端状態を確定します。
+   - live-demo Cronの保存復旧は`recoverGeneratedComic`があれば`GENERATION_ENABLED=false`やOpenAI API key不在でも動作します。新規AI呼出しのready条件とは分離し、復旧callbackはowner・保存用lease・期限・削除/cancelを検証して保存完了または安全な終端状態を確定します。5分の待機中はsaving jobをexpireやterminal statusへ進めません。復旧期限の24時間を過ぎた場合は通常expireでfailed / consumedとして精算し、予約をreleaseせずAI再実行もしません。
 
 ### キューとタイムアウトの初期設定値
 
@@ -117,7 +118,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 - `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
 - 実AIは`live-demo`で`GENERATION_ENABLED=true`とDBの`enabled`が両方有効、固定profile・予算・quota・認証・Turnstile・Queue・OpenAI key・保存handler・復旧callback等がすべて整う場合だけ呼びます。現default Workerは保存・復旧handler未注入のため無効です。他モードでの`GENERATION_ENABLED=true`は拒否します。
 - local-connectedのmock予約は`reserve_mock_generation`だけで行い、DB policyが有効かつmock profileのときに限ります。実profileはこの経路から予約できません。
-- Queueには`{ generationId }`だけを送ります。Worker Consumerはlocal-connectedのmock profileまたはlive-demoのOpenAI profileを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合は取消・削除・期限切れjobの通常精算、期限切れOpenAI saving jobの保存復旧、未配送queuedの再送の順で処理します。保存復旧はcallbackがあれば新規生成flagやOpenAI keyなしで動作し、AIを再実行しません。`unknown`を自動再実行しません。
+- Queueには`{ generationId }`だけを送ります。Worker Consumerはlocal-connectedのmock profileまたはlive-demoのOpenAI profileを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合ではDBが取消・削除・期限切れjob、復旧可能なOpenAI saving job、未配送queued jobの順に候補を選びます。Runtimeは候補を通常精算→enqueue→保存復旧の順に実行し、queue送信のための枠を確保します。保存復旧はcallbackがあれば新規生成flagやOpenAI keyなしで動作し、最大3件/cron、各120秒、元claim deadlineから24時間以内に限り、AIを再実行しません。`unknown`を自動再実行しません。
 - モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`、`dev.vars.local-connected.example`はSupabase接続を設定する開発用見本です。共有DBへのmigration適用前にlocal-connectedを有効なDBへ接続しないでください。
 
 ### PWA（Progressive Web App）の設計方針
