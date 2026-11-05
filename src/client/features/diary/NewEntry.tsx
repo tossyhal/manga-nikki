@@ -60,9 +60,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
   const quotaRequestRef = useRef(0);
-  const pointerInteractionRef = useRef(false);
-  const pointerCompletionTimerRef = useRef<number | null>(null);
-  const restoreTypingAfterInteractionRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -82,7 +79,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [saved, setSaved] = useState<Entry | null>(null);
   const [date, setDate] = useState(initialDate);
   const [body, setBody] = useState('');
-  const [consent, setConsent] = useState(false);
   const [error, setError] = useState('');
   const [validationFailureCount, setValidationFailureCount] = useState(0);
   const [saveErrorIntent, setSaveErrorIntent] = useState<boolean | null>(null);
@@ -91,7 +87,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
   const [generationFailureEntry, setGenerationFailureEntry] = useState<Entry | null>(null);
-  const [typing, setTyping] = useState(false);
   const [quota, setQuota] = useState<GenerationQuota | null>(null);
   const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
   const [quotaState, setQuotaState] = useState<QuotaState>('loading');
@@ -115,14 +110,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
-
-  function beginPointerInteraction() {
-    if (pointerCompletionTimerRef.current !== null) {
-      window.clearTimeout(pointerCompletionTimerRef.current);
-      pointerCompletionTimerRef.current = null;
-    }
-    pointerInteractionRef.current = true;
-  }
 
   const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
     const requestId = ++quotaRequestRef.current;
@@ -181,49 +168,11 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   }, [online, refreshQuota]);
 
   useEffect(() => {
-    const completePointerInteraction = () => {
-      if (!pointerInteractionRef.current) return;
-      if (pointerCompletionTimerRef.current !== null) {
-        window.clearTimeout(pointerCompletionTimerRef.current);
-        pointerCompletionTimerRef.current = null;
-      }
-      pointerInteractionRef.current = false;
-      if (restoreTypingAfterInteractionRef.current) {
-        restoreTypingAfterInteractionRef.current = false;
-        setTyping(false);
-      }
-    };
-    const finishPointerInteraction = () => {
-      if (!pointerInteractionRef.current) return;
-      if (pointerCompletionTimerRef.current !== null)
-        window.clearTimeout(pointerCompletionTimerRef.current);
-      pointerCompletionTimerRef.current = window.setTimeout(completePointerInteraction, 300);
-    };
-    window.addEventListener('pointerup', finishPointerInteraction, true);
-    window.addEventListener('pointercancel', completePointerInteraction, true);
-    window.addEventListener('click', completePointerInteraction);
-    return () => {
-      window.removeEventListener('pointerup', finishPointerInteraction, true);
-      window.removeEventListener('pointercancel', completePointerInteraction, true);
-      window.removeEventListener('click', completePointerInteraction);
-      if (pointerCompletionTimerRef.current !== null)
-        window.clearTimeout(pointerCompletionTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
     if (!error) return;
     const alert = saveErrorCardRef.current ?? errorRef.current;
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView({ block: 'center' });
   }, [error, saveErrorIntent, validationFailureCount]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const useInlineActions = typing && window.matchMedia('(max-width: 700px)').matches;
-    root.classList.toggle('entry-keyboard-active', useInlineActions);
-    return () => root.classList.remove('entry-keyboard-active');
-  }, [typing]);
 
   function showValidationError(message: string) {
     setValidationFailureCount((count) => count + 1);
@@ -328,10 +277,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       showValidationError('日付は今日以前、本文は1〜1,000文字で入力してください。');
       return;
     }
-    if (!consent) {
-      showValidationError('保存と匿名利用の条件を確認してください。');
-      return;
-    }
     setSaveErrorIntent(null);
     setError('');
     actionInFlightRef.current = true;
@@ -371,10 +316,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     if (!navigator.onLine) {
       refreshOnlineStatus();
       setError('オフラインのため保存できません。入力内容はこの画面に残っています。');
-      return;
-    }
-    if (!consent) {
-      showValidationError('同意が確認できないため匿名登録を停止しました。');
       return;
     }
     if (!captchaToken) {
@@ -445,17 +386,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
 
   return (
     <section className={pageClasses}>
-      <header className="form-page-header">
-        <h1>日記を書く</h1>
-        <button
-          className="button-text"
-          disabled={busy || saved !== null || !online}
-          type="button"
-          onClick={() => void save(false)}
-        >
-          下書き保存
-        </button>
-      </header>
       {online && quota && !showQuotaStatus && (
         <div className="sr-only">
           <GenerationQuotaStatus
@@ -466,7 +396,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
         </div>
       )}
       <form
-        className="entry-form"
+        className="entry-form new-entry-form"
         onSubmit={(event) => {
           event.preventDefault();
           void save(saveErrorIntent ?? canGenerate);
@@ -474,20 +404,30 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
       >
         <fieldset disabled={busy || saved !== null} className="entry-form-fields">
           <div className="date-row">
-            <label className="date-display" htmlFor="date">
-              <time dateTime={date}>{formatDiaryDate(date)}</time>
-              <Icon name="calendar" size={20} />
-            </label>
-            <input
-              id="date"
-              aria-label="日付"
-              className="date-picker-input"
-              type="date"
-              value={date}
-              max={jstToday()}
-              onChange={(event) => setDate(event.target.value)}
-              required
-            />
+            <div className="date-control">
+              <label className="date-display" htmlFor="date">
+                <time dateTime={date}>{formatDiaryDate(date)}</time>
+                <Icon name="calendar" size={20} />
+              </label>
+              <input
+                id="date"
+                aria-label="日付"
+                className="date-picker-input"
+                type="date"
+                value={date}
+                max={jstToday()}
+                onChange={(event) => setDate(event.target.value)}
+                required
+              />
+            </div>
+            <button
+              className="button-text"
+              disabled={busy || saved !== null || !online}
+              type="button"
+              onClick={() => void save(false)}
+            >
+              下書き保存
+            </button>
           </div>
           <div className="entry-editor-card">
             <label className="entry-editor-title" htmlFor="body">
@@ -502,20 +442,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
               placeholder="今日のできごとを書いてみよう。"
               required
               aria-describedby="count summary-preview"
-              onFocus={() => {
-                restoreTypingAfterInteractionRef.current = false;
-                setTyping(true);
-              }}
-              onBlur={(event) => {
-                const nextTarget = event.relatedTarget;
-                const movingToConsent =
-                  nextTarget instanceof HTMLElement && nextTarget.closest('.consent-card') !== null;
-                if (pointerInteractionRef.current || movingToConsent) {
-                  restoreTypingAfterInteractionRef.current = true;
-                  return;
-                }
-                setTyping(false);
-              }}
             />
             <div className="entry-editor-footer">
               <p id="summary-preview" className="summary-preview sr-only">
@@ -581,33 +507,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
             </button>
           </>
         )}
-        {online && (
-          <label className="consent-card" onPointerDownCapture={beginPointerInteraction}>
-            <input
-              type="checkbox"
-              checked={consent}
-              disabled={busy || saved !== null}
-              onChange={(event) => {
-                setConsent(event.target.checked);
-                if (!pointerInteractionRef.current && document.activeElement?.id !== 'body') {
-                  restoreTypingAfterInteractionRef.current = false;
-                  setTyping(false);
-                }
-                if (!event.target.checked) setPendingSave(null);
-              }}
-              onBlur={() => {
-                if (pointerInteractionRef.current) return;
-                restoreTypingAfterInteractionRef.current = false;
-                setTyping(false);
-              }}
-            />
-            <span>
-              {config.dataMode === 'mock'
-                ? '記録は一時保存で、予告なく消えることがあります。漫画は固定サンプルで、入力内容は反映されずAIにも送信されません。'
-                : `記録を保存し、保存後${config.retentionDays}日を過ぎると閲覧できなくなることに同意します。匿名セッションはこのブラウザに保存され、別の端末へ引き継げません。ブラウザデータを失うと記録を復旧できない場合があります。${config.generationAvailable ? ' 漫画は固定サンプルで、入力内容をAIに送信しません。' : ' 現在、漫画生成は利用できません。'}`}
-            </span>
-          </label>
-        )}
         {pendingSave !== null && config.dataMode === 'live' && (
           <section className="captcha-card" aria-label="匿名登録">
             <p>匿名登録を続けるため、登録用の確認を行います。</p>
@@ -672,24 +571,24 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
           </button>
         )}
         {!online ? null : (
-          <div className="primary-action-dock">
-            <button
-              className="button button-primary"
-              disabled={primaryDisabled}
-              type="submit"
-              onPointerDownCapture={beginPointerInteraction}
-            >
-              {busy
-                ? '保存しています…'
-                : saveErrorIntent !== null
-                  ? 'もう一度保存'
-                  : canGenerate
-                    ? '4コマにする'
-                    : quotaState === 'loading' && configAllowsGeneration
-                      ? '利用枠を確認しています…'
-                      : '下書きとして保存'}
-            </button>
-          </div>
+          <>
+            {import.meta.env.PROD && config.dataMode === 'live' && config.generationAvailable && (
+              <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
+            )}
+            <div className="primary-action-dock">
+              <button className="button button-primary" disabled={primaryDisabled} type="submit">
+                {busy
+                  ? '保存しています…'
+                  : saveErrorIntent !== null
+                    ? 'もう一度保存'
+                    : canGenerate
+                      ? '4コマにする'
+                      : quotaState === 'loading' && configAllowsGeneration
+                        ? '利用枠を確認しています…'
+                        : '下書きとして保存'}
+              </button>
+            </div>
+          </>
         )}
       </form>
     </section>

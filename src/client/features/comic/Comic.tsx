@@ -5,7 +5,6 @@ import { Icon } from '../../app/Icon';
 export function Comic({
   comic,
   images,
-  mock = false,
   imageError = false,
   titleAs: Title = 'h2',
   hideTitle = false,
@@ -131,7 +130,6 @@ export function Comic({
               )}
             </>
           )}
-          {mock && <small>固定サンプルです。入力内容は反映されず、AIにも送信されません。</small>}
         </figcaption>
       </figure>
       <dialog

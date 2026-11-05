@@ -78,15 +78,7 @@ function formatEntryDate(date: string) {
   return monthDay;
 }
 
-function SavedComic({
-  comic,
-  mock,
-  hideTitle,
-}: {
-  comic: ComicDocument;
-  mock: boolean;
-  hideTitle: boolean;
-}) {
+function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
   const [images, setImages] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   useEffect(() => {
@@ -110,13 +102,7 @@ function SavedComic({
           画像を取得できません。{error}
         </p>
       )}
-      <Comic
-        comic={comic}
-        images={images}
-        mock={mock}
-        imageError={Boolean(error)}
-        hideTitle={hideTitle}
-      />
+      <Comic comic={comic} images={images} imageError={Boolean(error)} hideTitle={hideTitle} />
     </>
   );
 }
@@ -884,7 +870,6 @@ function DetailContent({
           {!editing && !statusView && !draftSavedConfirmation && (
             <div className="detail-date-row">
               <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
-              {generation?.mock && <span className="sample-tag">固定サンプル</span>}
             </div>
           )}
           {!editing && draftSavedConfirmation && (
@@ -982,7 +967,6 @@ function DetailContent({
                 <SavedComic
                   key={generation.id}
                   comic={generation.comic}
-                  mock={generation.mock}
                   hideTitle={generationForCurrentRevision}
                 />
               )}
@@ -1158,26 +1142,13 @@ function DetailContent({
       )}
       {entry && !editing && (
         <>
-          <aside className="detail-meta-note">
-            {statusView && (
+          {statusView && (
+            <aside className="detail-meta-note">
               <div className="detail-date-row">
                 <time dateTime={entry.diaryDate}>{formatEntryDate(entry.diaryDate)}</time>
-                {generation?.mock && <span className="sample-tag">固定サンプル</span>}
               </div>
-            )}
-            <p>
-              {config.dataMode === 'mock'
-                ? '一時保存しました。'
-                : `この匿名アカウントに保存しました。保存後${config.retentionDays}日を過ぎると閲覧できなくなります。`}
-            </p>
-            {config.dataMode !== 'sample' &&
-              config.generationAvailable &&
-              !(generation?.status === 'succeeded' && generation.mock) && (
-                <p>
-                  このアプリの漫画は固定サンプルです。入力内容は反映されず、AIにも送信されません。
-                </p>
-              )}
-          </aside>
+            </aside>
+          )}
           {comicFromPreviousRevision && statusView && (
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
