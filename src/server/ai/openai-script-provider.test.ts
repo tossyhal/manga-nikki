@@ -23,16 +23,33 @@ const options = () => ({
   callIndex: 1,
   modelProfile: openaiScriptModelProfile,
 });
-const response = () => ({ status: 'completed', output: [], output_text: JSON.stringify(sample) });
+const response = () => ({
+  status: 'completed',
+  output: [],
+  output_text: JSON.stringify(sample),
+  usage: { input_tokens: 11, output_tokens: 22, total_tokens: 33 },
+});
+const apiRequest = (data: unknown, requestId: string | null = 'request-test') => ({
+  withResponse: vi.fn(async () => ({
+    data: await data,
+    request: new Response(),
+    request_id: requestId,
+  })),
+});
 beforeEach(() => {
-  create.mockReset().mockResolvedValue(response());
+  create.mockReset().mockReturnValue(apiRequest(response()));
   construct.mockReset();
 });
 describe('OpenAI脚本Provider', () => {
   it('JSON形式を指定して1回呼び出し、既存の脚本形式で返す', async () => {
     const config = options();
     expect(await new OpenAIScriptProvider('test-key').createScript(input, config)).toEqual(sample);
-    expect(construct).toHaveBeenCalledWith({ apiKey: 'test-key', timeout: 120_000, maxRetries: 0 });
+    expect(construct).toHaveBeenCalledWith({
+      apiKey: 'test-key',
+      timeout: 120_000,
+      maxRetries: 0,
+      logLevel: 'off',
+    });
     expect(create).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         model: openaiScriptModelProfile.modelId,
@@ -45,6 +62,29 @@ describe('OpenAI脚本Provider', () => {
       }),
       { signal: config.signal },
     );
+    expect(create.mock.results[0]?.value.withResponse).toHaveBeenCalledOnce();
+  });
+  it('送信前に台帳を開始し、responseのrequest IDとusageを確定へ渡す', async () => {
+    const hooks = {
+      begin: vi.fn(async () => 'attempt-id'),
+      finish: vi.fn(async () => undefined),
+    };
+    const config = { ...options(), attemptHooks: hooks };
+
+    await new OpenAIScriptProvider('test-key').createScript(input, config);
+
+    expect(hooks.begin).toHaveBeenCalledExactlyOnceWith('script', 1);
+    expect(hooks.finish).toHaveBeenCalledExactlyOnceWith('script', 1, 'attempt-id', {
+      state: 'succeeded',
+      requestId: 'request-test',
+      metadata: {
+        stage: 'script',
+        callIndex: 1,
+        modelId: openaiScriptModelProfile.modelId,
+        requestId: 'request-test',
+        usage: { inputTokens: 11, outputTokens: 22, totalTokens: 33 },
+      },
+    });
   });
   it.each([
     [{ ...response(), status: 'incomplete' }, 'OPENAI_INCOMPLETE_OUTPUT'],
@@ -62,7 +102,7 @@ describe('OpenAI脚本Provider', () => {
       'OPENAI_REFUSED',
     ],
   ])('不完全・不正な返答を拒否し再送しない', async (result, code) => {
-    create.mockResolvedValue(result);
+    create.mockReturnValue(apiRequest(result));
     await expect(
       new OpenAIScriptProvider('key').createScript(input, options()),
     ).rejects.toMatchObject({ code });
@@ -74,10 +114,41 @@ describe('OpenAI脚本Provider', () => {
     [{ status: 401 }, 'OPENAI_REQUEST_REJECTED'],
     [{ status: 503 }, 'OPENAI_RESULT_UNKNOWN'],
   ])('API失敗を安全なコードに変換する', async (error, code) => {
-    create.mockRejectedValue({ ...error, message: 'PRIVATE_DIARY' });
+    create.mockReturnValue(
+      apiRequest(Promise.reject({ ...error, message: 'PRIVATE_DIARY' })),
+    );
     const result = new OpenAIScriptProvider('key').createScript(input, options());
     await expect(result).rejects.toMatchObject({ code, message: code });
     expect(create).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    [{ status: 401, requestID: 'request-rejected' }, 'failed'],
+    [{ status: 503, requestID: 'request-unknown' }, 'unknown'],
+    [new Error('network failure'), 'unknown'],
+  ] as const)('APIの失敗状態を再送せず台帳へ渡す', async (error, state) => {
+    const hooks = {
+      begin: vi.fn(async () => 'attempt-id'),
+      finish: vi.fn(async () => undefined),
+    };
+    create.mockReturnValue(apiRequest(Promise.reject(error)));
+
+    await expect(
+      new OpenAIScriptProvider('key').createScript(input, {
+        ...options(),
+        attemptHooks: hooks,
+      }),
+    ).rejects.toBeDefined();
+
+    expect(hooks.finish).toHaveBeenCalledExactlyOnceWith(
+      'script',
+      1,
+      'attempt-id',
+      expect.objectContaining({
+        state,
+        ...('requestID' in error ? { requestId: error.requestID } : {}),
+      }),
+    );
+    expect(create).toHaveBeenCalledOnce();
   });
   it('キーなし・許可外モデル・中断時は送信しない', async () => {
     expect(() => new OpenAIScriptProvider('')).toThrow('OPENAI_KEY_MISSING');
@@ -85,7 +156,7 @@ describe('OpenAI脚本Provider', () => {
     await expect(
       provider.createScript(input, {
         ...options(),
-        modelProfile: { provider: 'gemini', modelId: 'other' },
+        modelProfile: { provider: 'other', modelId: 'other' },
       }),
     ).rejects.toThrow('OPENAI_MODEL_NOT_ALLOWED');
     await expect(

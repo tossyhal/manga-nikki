@@ -6,12 +6,23 @@ import { createApp } from '../app';
 import { mockEnvironment } from '../mode';
 
 const sample = scriptSchema.parse(sampleJson);
-const { imageCall, construct } = vi.hoisted(() => ({ imageCall: vi.fn(), construct: vi.fn() }));
+const { imageCall, generateCall, editCall, construct } = vi.hoisted(() => ({
+  imageCall: vi.fn(),
+  generateCall: vi.fn(),
+  editCall: vi.fn(),
+  construct: vi.fn(),
+}));
 vi.mock('openai', () => ({
   default: class {
     images = {
-      generate: (...args: unknown[]) => ({ withResponse: () => imageCall(...args) }),
-      edit: (...args: unknown[]) => ({ withResponse: () => imageCall(...args) }),
+      generate: (...args: unknown[]) => {
+        generateCall(...args);
+        return { withResponse: () => imageCall(...args) };
+      },
+      edit: (...args: unknown[]) => {
+        editCall(...args);
+        return { withResponse: () => imageCall(...args) };
+      },
     };
     constructor(options: unknown) {
       construct(options);
@@ -51,16 +62,69 @@ const request = (script: unknown = sample) => ({
 beforeEach(() => {
   vi.restoreAllMocks();
   imageCall.mockReset().mockResolvedValue(imageResponse());
+  generateCall.mockReset();
+  editCall.mockReset();
   construct.mockReset();
 });
 
 describe('OpenAI画像Provider', () => {
   it('最初は生成、後続は最初の画像を参照して4枚を生成する', async () => {
-    const result = await new OpenAIImageProvider('test-key').render(sample, options());
+    const events: string[] = [];
+    const hooks = {
+      begin: vi.fn(async (_stage: string, callIndex: number) => {
+        events.push(`begin:${callIndex}`);
+        return `attempt-${callIndex}`;
+      }),
+      finish: vi.fn(async (_stage: string, callIndex: number, _attemptId: string, outcome) => {
+        events.push(`finish:${callIndex}:${outcome.state}`);
+      }),
+    };
+    generateCall.mockImplementation(() => events.push('generate'));
+    editCall.mockImplementation(() => events.push('edit'));
+    const result = await new OpenAIImageProvider('test-key').render(sample, {
+      ...options(),
+      attemptHooks: hooks,
+    });
     expect(result.panels.map((p) => p.index)).toEqual([1, 2, 3, 4]);
     expect(result.modelId).toBe('gpt-image-2.5-flare');
-    expect(construct).toHaveBeenCalledWith({ apiKey: 'test-key', timeout: 120_000, maxRetries: 0 });
+    expect(construct).toHaveBeenCalledWith({
+      apiKey: 'test-key',
+      timeout: 120_000,
+      maxRetries: 0,
+      logLevel: 'off',
+    });
     expect(imageCall).toHaveBeenCalledTimes(4);
+    expect(events).toEqual([
+      'begin:1',
+      'generate',
+      'finish:1:succeeded',
+      'begin:2',
+      'edit',
+      'finish:2:succeeded',
+      'begin:3',
+      'edit',
+      'finish:3:succeeded',
+      'begin:4',
+      'edit',
+      'finish:4:succeeded',
+    ]);
+    expect(hooks.finish).toHaveBeenNthCalledWith(
+      1,
+      'images',
+      1,
+      'attempt-1',
+      expect.objectContaining({
+        state: 'succeeded',
+        requestId: 'request-test',
+        metadata: expect.objectContaining({
+          stage: 'images',
+          callIndex: 1,
+          modelId: openaiImageModelProfile.modelId,
+          requestId: 'request-test',
+          usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        }),
+      }),
+    );
     const calls = imageCall.mock.calls;
     expect(calls[0]![0]).not.toHaveProperty('image');
     for (const [body, config] of calls) {
@@ -80,18 +144,44 @@ describe('OpenAI画像Provider', () => {
     expect(result.panels[0].usage).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 });
   });
   it('途中失敗で完了済みコマを返し、自動再送しない', async () => {
+    const hooks = {
+      begin: vi.fn(async (_stage: string, callIndex: number) => `attempt-${callIndex}`),
+      finish: vi.fn(async () => undefined),
+    };
     imageCall
       .mockReset()
       .mockResolvedValueOnce(imageResponse())
       .mockRejectedValueOnce({ status: 503 });
     await expect(
-      new OpenAIImageProvider('test-key').render(sample, options()),
+      new OpenAIImageProvider('test-key').render(sample, { ...options(), attemptHooks: hooks }),
     ).rejects.toMatchObject({
       code: 'IMAGE_RESULT_UNKNOWN',
       failedPanel: 2,
       completedPanels: [expect.objectContaining({ index: 1 })],
     });
     expect(imageCall).toHaveBeenCalledTimes(2);
+    expect(hooks.finish).toHaveBeenNthCalledWith(
+      2,
+      'images',
+      2,
+      'attempt-2',
+      expect.objectContaining({ state: 'unknown' }),
+    );
+    expect(hooks.begin).toHaveBeenCalledTimes(2);
+  });
+  it('台帳の開始に失敗したら画像SDK自体を呼ばず、既存結果を保持する', async () => {
+    const hooks = {
+      begin: vi.fn(async () => {
+        throw new Error('ledger unavailable');
+      }),
+      finish: vi.fn(async () => undefined),
+    };
+    await expect(
+      new OpenAIImageProvider('test-key').render(sample, { ...options(), attemptHooks: hooks }),
+    ).rejects.toMatchObject({ code: 'IMAGE_RESULT_UNKNOWN', completedPanels: [] });
+    expect(generateCall).not.toHaveBeenCalled();
+    expect(editCall).not.toHaveBeenCalled();
+    expect(imageCall).not.toHaveBeenCalled();
   });
   it.each([
     { created: 1, data: [] },
@@ -99,11 +189,21 @@ describe('OpenAI画像Provider', () => {
     { created: 1, data: [{ url: 'https://untrusted.example/image.png' }] },
     { created: 1, data: [{ b64_json: png }, { b64_json: png }] },
   ])('不正な画像出力を拒否する', async (data) => {
+    const hooks = {
+      begin: vi.fn(async () => 'attempt-1'),
+      finish: vi.fn(async () => undefined),
+    };
     imageCall.mockResolvedValue({ data, request_id: 'request-test' });
     await expect(
-      new OpenAIImageProvider('test-key').render(sample, options()),
+      new OpenAIImageProvider('test-key').render(sample, { ...options(), attemptHooks: hooks }),
     ).rejects.toMatchObject({ failedPanel: 1, completedPanels: [] });
     expect(imageCall).toHaveBeenCalledTimes(1);
+    expect(hooks.finish).toHaveBeenCalledExactlyOnceWith(
+      'images',
+      1,
+      'attempt-1',
+      expect.objectContaining({ state: 'succeeded', requestId: 'request-test' }),
+    );
   });
   it('キー不足、中断済み、不正脚本、許可外モデルでは送信しない', async () => {
     expect(() => new OpenAIImageProvider('')).toThrow('IMAGE_KEY_MISSING');
@@ -119,7 +219,7 @@ describe('OpenAI画像Provider', () => {
     await expect(
       provider.render(sample, {
         ...options(),
-        modelProfile: { provider: 'gemini', modelId: 'other' },
+        modelProfile: { provider: 'other', modelId: 'other' },
       }),
     ).rejects.toMatchObject({ code: 'IMAGE_MODEL_NOT_ALLOWED' });
     expect(imageCall).not.toHaveBeenCalled();
@@ -230,10 +330,20 @@ describe('OpenAIの利用制限エラーの分類', () => {
   });
 
   it('通常の頻度制限はIMAGE_RATE_LIMITで返す', async () => {
+    const hooks = {
+      begin: vi.fn(async () => 'attempt-1'),
+      finish: vi.fn(async () => undefined),
+    };
     imageCall.mockRejectedValue({ status: 429, code: 'rate_limit_exceeded' });
     await expect(
-      new OpenAIImageProvider('test-key').render(sample, options()),
+      new OpenAIImageProvider('test-key').render(sample, { ...options(), attemptHooks: hooks }),
     ).rejects.toMatchObject({ code: 'IMAGE_RATE_LIMIT' });
+    expect(hooks.finish).toHaveBeenCalledExactlyOnceWith(
+      'images',
+      1,
+      'attempt-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
   });
 
   it('API経由でも残高不足を返し、生のエラー情報を出さない', async () => {

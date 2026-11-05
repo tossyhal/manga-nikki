@@ -6,6 +6,7 @@ import type {
   ScriptProvider,
   ScriptResult,
 } from './script-provider.ts';
+import { providerFailureOutcome, providerResponseMetadata } from './openai-attempt-result.ts';
 
 export const openaiScriptModelProfile = {
   provider: 'openai',
@@ -60,7 +61,7 @@ const systemInstruction = [
   '傘がない理由、友達が傘に入れてくれたこと、靴が濡れた結果、楽しかった気持ちを対応するコマに残してください。',
   '最後を「話しながら帰る」だけで終えず、captionに「靴は濡れたけど、友達と帰れて楽しかった」と要約できます。',
   'この例の雨・傘・友達・靴・感情を、実際の入力日記に書かれていない場合に流用しないでください。',
-  '【形式】主人公は架空の人間の大学生とし、同じ外見を想定してください。',
+  '【形式】主人公は架空の人物とし、年齢・職業・人間関係を脚本に追加しないでください。',
   'titleは1〜40文字。panelsはindexが1、2、3、4の順のちょうど4コマ。',
   'sceneは絵にする場面説明で1〜250文字。白黒漫画の1コマとして描ける内容にします。',
   'captionは読者向けの説明文、dialogueは原文に明記された発言です。それぞれ0〜70文字。',
@@ -83,7 +84,7 @@ export class OpenAIScriptProvider implements ScriptProvider {
 
   constructor(apiKey: string) {
     if (!apiKey.trim()) throw new OpenAIScriptError('OPENAI_KEY_MISSING');
-    this.client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 0 });
+    this.client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 0, logLevel: 'off' });
   }
 
   async createScript(input: DiarySnapshot, options: CallOptions): Promise<ScriptResult> {
@@ -94,9 +95,12 @@ export class OpenAIScriptProvider implements ScriptProvider {
     ) {
       throw new OpenAIScriptError('OPENAI_MODEL_NOT_ALLOWED');
     }
+    const attemptId = await options.attemptHooks?.begin('script', options.callIndex);
     let response;
+    let requestId: string | null = null;
     try {
-      response = await this.client.responses.create(
+      const result = await this.client.responses
+        .create(
         {
           model: openaiScriptModelProfile.modelId,
           instructions: systemInstruction,
@@ -113,8 +117,14 @@ export class OpenAIScriptProvider implements ScriptProvider {
           store: false,
         },
         { signal: options.signal },
-      );
+        )
+        .withResponse();
+      response = result.data;
+      requestId = result.request_id;
     } catch (error) {
+      const outcome = providerFailureOutcome(error);
+      if (attemptId && options.attemptHooks)
+        await options.attemptHooks.finish('script', options.callIndex, attemptId, outcome);
       const detail = error as { status?: unknown; code?: unknown; type?: unknown } | null;
       const quota = [
         'insufficient_quota',
@@ -138,6 +148,19 @@ export class OpenAIScriptProvider implements ScriptProvider {
               : 'OPENAI_RESULT_UNKNOWN',
       );
     }
+    const metadata = providerResponseMetadata(
+      'script',
+      options.callIndex,
+      openaiScriptModelProfile.modelId,
+      requestId,
+      response.usage,
+    );
+    if (attemptId && options.attemptHooks)
+      await options.attemptHooks.finish('script', options.callIndex, attemptId, {
+        state: 'succeeded',
+        requestId: metadata.requestId,
+        metadata,
+      });
     options.signal.throwIfAborted();
     if (response.status !== 'completed') throw new OpenAIScriptError('OPENAI_INCOMPLETE_OUTPUT');
     if (
