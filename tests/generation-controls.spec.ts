@@ -755,6 +755,106 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   await expect(page.getByRole('button', { name: '新しい確認を取得' })).toHaveCount(0);
 });
 
+test('通信断後の409で進行中を読み込んだら完了後も受付確認を再表示しない', async ({ page }) => {
+  await installLiveSession(page);
+  await installTurnstileFake(page);
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00Z') });
+  const queued = generationFixtures(entryId, generationId).queued;
+  const running = generationFixtures(entryId, generationId).running;
+  const succeeded = generationFixtures(entryId, generationId).succeeded;
+  const latest: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  const generationRequests: Array<{ key: string; captchaToken: string }> = [];
+  let generationPosts = 0;
+  let entryReads = 0;
+  let generationReads = 0;
+  let releaseFirstPoll!: () => void;
+  let notifyFirstPoll!: () => void;
+  let notifyTerminalPoll!: () => void;
+  const firstPollGate = new Promise<void>((resolve) => {
+    releaseFirstPoll = resolve;
+  });
+  const firstPollStarted = new Promise<void>((resolve) => {
+    notifyFirstPoll = resolve;
+  });
+  const terminalPollStarted = new Promise<void>((resolve) => {
+    notifyTerminalPoll = resolve;
+  });
+
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+  );
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    entryReads++;
+    return route.fulfill({ json: generationPosts > 0 ? latest : draftEntryDetailFixture });
+  });
+  await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
+    const body = route.request().postDataJSON() as { captchaToken: string };
+    generationPosts++;
+    generationRequests.push({
+      key: route.request().headers()['idempotency-key'] ?? '',
+      captchaToken: body.captchaToken,
+    });
+    if (generationPosts === 1) return route.abort('failed');
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: {
+          code: 'ENTRY_BUSY',
+          message: 'この記録の漫画を作成中です。',
+          requestId: 'e2e-entry-busy',
+          retryable: false,
+        },
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1) return route.fulfill({ json: queued });
+    if (generationReads === 2) {
+      notifyFirstPoll();
+      await firstPollGate;
+      return route.fulfill({ json: running });
+    }
+    notifyTerminalPoll();
+    return route.fulfill({ json: succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
+    }),
+  );
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '4コマにする' }).click();
+  await expect(page.getByRole('alert')).toContainText('通信に失敗しました');
+  await page.getByRole('button', { name: '受付結果を確認', exact: true }).click();
+  await firstPollStarted;
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '受付結果を確認', exact: true })).toHaveCount(0);
+
+  releaseFirstPoll();
+  await expect(page.getByRole('heading', { name: '画像を描いています' })).toBeVisible();
+  await page.clock.runFor(5000);
+  await terminalPollStarted;
+  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '受付結果を確認', exact: true })).toHaveCount(0);
+
+  expect(entryReads).toBeGreaterThanOrEqual(2);
+  expect(generationRequests).toHaveLength(2);
+  expect(generationRequests[0]?.key).toMatch(/^[0-9a-f-]{36}$/);
+  expect(generationRequests[1]?.key).toBe(generationRequests[0]?.key);
+  expect(generationRequests.map(({ captchaToken }) => captchaToken)).toEqual([
+    'generation-token-e2e-1',
+    '',
+  ]);
+});
+
 test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り直せる', async ({ page }) => {
   await installLiveSession(page);
   await installTurnstileFake(page, { failFirstGeneration: true });
