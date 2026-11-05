@@ -482,7 +482,7 @@
 }
 
 .library-page .entry-history-card {
-  margin-inline: -2px;
+  margin-inline: 0;
 }
 
 .entry-history-card:hover {
