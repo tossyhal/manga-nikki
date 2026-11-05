@@ -39,7 +39,6 @@ export function Library() {
   );
   const canonicalSearch = serializeLibrarySearch(searchState);
   const latestSearchRef = useRef(searchState);
-  const initialSearchRef = useRef(searchState);
   const attemptedListRestoreRef = useRef<number | null>(null);
   const {
     entries,
@@ -52,7 +51,7 @@ export function Library() {
     loadThroughMonth,
     loadThroughListPage,
     mountedRef,
-  } = useLibraryEntries(initialSearchRef.current.month);
+  } = useLibraryEntries(searchState.month);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
 
   useLayoutEffect(() => {
@@ -141,7 +140,18 @@ export function Library() {
         updateSearch({ listPage: loadedPageCount });
       }
     });
-  }, [busy, entries, listPage, listPageCount, loadThroughListPage, nextCursor, updateSearch, view]);
+  }, [
+    busy,
+    entries,
+    listPage,
+    listPageCount,
+    loadThroughListPage,
+    nextCursor,
+    updateSearch,
+    view,
+    setError,
+    mountedRef,
+  ]);
 
   useEffect(() => {
     if (!monthCovered || busy || dayPage <= Math.max(1, selectedPageCount)) return;

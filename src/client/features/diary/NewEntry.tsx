@@ -1,20 +1,13 @@
+import { useGenerationQuota, quotaAllowsGeneration } from './useGenerationQuota';
 import { DiaryDateField } from './DiaryDateField';
 import { DiaryBodyField } from './DiaryBodyField';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { createEntrySchema, jstToday, type Entry, type Generation } from '../../../shared/schemas';
+import { createEntrySchema, jstToday, type Entry } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import { RegistrationCaptcha } from './RegistrationCaptcha';
 import { GenerationQuotaStatus } from './GenerationQuotaStatus';
-import {
-  ApiClientError,
-  createEntry,
-  generate,
-  getGeneration,
-  getQuotaForExistingSession,
-  recheckGeneration,
-  type GenerationQuota,
-} from '../../lib/api';
+import { ApiClientError, createEntry, generate, recheckGeneration } from '../../lib/api';
 import { registerAnonymousSession, getLiveAccessToken } from '../../lib/auth';
 import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
@@ -27,24 +20,12 @@ type NewEntryProps = {
   onActivityChange: (activity: DiaryActivity) => void;
 };
 
-type QuotaState = 'loading' | 'ready' | 'session-required' | 'unavailable';
-
-function generationIsAvailable(quota: GenerationQuota | null): boolean {
-  return Boolean(
-    quota &&
-    quota.generationAvailable &&
-    quota.remainingToday > 0 &&
-    quota.activeGenerationId === null,
-  );
-}
-
 export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
-  const quotaRequestRef = useRef(0);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -72,16 +53,18 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
   const [generationFailureEntry, setGenerationFailureEntry] = useState<Entry | null>(null);
-  const [quota, setQuota] = useState<GenerationQuota | null>(null);
-  const [activeGeneration, setActiveGeneration] = useState<Generation | null>(null);
-  const [quotaState, setQuotaState] = useState<QuotaState>('loading');
+  const { quota, activeGeneration, quotaState, setQuotaState, refreshQuota } = useGenerationQuota({
+    dataMode: config.dataMode,
+    activeRef,
+    markLoading: true,
+  });
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
   const configAllowsGeneration = config.dataMode !== 'sample' && config.generationAvailable;
   const sessionRequired = config.dataMode === 'live' && quotaState === 'session-required';
   const canGenerate =
     online &&
     configAllowsGeneration &&
-    (sessionRequired || (quotaState === 'ready' && generationIsAvailable(quota)));
+    (sessionRequired || (quotaState === 'ready' && quotaAllowsGeneration(quota)));
   const quotaLimited = Boolean(
     config.dataMode !== 'sample' &&
     (!config.generationAvailable ||
@@ -95,38 +78,6 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
-
-  const refreshQuota = useCallback(async (): Promise<GenerationQuota | null> => {
-    const requestId = ++quotaRequestRef.current;
-    if (!activeRef.current) return null;
-    setQuotaState('loading');
-    try {
-      const currentQuota = await getQuotaForExistingSession();
-      if (!activeRef.current || requestId !== quotaRequestRef.current) return null;
-      setQuota(currentQuota);
-      if (!currentQuota) {
-        setActiveGeneration(null);
-        setQuotaState(config.dataMode === 'live' ? 'session-required' : 'unavailable');
-        return null;
-      }
-      setQuotaState('ready');
-      if (currentQuota.activeGenerationId) {
-        const current = await getGeneration(currentQuota.activeGenerationId).catch(() => null);
-        if (activeRef.current && requestId === quotaRequestRef.current)
-          setActiveGeneration(current);
-      } else {
-        setActiveGeneration(null);
-      }
-      return currentQuota;
-    } catch {
-      if (activeRef.current && requestId === quotaRequestRef.current) {
-        setQuota(null);
-        setActiveGeneration(null);
-        setQuotaState('unavailable');
-      }
-      return null;
-    }
-  }, [config.dataMode]);
 
   useLayoutEffect(() => {
     if (activeRef.current) onActivityChange({ dirty, busy });
@@ -211,7 +162,7 @@ export function NewEntry({ config, onActivityChange }: NewEntryProps) {
     if (makeComic && config.dataMode === 'mock') {
       const currentQuota = await refreshQuota();
       if (!activeRef.current) return;
-      if (!generationIsAvailable(currentQuota)) {
+      if (!quotaAllowsGeneration(currentQuota)) {
         setError(
           currentQuota?.activeGenerationId
             ? '別の漫画を作成しています。先に進行中の記録を確認してください。'
