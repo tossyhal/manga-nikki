@@ -165,7 +165,7 @@ test('別タブから明示更新しても未保存の日記タブは保たれ�
     });
     await pageB.goto(`${fixture.origin}/new`);
     await expect.poll(() => getControlledServiceWorkerVersion(pageB)).toBe(1);
-    const diary = pageB.getByLabel('日記', { exact: true });
+    const diary = pageB.getByLabel('今日はどんな日だった？', { exact: true });
     await diary.fill('更新中も残す架空の日記');
     const initialPageBNavigations = pageBNavigations;
 

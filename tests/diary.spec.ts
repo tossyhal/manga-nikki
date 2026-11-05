@@ -18,7 +18,7 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
-  await page.getByLabel('日記', { exact: true }).fill('図書館で本を読んだ。');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('図書館で本を読んだ。');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   expect(externalAuthRequests).toEqual([]);
   await page.getByRole('button', { name: '4コマにする' }).click();
@@ -57,7 +57,9 @@ test('入力からモック漫画を再読込し、最近の記録から削除�
 test('狭い画面で下書き保存とHTML風の文字を安全に表示できる', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('<script>window.injected=true</script>');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('<script>window.injected=true</script>');
   await expect(page.locator('#summary-preview')).toHaveText(
     '見出し：<script>window.injected=true</script>',
   );
@@ -67,7 +69,13 @@ test('狭い画面で下書き保存とHTML風の文字を安全に表示でき�
   );
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(page.locator('.detail-toolbar h1')).toHaveText(
+    '<script>window.injected=true</script>',
+  );
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toHaveCount(0);
   await expect(page.locator('.draft-saved-card')).toBeVisible();
   await page.reload();
   await expect(page.locator('.entry-draft-card .diary')).toHaveText(
@@ -91,7 +99,7 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
   await expect(page.getByText('読み込んでいます…')).toBeVisible();
   await expect(page.getByText('保存機能は利用できません。')).not.toBeVisible();
   release();
-  await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
 });
 
 test('設定取得失敗時は案内と公開サンプルだけを表示する', async ({ page }) => {
@@ -356,7 +364,7 @@ test('ライブの新規作成は入力だけでは登録やCAPTCHA、書き込�
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
   const body = '入力だけの架空の日記\n改行を保持する。';
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill(body);
   await page.getByLabel('日付', { exact: true }).focus();
   await page.keyboard.press('Enter');
@@ -392,10 +400,12 @@ test('通信失敗時に入力と再送IDを維持する', async ({ page }) => {
     await route.fulfill({ status: 409, json: { error: 'generation is not expected' } });
   });
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('通信後も残す架空の日記');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('通信後も残す架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持したまま再操作');
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue('通信後も残す架空の日記');
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(
+    '通信後も残す架空の日記',
+  );
   const errorAlert = page.getByRole('alert');
   await expect(errorAlert).toBeInViewport();
   const alertBottom = await errorAlert.evaluate(
@@ -407,7 +417,9 @@ test('通信失敗時に入力と再送IDを維持する', async ({ page }) => {
   expect(alertBottom).toBeLessThanOrEqual(navigationTop);
   await page.getByRole('button', { name: 'もう一度保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
   await expect(page.locator('.draft-saved-card')).toBeVisible();
   expect(ids).toHaveLength(2);
   expect(ids[0]).toBe(ids[1]);
@@ -448,7 +460,7 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   });
 
   await page.goto('/new');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await expect(diary).toBeVisible();
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
@@ -499,7 +511,7 @@ test('別の日記の通信失敗後に元の日記を再送しても重複作�
     return route.continue();
   });
   await page.goto('/new');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill(firstBody);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
@@ -513,7 +525,7 @@ test('別の日記の通信失敗後に元の日記を再送しても重複作�
   expect(requestIds[0]).toBe(requestIds[2]);
   expect(requestIds[0]).not.toBe(requestIds[1]);
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   await expect(page.locator('.entry-history-card')).toHaveCount(1);
   await expect(page.locator('.entry-history-card')).toContainText(firstBody);
 });

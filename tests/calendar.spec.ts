@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { Entry } from '../src/shared/schemas';
 import { jstToday } from '../src/shared/schemas';
-import { mockClientConfigFixture } from './fixtures/client-config';
+import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
 
 function makeEntry(index: number, diaryDate: string, body: string): Entry {
   return {
@@ -134,7 +134,7 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
   ).toBeVisible();
   expect(requestedCursors.filter(Boolean)).toEqual([]);
 
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   const listControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
   for (let index = 0; index < 6; index++) {
     await listControls.getByRole('button', { name: '次へ' }).click();
@@ -151,6 +151,124 @@ test('カレンダーの月範囲を確定し、一覧の続きをカーソル�
     '先月の架空日記16',
     '先月の架空日記17',
   ]);
+});
+
+test('記録表示タブはtabとtabpanelを結び、矢印・Home・Endで操作できる', async ({ page }) => {
+  const today = jstToday();
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({ json: { items: [makeEntry(1, today, '今日の架空日記')], nextCursor: null } }),
+  );
+
+  await page.goto('/library');
+  const tabs = page.getByRole('tablist', { name: '記録の表示方法' });
+  const calendarTab = tabs.getByRole('tab', { name: 'カレンダー' });
+  const listTab = tabs.getByRole('tab', { name: 'リスト' });
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+
+  await expect(tabs.getByRole('tab')).toHaveCount(2);
+  await expect(calendarTab).toHaveAttribute('id', 'library-calendar-tab');
+  await expect(calendarTab).toHaveAttribute('aria-controls', 'library-calendar-panel');
+  await expect(calendarPanel).toHaveAttribute('id', 'library-calendar-panel');
+  await expect(calendarPanel).toHaveAttribute('aria-labelledby', 'library-calendar-tab');
+  await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+  await expect(listTab).toHaveAttribute('aria-selected', 'false');
+
+  await calendarTab.focus();
+  await page.keyboard.press('End');
+  await expect(listTab).toBeFocused();
+  await expect(listTab).toHaveAttribute('aria-selected', 'true');
+  await expect(listPanel).toHaveAttribute('id', 'library-list-panel');
+  await expect(listPanel).toHaveAttribute('aria-labelledby', 'library-list-tab');
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(calendarTab).toBeFocused();
+  await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowRight');
+  await expect(listTab).toBeFocused();
+  await expect(listTab).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Home');
+  await expect(calendarTab).toBeFocused();
+  await expect(calendarTab).toHaveAttribute('aria-selected', 'true');
+});
+
+test('詳細から戻る・下部ナビ・ブラウザ戻るで記録のURL状態を復元する', async ({ page }) => {
+  const today = jstToday();
+  const entryId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const detail = {
+    ...draftEntryDetailFixture,
+    diaryDate: today,
+    body: '2ページ目から開いた架空の記録',
+  };
+  const entries = Array.from({ length: 7 }, (_, index) =>
+    makeEntry(index + 1, today, index === 3 ? detail.body : `同日の架空記録${index + 1}`),
+  ).map((entry, index) => (index === 3 ? { ...entry, id: entryId } : entry));
+  const libraryUrl = `/library?view=list&month=${monthKey(today)}&day=${today}&listPage=2&dayPage=3`;
+
+  await useMockConfig(page);
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: `${today}T15:00:00.000Z`,
+        generationAvailable: true,
+      },
+    }),
+  );
+  await page.route('**/api/v1/entries**', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'GET' && pathname === `/api/v1/entries/${entryId}`) {
+      return route.fulfill({ json: detail });
+    }
+    if (route.request().method() === 'GET' && pathname === '/api/v1/entries') {
+      return route.fulfill({ json: { items: entries, nextCursor: null } });
+    }
+    return route.continue();
+  });
+
+  const expectRestoredList = async () => {
+    await expect(page).toHaveURL(libraryUrl);
+    await expect(page.getByRole('tab', { name: 'リスト' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.locator('.entry-history-card')).toHaveCount(3);
+    await expect(page.getByRole('navigation', { name: '記録一覧のページ送り' })).toContainText(
+      '2ページ目',
+    );
+    await expect(page.getByRole('link', { name: /2ページ目から開いた架空の記録/ })).toBeVisible();
+  };
+  const openEntry = async () => {
+    await page.getByRole('link', { name: /2ページ目から開いた架空の記録/ }).click();
+    await expect(page).toHaveURL(`/entries/${entryId}`);
+  };
+
+  await page.goto(libraryUrl);
+  await expectRestoredList();
+  await openEntry();
+  await page.goBack();
+  await expectRestoredList();
+
+  await openEntry();
+  await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
+  await expectRestoredList();
+
+  await openEntry();
+  await page
+    .getByRole('navigation', { name: 'メインナビゲーション' })
+    .getByRole('link', { name: '記録' })
+    .click();
+  await expectRestoredList();
+  await page.getByRole('tab', { name: 'カレンダー' }).click();
+  await expect(page.getByRole('button', { name: `${dateLabel(today)}、記録7件` })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByRole('navigation', { name: '選択日の記録のページ送り' })).toContainText(
+    '3ページ目',
+  );
 });
 
 test('前月の全件取得中は空日として表示せず、6週分のカレンダーを保つ', async ({ page }) => {

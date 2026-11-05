@@ -207,7 +207,9 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   });
 
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('入力内容を反映しない架空の日記');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('入力内容を反映しない架空の日記');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
   expect(await page.evaluate(() => window.__e2eTurnstileEvents ?? [])).toEqual([]);
@@ -293,7 +295,7 @@ for (const failure of [
     });
 
     await page.goto('/new');
-    await page.getByLabel('日記', { exact: true }).fill(body);
+    await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(body);
     await page.getByRole('button', { name: '4コマにする' }).click();
 
     await expect(page).toHaveURL(/\/new$/);
@@ -699,7 +701,9 @@ for (const delayedCallback of ['token', 'error'] as const) {
       .toBe(true);
 
     await clickEntryMenuItem(page, '日記を編集');
-    await page.getByLabel('日記', { exact: true }).fill('保存処理を確認する架空の日記');
+    await page
+      .getByLabel('今日はどんな日だった？', { exact: true })
+      .fill('保存処理を確認する架空の日記');
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await patchReceived;
     await expect(
@@ -712,7 +716,7 @@ for (const delayedCallback of ['token', 'error'] as const) {
         name: '編集をやめる',
         exact: true,
       }),
-    ).toBeDisabled();
+    ).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.evaluate(() => window.__releaseE2eGenerationCaptcha?.());
     await page.waitForTimeout(25);
@@ -859,7 +863,9 @@ test('受付結果の確認後は処理中blockerを出さず詳細へ遷移す�
   });
 
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('再確認後の遷移を調べる架空の日記');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('再確認後の遷移を調べる架空の日記');
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持したまま再操作');
   await page.getByRole('button', { name: '受付結果を確認' }).click();
@@ -909,14 +915,16 @@ test('quota待ち中に編集を始めたら遅延した自動生成要求を破
   await page.goto(`/entries/${entryId}`);
   await quotaRequested;
   await clickEntryMenuItem(page, '日記を編集');
-  await page.getByLabel('日記', { exact: true }).fill('編集途中の日記を保護する架空の追記');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('編集途中の日記を保護する架空の追記');
   releaseQuota();
 
   await expect(page.getByRole('region', { name: '本日の漫画生成枠' })).toContainText(
     '本日の残り生成枠は3回です。',
   );
   await expect(page.getByRole('region', { name: '漫画生成の確認' })).toHaveCount(0);
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue(
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(
     '編集途中の日記を保護する架空の追記',
   );
   expect(generationRequests).toBe(0);

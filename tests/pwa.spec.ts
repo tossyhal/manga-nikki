@@ -43,7 +43,7 @@ test('更新通知だけでは再読み込みせず、明示操作で更新を�
 test('未保存の日記入力中は更新を保留し、保存後も明示操作まで本文を保つ', async ({ page }) => {
   await makeUpdateAvailable(page);
   await page.goto('/new');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill('更新中も残す架空の日記');
 
   const updateButton = page.getByRole('button', { name: '更新する' });
@@ -68,7 +68,7 @@ test('詳細の日記編集が未保存の間は手動PWA更新を保留する',
 
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill('更新中に保護する詳細編集の架空日記');
 
   await expect(page.getByRole('button', { name: '更新する' })).toBeDisabled();

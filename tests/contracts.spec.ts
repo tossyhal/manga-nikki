@@ -223,7 +223,7 @@ test('生成済み1件と下書き20件の履歴から21件目を開ける', asy
   await page.goto('/library');
   await expect(page.getByRole('heading', { name: '記録', exact: true })).toHaveClass(/sr-only/);
   await expect(page.getByRole('table')).toBeVisible();
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   const pageControls = page.getByRole('navigation', { name: '記録一覧のページ送り' });
   await expect(page.locator('.entry-history-summary')).toHaveCount(3);
   const visibleSummaries = new Set<string>();
@@ -273,12 +273,18 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
     await route.abort('failed');
   });
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('保存だけ成功した架空の日記');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('保存だけ成功した架空の日記');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page.getByRole('alert')).toContainText('入力内容を保持');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(`/entries/${savedId}`);
-  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(page.locator('.detail-toolbar h1')).toHaveText('保存だけ成功した架空の日記');
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toHaveCount(0);
   await expect(page.locator('.draft-saved-card')).toBeVisible();
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeVisible();
   expect(requestIds).toHaveLength(2);
@@ -286,7 +292,7 @@ test('保存完了後にレスポンスだけ失っても再送で重複作成�
   await page.reload();
   await expect(page.locator('.entry-draft-card .diary')).toHaveText('保存だけ成功した架空の日記');
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   await expect(page.locator('.entry-history-card')).toHaveCount(1);
   await expect(page.getByRole('link', { name: /保存だけ成功した架空の日記/ })).toBeVisible();
 });
@@ -296,11 +302,16 @@ test('390px幅の履歴では200文字の日記を40文字の要約で表示す�
   const body = 'A'.repeat(200);
   const summary = `${'A'.repeat(39)}…`;
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill(body);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(body);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.locator('.draft-saved-card > .diary')).toHaveText(`${'A'.repeat(120)}…`);
+  const originalDiarySummary = page.locator('.draft-saved-original > summary');
+  await expect(originalDiarySummary).toHaveText('日記の全文を読む');
+  await originalDiarySummary.click();
+  await expect(page.locator('.draft-saved-original .diary')).toHaveText(body);
   await page.getByRole('link', { name: '記録の一覧へ戻る' }).click();
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   await expect(page.locator('.entry-history-summary')).toHaveText(summary);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

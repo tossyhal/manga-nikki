@@ -123,7 +123,8 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
 
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await expect(diary).not.toHaveAttribute('aria-label');
   const updatedBody = '😀'.repeat(1000);
   await page.getByLabel('日付', { exact: true }).fill('2026-01-02');
   await diary.fill(updatedBody);
@@ -137,7 +138,7 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
 });
 
-test('保存中は上下の編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {
+test('保存中はヘッダーの編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {
   let currentDetail: EntryDetail = { ...draftEntryDetailFixture };
   let releasePatch!: () => void;
   let notifyPatch!: () => void;
@@ -180,7 +181,7 @@ test('保存中は上下の編集取消を無効にし、完了後に最新の�
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
   const updatedBody = '保存完了後に表示する最新の日記';
-  await page.getByLabel('日記', { exact: true }).fill(updatedBody);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(updatedBody);
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await patchReceived;
 
@@ -190,14 +191,14 @@ test('保存中は上下の編集取消を無効にし、完了後に最新の�
     ).toBeDisabled();
     await expect(
       page.locator('#edit-entry-form').getByRole('button', { name: '編集をやめる', exact: true }),
-    ).toBeDisabled();
+    ).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(0);
   } finally {
     releasePatch();
   }
 
   await expect(page.locator('.diary')).toHaveText(updatedBody);
-  await expect(page.getByLabel('日記', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveCount(0);
 });
 
 test('生成待ち・生成中の日記では編集操作を表示しない', async ({ page }) => {
@@ -255,7 +256,7 @@ for (const failure of [
     await page.goto(`/entries/${entryId}`);
     await clickEntryMenuItem(page, '日記を編集');
     const draft = '失敗しても画面に残す架空の入力';
-    await page.getByLabel('日記', { exact: true }).fill(draft);
+    await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(draft);
     await page.getByRole('button', { name: '保存', exact: true }).click();
 
     const errorAlert = page.getByRole('alert');
@@ -275,7 +276,7 @@ for (const failure of [
       .getByRole('navigation', { name: 'メインナビゲーション' })
       .evaluate((element) => element.getBoundingClientRect().top);
     expect(alertBottom).toBeLessThanOrEqual(navigationTop);
-    await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
+    await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
   });
 }
 
@@ -303,7 +304,7 @@ test('同じ入力エラーを再試行しても再びalertへfocusして本文�
 
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const invalidBody = '   ';
   const errorText = '日付は今日以前、本文は1〜1,000文字で入力してください。';
   await diary.fill(invalidBody);
@@ -366,7 +367,7 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
   const draft = '別タブに上書きされない入力';
-  await page.getByLabel('日記', { exact: true }).fill(draft);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(draft);
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('button', { name: '最新の記録を読み込む' })).toBeVisible();
   const initialReads = getCount;
@@ -378,7 +379,7 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
     .getByRole('button', { name: '最新の記録を読み込む', exact: true })
     .click();
   await clickAppDialogButton(page, conflictDialogTitle, '編集に戻る');
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
   expect(getCount).toBe(initialReads);
 
   await page
@@ -386,7 +387,7 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
     .getByRole('button', { name: '最新の記録を読み込む', exact: true })
     .click();
   await clickAppDialogButton(page, conflictDialogTitle, '最新の記録を読み込む');
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue(latest.body);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(latest.body);
   expect(getCount).toBe(initialReads + 1);
 });
 
@@ -421,7 +422,9 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
 
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  await page.getByLabel('日記', { exact: true }).fill('生成競合後も保持する架空の日記');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('生成競合後も保持する架空の日記');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('button', { name: '最新の記録を読み込む' })).toBeVisible();
 
@@ -434,7 +437,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: '日記を削除' })).toBeVisible();
-  await expect(page.getByLabel('日記', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveCount(0);
 });
 
 test('未来日は保存せず、日付と本文を保持する', async ({ page }) => {
@@ -451,14 +454,14 @@ test('未来日は保存せず、日付と本文を保持する', async ({ page 
   const future = nextDate(today);
   await date.fill(future);
   const draft = '未来の日付では保存しない架空の日記';
-  await page.getByLabel('日記', { exact: true }).fill(draft);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(draft);
   await page.getByRole('button', { name: '保存', exact: true }).click();
 
   await expect(date).toHaveValue(future);
   expect(await date.evaluate((element: HTMLInputElement) => element.validity.rangeOverflow)).toBe(
     true,
   );
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
   expect(patchCount).toBe(0);
 });
 
@@ -476,7 +479,7 @@ test('変更がない入力画面では離脱確認を表示しない', async ({
   await configureDetail(page);
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill('いったん変えて元に戻す');
   await diary.fill(draftEntryDetailFixture.body);
   await page.getByRole('link', { name: '記録', exact: true }).click();
@@ -487,7 +490,7 @@ test('変更がない入力画面では離脱確認を表示しない', async ({
 
 test('未保存確認はモーダルとして背景のフォーカスを止め、Escapeで入力に戻る', async ({ page }) => {
   await page.goto('/new');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = 'Escape後も残す架空の日記';
   await diary.fill(draft);
 
@@ -520,7 +523,7 @@ test('未保存確認はモーダルとして背景のフォーカスを止め�
 test('アプリ内リンクと戻る/進むの確認を取り消した場合は入力が残る', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('link', { name: '日記を書く', exact: true }).first().click();
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '確認を取り消しても残す架空の日記';
   await diary.fill(draft);
 
@@ -555,7 +558,7 @@ test('アプリ内リンクと戻る/進むの確認を取り消した場合は�
   await page.goBack();
   await expect(page).toHaveURL(/\/new$/);
   const forwardDraft = '進む操作でも確認する架空の日記';
-  await page.getByLabel('日記', { exact: true }).fill(forwardDraft);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(forwardDraft);
 
   await navigateThroughAppDialog(
     page,
@@ -564,7 +567,9 @@ test('アプリ内リンクと戻る/進むの確認を取り消した場合は�
     '入力に戻る',
   );
   await expect(page).toHaveURL(/\/new$/);
-  await expect(page.getByLabel('日記', { exact: true })).toHaveValue(forwardDraft);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(
+    forwardDraft,
+  );
 
   await navigateThroughAppDialog(
     page,
@@ -579,7 +584,7 @@ test('詳細編集の未保存入力はアプリ内移動とhard reload前に確
   await configureDetail(page);
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const draft = '詳細編集で保護する架空の日記';
   await diary.fill(draft);
 
@@ -632,7 +637,7 @@ for (const accept of [false, true]) {
 
     await page.goto('/new');
     const draft = '保存処理中も確認する架空の日記';
-    await page.getByLabel('日記', { exact: true }).fill(draft);
+    await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(draft);
     await page.getByRole('button', { name: '下書き保存' }).click();
     await started;
     await expect(page.getByRole('button', { name: '保存しています…' })).toBeDisabled();
@@ -646,7 +651,7 @@ for (const accept of [false, true]) {
     if (accept) await expect(page).toHaveURL(/\/library$/);
     else {
       await expect(page).toHaveURL(/\/new$/);
-      await expect(page.getByLabel('日記', { exact: true })).toHaveValue(draft);
+      await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
     }
 
     releaseRequest();
@@ -657,14 +662,14 @@ for (const accept of [false, true]) {
 
 test('削除応答後に別記録を編集中なら新しい画面の状態を維持する', async ({ page }) => {
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('削除応答を待つAの記録');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('削除応答を待つAの記録');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   const firstId = new URL(page.url()).pathname.split('/').at(-1);
   expect(firstId).toBeTruthy();
 
   await page.goto('/new');
-  await page.getByLabel('日記', { exact: true }).fill('編集中に保護するBの記録');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('編集中に保護するBの記録');
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
   const secondId = new URL(page.url()).pathname.split('/').at(-1);
@@ -706,7 +711,7 @@ test('削除応答後に別記録を編集中なら新しい画面の状態を�
   await page.getByText('編集中に保護するBの記録', { exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
   await clickEntryMenuItem(page, '日記を編集');
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   const editedBody = '削除Aの完了後も保持するBの未保存本文';
   await diary.fill(editedBody);
 

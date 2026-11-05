@@ -78,8 +78,6 @@ async function shellGeometry(page: Page) {
       return [x, y, width, height].map((value) => Math.round(value * 10) / 10);
     };
     return {
-      brand: bounds(document.querySelector('.app-header .brand')),
-      headerAction: bounds(document.querySelector('.app-header-action')),
       main: bounds(document.querySelector('#main')),
       nav: bounds(document.querySelector('.bottom-nav')),
     };
@@ -109,6 +107,7 @@ test('下部ナビは現在位置のラベルと等幅の3つの遷移先を保�
     const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
     const links = nav.getByRole('link');
     await expect(links).toHaveCount(3);
+    await expect(nav).toHaveCSS('height', '68px');
 
     const activeLink = nav.getByRole('link', { name: activeName, exact: true });
     await expect(activeLink).toHaveAttribute('aria-current', 'page');
@@ -126,6 +125,10 @@ test('下部ナビは現在位置のラベルと等幅の3つの遷移先を保�
       elements.map((element) => element.getBoundingClientRect().width),
     );
     expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+    const touchHeights = await links.evaluateAll((elements) =>
+      elements.map((element) => element.getBoundingClientRect().height),
+    );
+    expect(Math.min(...touchHeights)).toBeGreaterThanOrEqual(44);
     const activeIndex = destinations.findIndex(({ activeName: name }) => name === activeName);
     const tabGeometry = await links.evaluateAll((elements) =>
       elements.map((element) => {
@@ -164,31 +167,46 @@ test('下部ナビは現在位置のラベルと等幅の3つの遷移先を保�
   }
 });
 
-test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で変わらない', async ({ page }) => {
+test('primary routeは共通ヘッダーを表示せず、見出しとmain・下部ナビを保つ', async ({ page }) => {
   await installMockUiRoutes(page);
   await page.setViewportSize({ width: 393, height: 852 });
 
   const snapshots: Awaited<ReturnType<typeof shellGeometry>>[] = [];
+  const documentTitles: string[] = [];
   let homeDateText: Awaited<ReturnType<typeof dateTextMetrics>> | undefined;
   let entryDateText: Awaited<ReturnType<typeof dateTextMetrics>> | undefined;
-  for (const path of ['/', '/new', '/library']) {
+  const pageHeadings = new Map([
+    ['/', '今日の記録'],
+    ['/new', '日記を書く'],
+    ['/library', '記録'],
+  ]);
+  for (const [path, heading] of pageHeadings) {
     await page.goto(path);
-    await expect(page.getByRole('link', { name: '漫画日記 ホーム' })).toBeVisible();
+    await expect(page.locator('.app-header')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: '漫画日記 ホーム' })).toHaveCount(0);
+    await expect(
+      page.locator('#main').getByRole('heading', { level: 1, name: heading }),
+    ).toBeVisible();
+    documentTitles.push(await page.title());
     if (path === '/') {
-      await expect(page.getByRole('heading', { name: '今日の記録' })).toHaveClass(/sr-only/);
+      await expect(page.getByRole('heading', { name: heading })).toHaveClass(/sr-only/);
       await expect(page.locator('.home-today-hero')).toBeVisible();
       homeDateText = await dateTextMetrics(page, '.home-date');
     }
     if (path === '/new') {
-      await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: heading })).toHaveClass(/sr-only/);
+      const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+      await expect(diary).toBeVisible();
+      await expect(diary).not.toHaveAttribute('aria-label');
       entryDateText = await dateTextMetrics(page, '.date-display time');
     }
     if (path === '/library') {
       await expect(page.getByRole('table')).toBeVisible();
-      await expect(page.getByRole('button', { name: '一覧で見る' })).toBeVisible();
+      const tabs = page.getByRole('tablist', { name: '記録の表示方法' });
+      const listTab = tabs.getByRole('tab', { name: 'リスト' });
+      await expect(tabs).toBeVisible();
       snapshots.push(await shellGeometry(page));
-      await page.getByRole('button', { name: '一覧で見る' }).click();
-      await expect(page.getByRole('button', { name: 'カレンダーで見る' })).toBeVisible();
+      await listTab.click();
       await expect(page.locator('.entry-history-card')).toHaveCount(1);
       snapshots.push(await shellGeometry(page));
     } else {
@@ -196,21 +214,58 @@ test('共通ヘッダーと下部ナビの座標は3ルートと記録切替で�
     }
   }
 
+  expect(documentTitles).toEqual(['ホーム | 漫画日記', '日記を書く | 漫画日記', '記録 | 漫画日記']);
   for (const snapshot of snapshots.slice(1)) expect(snapshot).toEqual(snapshots[0]);
+  for (const snapshot of snapshots) expect(snapshot.main[1]).toBeLessThanOrEqual(16);
   expect(homeDateText).toEqual(entryDateText);
+});
+
+test('pathname遷移ではmainへfocusし、記録タブのquery更新ではtab focusを保つ', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto('/');
+
+  const main = page.locator('#main');
+  const navigation = page.getByRole('navigation', { name: 'メインナビゲーション' });
+  await navigation.getByRole('link', { name: '日記を書く' }).click();
+  await expect(main).toBeFocused();
+  await navigation.getByRole('link', { name: '記録' }).click();
+  await expect(main).toBeFocused();
+
+  const tabs = page.getByRole('tablist', { name: '記録の表示方法' });
+  const calendarTab = tabs.getByRole('tab', { name: 'カレンダー' });
+  const listTab = tabs.getByRole('tab', { name: 'リスト' });
+  await calendarTab.focus();
+  await page.keyboard.press('End');
+  await expect(listTab).toBeFocused();
+  await expect(listTab).toHaveAttribute('aria-selected', 'true');
 });
 
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
   await installMockUiRoutes(page);
-  await page.setViewportSize({ width: 393, height: 852 });
 
-  for (const path of ['/', `/entries/${entryId}`]) {
-    await page.goto(path);
-    const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
-    const bottomGap = await nav.evaluate(
-      (element) => window.innerHeight - element.getBoundingClientRect().bottom,
-    );
-    expect(bottomGap).toBeCloseTo(12, 0);
+  for (const viewport of [
+    { width: 390, height: 700 },
+    { width: 393, height: 852 },
+    { width: 1280, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const routeBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
+    for (const path of ['/', `/entries/${entryId}`]) {
+      await page.goto(path);
+      const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
+      const bounds = await nav.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (!bounds) continue;
+      routeBounds.push(bounds);
+      expect(bounds.height).toBe(68);
+      expect(bounds.width).toBe(Math.min(390, viewport.width - 40));
+      expect(bounds.x).toBeCloseTo((viewport.width - bounds.width) / 2, 0);
+      expect(viewport.height - bounds.y - bounds.height).toBeCloseTo(12, 0);
+    }
+    expect(routeBounds[1]?.x).toBe(routeBounds[0]?.x);
+    expect(routeBounds[1]?.y).toBe(routeBounds[0]?.y);
+    expect(routeBounds[1]?.width).toBe(routeBounds[0]?.width);
+    expect(routeBounds[1]?.height).toBe(routeBounds[0]?.height);
   }
 });
 
@@ -227,7 +282,7 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       if (path === '/') {
         await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
       } else if (path === '/new') {
-        const diary = page.getByLabel('日記', { exact: true });
+        const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
         await expect(diary).toBeVisible();
         await diary.fill(longBody);
       } else if (path === '/library') {
@@ -240,7 +295,7 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       expect(scrollWidth).toBeLessThanOrEqual(width);
 
       if (path === '/new') {
-        const diary = page.getByLabel('日記', { exact: true });
+        const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
         await diary.fill('');
         await expect(diary).toHaveValue('');
       }
@@ -266,7 +321,8 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
         await expect(page.getByRole('heading', { name: '今日の記録' })).toBeAttached();
         await expect(page.locator('.home-today-hero')).toBeVisible();
       }
-      if (path === '/new') await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+      if (path === '/new')
+        await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
       if (path === '/library') {
         await expect(page.getByRole('table')).toBeVisible();
         await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(6);
@@ -307,7 +363,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
         });
         await expect(calendarPager).toBeVisible();
         expect(await gapAboveBottomNav(calendarPager)).toBeGreaterThanOrEqual(14);
-        await page.getByRole('button', { name: '一覧で見る' }).click();
+        await page.getByRole('tab', { name: 'リスト' }).click();
         await expect(page.locator('.entry-history-card')).toHaveCount(3);
         await expectNoPrimaryScroll();
         const listPager = page.getByRole('navigation', { name: '記録一覧のページ送り' });
@@ -324,7 +380,7 @@ test('日記にフォーカスしても下部ナビの位置を保つ', async ({
   await page.goto('/new');
   const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
   const initialBounds = await nav.boundingBox();
-  const diary = page.getByLabel('日記', { exact: true });
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill(longBody);
   await diary.focus();
   const focusedBounds = await nav.boundingBox();
@@ -337,12 +393,29 @@ test('日記にフォーカスしても下部ナビの位置を保つ', async ({
   expect(focusedBounds?.height).toBe(initialBounds?.height);
 });
 
+test('入力カードはviewportが高くなると利用可能な高さに合わせて伸びる', async ({ page }) => {
+  await installMockUiRoutes(page);
+
+  const cardHeights: number[] = [];
+  for (const height of [700, 852]) {
+    await page.setViewportSize({ width: 393, height });
+    await page.goto('/new');
+    const card = page.locator('.entry-editor-card');
+    await expect(card).toBeVisible();
+    const bounds = await card.boundingBox();
+    expect(bounds).not.toBeNull();
+    cardHeights.push(bounds?.height ?? 0);
+  }
+
+  expect(cardHeights[1]).toBeGreaterThan(cardHeights[0] + 40);
+});
+
 test('オフライン通知と拡大表示がある短い画面でも記録ページ送りへ到達する', async ({ page }) => {
   await installMockUiRoutes(page, makeEntries(20));
   await page.setViewportSize({ width: 390, height: 480 });
   await page.goto('/library');
   await expect(page.getByRole('table')).toBeVisible();
-  await page.getByRole('button', { name: '一覧で見る' }).click();
+  await page.getByRole('tab', { name: 'リスト' }).click();
   await expect(page.locator('.entry-history-card')).toHaveCount(3);
   await page.context().setOffline(true);
   await expect(page.getByRole('status').filter({ hasText: 'オフラインです。' })).toBeVisible();
@@ -359,7 +432,7 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   await installMockUiRoutes(page);
   await page.setViewportSize({ width: 393, height: 852 });
   await page.goto('/new');
-  await expect(page.getByLabel('日記', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
   const newDatePicker = page.getByLabel('日付', { exact: true });
   await newDatePicker.focus();
   await expect(page.locator('.date-control')).toHaveCSS('outline-style', 'solid');
@@ -384,6 +457,7 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   });
   expect(layout.picker.left).toBeGreaterThanOrEqual(layout.control.left);
   expect(layout.picker.right).toBeLessThanOrEqual(layout.control.right + 1);
+  expect(layout.control.bottom - layout.control.top).toBeGreaterThanOrEqual(44);
   expect(layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left).toBe(
     true,
   );
@@ -398,10 +472,14 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   ).toBeLessThanOrEqual(2);
 
   const body = '日付と保存ボタンの表示を確認する架空の日記';
-  await page.getByLabel('日記', { exact: true }).fill(body);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(body);
   await page.getByRole('button', { name: '下書き保存' }).click();
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(page.locator('.detail-toolbar h1')).toHaveText(body);
+  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toHaveCount(0);
   await expect(page.locator('.draft-saved-card')).toBeVisible();
   await page.reload();
   await expect(page.locator('.entry-draft-card .diary')).toHaveText(body);
@@ -412,6 +490,8 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   await expect(detailDateRow).toHaveCSS('outline-style', 'solid');
   await expect(detailDateRow).toHaveCSS('outline-width', '2px');
   await expect(detailDateRow).toHaveCSS('outline-color', 'rgb(85, 85, 85)');
+  const editDateControl = await detailDateRow.locator('.date-control').boundingBox();
+  expect(editDateControl?.height ?? 0).toBeGreaterThanOrEqual(44);
 
   await page.setViewportSize({ width: 320, height: 480 });
   await page.goto('/new');
@@ -419,7 +499,7 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
     content: '.date-display, .date-row > .button-text { font-size: 200% !important; }',
   });
   const largeBody = '文字拡大時の保存を確認する架空の日記';
-  await page.getByLabel('日記', { exact: true }).fill(largeBody);
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(largeBody);
   const largeSaveButton = page.getByRole('button', { name: '下書き保存' });
   await largeSaveButton.scrollIntoViewIfNeeded();
   await expect(largeSaveButton).toBeInViewport();
@@ -465,7 +545,10 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   expect(largeDateRow.saveReceivesPointer).toBe(true);
   await largeSaveButton.click();
   await expect(page).toHaveURL(/\/entries\//);
-  await expect(page.getByRole('heading', { name: '下書きを保存しました' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '日記を保存しました', exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(page.locator('.detail-toolbar h1')).toHaveText(largeBody);
   await expect(page.locator('.draft-saved-card')).toBeVisible();
   await page.reload();
   await expect(page.locator('.entry-draft-card .diary')).toHaveText(largeBody);
