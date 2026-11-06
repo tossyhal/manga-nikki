@@ -101,7 +101,11 @@ async function authorizationFor(mode: 'mock' | 'live' | 'sample'): Promise<strin
   }
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  hooks: { onRequestStart?: () => void } = {},
+): Promise<T> {
   const fallback = '通信に失敗しました。入力内容を保持したまま再操作してください。';
   init.signal?.throwIfAborted();
   const config = await getClientConfig().catch(() => {
@@ -124,6 +128,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Authorization', authorization);
   try {
+    hooks.onRequestStart?.();
     response = await fetch(`/api/v1${path}`, {
       ...init,
       headers,

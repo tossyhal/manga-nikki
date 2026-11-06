@@ -49,8 +49,13 @@ export function App() {
   );
   const blocker = useBlocker(shouldBlockNavigation);
   const blockedActivity = blocker.state === 'blocked' ? diaryActivity : null;
+  const blockedBusy = Boolean(
+    blockedActivity?.busy && !(blockedActivity.dirty && blockedActivity.entrySaveStarted === false),
+  );
   const blockerStateRef = useRef(blocker.state);
+  const leaveConfirmedRef = useRef(false);
   const hasBlockedNavigation = useCallback(() => blockerStateRef.current !== 'unblocked', []);
+  const hasConfirmedExit = useCallback(() => leaveConfirmedRef.current, []);
   useEffect(() => {
     let active = true;
     void getClientConfig()
@@ -70,6 +75,7 @@ export function App() {
   }, [location.pathname]);
   useLayoutEffect(() => {
     blockerStateRef.current = blocker.state;
+    if (blocker.state === 'unblocked') leaveConfirmedRef.current = false;
   }, [blocker.state]);
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
@@ -96,6 +102,7 @@ export function App() {
     personalDataAvailable,
     onActivityChange: reportDiaryActivity,
     hasBlockedNavigation,
+    hasConfirmedExit,
     retryConfig,
   };
   const showBlockedDialog =
@@ -123,15 +130,15 @@ export function App() {
       <BottomNav />
       <ConfirmDialog
         open={showBlockedDialog}
-        variant={blockedActivity !== null && !blockedActivity.busy ? 'navigation-exit' : 'default'}
-        icon={blockedActivity?.busy ? 'alert' : null}
-        title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
+        variant={blockedActivity !== null && !blockedBusy ? 'navigation-exit' : 'default'}
+        icon={blockedBusy ? 'alert' : null}
+        title={blockedBusy ? '処理中です' : '入力内容が保存されていません'}
         description={
-          blockedActivity?.busy
+          blockedBusy
             ? '保存結果が確定する前に移動します。保存に失敗すると、未保存の変更をこの画面で確認できなくなることがあります。'
             : 'このまま画面を離れると、保存されていない変更が失われます。'
         }
-        confirmLabel={blockedActivity?.busy ? '移動する' : '保存せずに離れる'}
+        confirmLabel={blockedBusy ? '移動する' : '保存せずに離れる'}
         cancelLabel="入力に戻る"
         cancelPrimary
         destructive
@@ -139,11 +146,16 @@ export function App() {
           if (
             blocker.state === 'blocked' &&
             !(diaryActivityRef.current.failed && !diaryActivityRef.current.dirty)
-          )
+          ) {
+            if (!blockedBusy) leaveConfirmedRef.current = true;
             blocker.proceed();
+          }
         }}
         onCancel={() => {
-          if (blocker.state === 'blocked') blocker.reset();
+          if (blocker.state === 'blocked') {
+            leaveConfirmedRef.current = false;
+            blocker.reset();
+          }
         }}
       />
     </div>
