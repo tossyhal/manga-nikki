@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { resolveMode, type Environment, type Mode } from './mode';
 import { createServerRpcClient } from './supabase-clients';
 import { createServerStorageRemovalClient } from './supabase-storage';
+import {
+  removeAndConfirmStorageObjectAbsent,
+  type StorageObjectCleanupClient,
+} from './storage-object-cleanup';
 
 const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const objectPathPattern = new RegExp(
@@ -34,17 +38,7 @@ export type StorageDeletionCleanupRpc = {
   finalize(objectPath: string, claimToken: string): Promise<RpcResult>;
 };
 
-export type StorageDeletionCleanupStorage = {
-  remove(paths: string[]): Promise<{ data: unknown; error: unknown }>;
-  list(
-    path: string,
-    options: { search: string; limit: number; offset: number },
-  ): Promise<{ data: unknown; error: unknown }>;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+export type StorageDeletionCleanupStorage = StorageObjectCleanupClient;
 
 function tasksFromRpc(data: unknown): DeletionTask[] {
   const parsed = z.array(deletionTaskSchema).safeParse(data);
@@ -84,34 +78,7 @@ export function createStorageDeletionCleanupService(
       };
 
       for (const task of tasks) {
-        const [ownerId, generationId, name] = task.object_path.split('/');
-        let storageAbsent = false;
-        try {
-          const removed = await storage.remove([task.object_path]);
-          if (removed.error !== null || !Array.isArray(removed.data)) {
-            summary.retrying += 1;
-            continue;
-          }
-          const listed = await storage.list(`${ownerId}/${generationId}`, {
-            search: name!,
-            limit: 2,
-            offset: 0,
-          });
-          if (
-            listed.error !== null ||
-            !Array.isArray(listed.data) ||
-            listed.data.some((item) => !isRecord(item) || item.name === name)
-          ) {
-            summary.retrying += 1;
-            continue;
-          }
-          storageAbsent = true;
-        } catch {
-          summary.retrying += 1;
-          continue;
-        }
-
-        if (!storageAbsent) {
+        if (!(await removeAndConfirmStorageObjectAbsent(storage, task.object_path))) {
           summary.retrying += 1;
           continue;
         }
