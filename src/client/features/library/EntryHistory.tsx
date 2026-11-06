@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import type { Entry, Generation } from '../../../shared/schemas';
 import { summarizeDiary } from '../../../shared/summary';
 import { Icon } from '../../app/Icon';
+import { useDelayedLoading } from '../../lib/useDelayedLoading';
 import { EntryThumbnail, useEntryPreview } from './EntryPreview';
 import './library.css';
 
@@ -58,6 +59,7 @@ function EntryHistoryItem({
   backTo?: string;
 }) {
   const preview = useEntryPreview(entry);
+  const showPreviewLoading = useDelayedLoading(preview.isLoading);
   const currentGeneration =
     preview.generation?.entryRevision === entry.revision ? preview.generation : null;
   const hasOlderLatest = Boolean(
@@ -76,7 +78,9 @@ function EntryHistoryItem({
           : entry.latestGenerationId
             ? preview.error
               ? '状態を確認できません'
-              : '状態を確認しています'
+              : showPreviewLoading
+                ? '状態を確認しています'
+                : null
             : '下書き'
     : null;
   const previewError =
@@ -84,7 +88,7 @@ function EntryHistoryItem({
     (preview.error && (preview.generation || preview.comicGeneration) ? preview.error : null);
 
   return (
-    <li className="entry-history-item">
+    <li className="entry-history-item" aria-busy={preview.isLoading}>
       <Link
         className="entry-history-card"
         to={`/entries/${entry.id}`}

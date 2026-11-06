@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ClientAuthError, getLiveAccessToken } from '../auth';
 import { getClientConfig, type ClientConfig } from '../config';
+import { invalidateEntryReadCache } from './entryReadCache';
 
 export class ApiClientError extends Error {
   constructor(
@@ -156,18 +157,28 @@ export async function api<T>(
   const headers = new Headers(init.headers);
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Authorization', scope.authorization);
+  const method = (init.method ?? 'GET').toUpperCase();
+  const invalidatesEntryReads =
+    method !== 'GET' && (/^\/entries(?:\/|$)/.test(path) || /^\/generations(?:\/|$)/.test(path));
   try {
     hooks.onRequestStart?.();
-    response = await fetch(`/api/v1${path}`, {
-      ...init,
-      headers,
-    });
-    result = await response.json();
+    if (invalidatesEntryReads) invalidateEntryReadCache();
+    try {
+      response = await fetch(`/api/v1${path}`, {
+        ...init,
+        headers,
+      });
+      result = await response.json();
+    } finally {
+      if (invalidatesEntryReads) invalidateEntryReadCache();
+    }
   } catch (failure) {
+    if (response?.status === 401 || response?.status === 403) invalidateEntryReadCache();
     if (init.signal?.aborted) throw failure;
     throw new ApiClientError(fallback, response?.status ?? null);
   }
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) invalidateEntryReadCache();
     const failure = z
       .object({
         error: z.object({

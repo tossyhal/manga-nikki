@@ -3,12 +3,20 @@ import {
   api,
   ApiClientError,
   generate,
+  getEntries,
+  getEntry,
   getQuotaForExistingSession,
   hasGenerationRequest,
   recheckGeneration,
 } from './api';
 import { getLiveAccessToken } from './auth';
 import { getClientConfig, invalidateClientConfig, refreshClientConfig } from './config';
+import {
+  entryReadCacheEpoch,
+  getEntryReadCache,
+  invalidateEntryReadCache,
+  setEntryReadCache,
+} from './api/entryReadCache';
 
 vi.mock('./auth', () => ({
   ClientAuthError: class ClientAuthError extends Error {},
@@ -55,6 +63,7 @@ function denySessionStorageGetter() {
 
 beforeEach(() => {
   invalidateClientConfig();
+  invalidateEntryReadCache();
   vi.mocked(getLiveAccessToken).mockReset().mockResolvedValue(null);
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', {
@@ -69,8 +78,290 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  invalidateEntryReadCache();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe('entry read cache', () => {
+  it('reuses a list page only for its current authorization scope', async () => {
+    const liveConfig = { ...mockConfig, dataMode: 'live' };
+    let token = 'owner-a-token';
+    vi.mocked(getLiveAccessToken).mockImplementation(async () => token);
+    const entryRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      Response.json({ items: [{ id: 'entry' }], nextCursor: null }, { headers: init?.headers }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/config') return Response.json(liveConfig);
+        return entryRequest(input, init);
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    await getEntries({ limit: 20 });
+    expect(entryRequest).toHaveBeenCalledOnce();
+
+    token = 'owner-b-token';
+    await getEntries({ limit: 20 });
+    expect(entryRequest).toHaveBeenCalledTimes(2);
+    const firstHeaders = new Headers(entryRequest.mock.calls[0]?.[1]?.headers);
+    const secondHeaders = new Headers(entryRequest.mock.calls[1]?.[1]?.headers);
+    expect(firstHeaders.get('Authorization')).toBe('Bearer owner-a-token');
+    expect(secondHeaders.get('Authorization')).toBe('Bearer owner-b-token');
+  });
+
+  it('refreshes explicitly and caches the refreshed page', async () => {
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        return Response.json({ items: [{ id: `entry-${requestCount}` }], nextCursor: null });
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    const refreshed = await getEntries({ limit: 20, fresh: true });
+    const cached = await getEntries({ limit: 20 });
+
+    expect(requestCount).toBe(2);
+    expect(refreshed.items[0]?.id).toBe('entry-2');
+    expect(cached).toEqual(refreshed);
+  });
+
+  it('expires cached pages when either clock moves backward or passes the TTL', () => {
+    invalidateEntryReadCache();
+    const wallClock = vi.spyOn(Date, 'now');
+    const monotonicClock = vi.spyOn(performance, 'now');
+    let wallTime = 1_000;
+    let monotonicTime = 1_000;
+    wallClock.mockImplementation(() => wallTime);
+    monotonicClock.mockImplementation(() => monotonicTime);
+    const scope = { dataMode: 'mock' as const, authorization: 'Bearer mock:test' };
+    const path = '/entries?limit=20';
+    const cacheEpoch = entryReadCacheEpoch('entries');
+
+    try {
+      setEntryReadCache('entries', scope, path, { items: [] }, cacheEpoch);
+      expect(getEntryReadCache('entries', scope, path).found).toBe(true);
+
+      wallTime += 15_001;
+      expect(getEntryReadCache('entries', scope, path).found).toBe(false);
+
+      wallTime = 2_000;
+      monotonicTime = 2_000;
+      setEntryReadCache('entries', scope, path, { items: [] }, cacheEpoch);
+      wallTime = 1_999;
+      expect(getEntryReadCache('entries', scope, path).found).toBe(false);
+
+      wallTime = 3_000;
+      monotonicTime = 3_000;
+      setEntryReadCache('entries', scope, path, { items: [] }, cacheEpoch);
+      monotonicTime = 2_999;
+      expect(getEntryReadCache('entries', scope, path).found).toBe(false);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it('does not fall back to an old page after an explicit refresh fails', async () => {
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        if (requestCount === 2) {
+          return Response.json(
+            {
+              error: {
+                message: 'not found',
+                code: 'NOT_FOUND',
+                requestId: 'missing-entry',
+                retryable: false,
+              },
+            },
+            { status: 404 },
+          );
+        }
+        return Response.json({ items: [{ id: `entry-${requestCount}` }], nextCursor: null });
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    await expect(getEntries({ limit: 20, fresh: true })).rejects.toMatchObject({ status: 404 });
+    const current = await getEntries({ limit: 20 });
+
+    expect(requestCount).toBe(3);
+    expect(current.items[0]?.id).toBe('entry-3');
+  });
+
+  it('invalidates entry pages when a mutation fails after its request starts', async () => {
+    let listRequestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async (input) => {
+        if (String(input) === '/api/v1/entries?limit=20') {
+          listRequestCount += 1;
+          return Response.json({ items: [{ id: `entry-${listRequestCount}` }], nextCursor: null });
+        }
+        throw new TypeError('connection lost after sending the mutation');
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    await expect(api('/entries/entry-1', { method: 'DELETE' })).rejects.toMatchObject({
+      status: null,
+    });
+    const current = await getEntries({ limit: 20 });
+
+    expect(listRequestCount).toBe(2);
+    expect(current.items[0]?.id).toBe('entry-2');
+  });
+
+  it('does not let a read started before a mutation refill the cache', async () => {
+    const oldResponse = deferred<Response>();
+    const oldRequestStarted = deferred<void>();
+    let listRequestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+        if (String(input) === '/api/v1/entries?limit=20') {
+          listRequestCount += 1;
+          if (listRequestCount === 1) {
+            oldRequestStarted.resolve();
+            return oldResponse.promise;
+          }
+          return Response.json({ items: [{ id: 'new' }], nextCursor: null });
+        }
+        if (String(input) === '/api/v1/entries') return Response.json({ ok: true });
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }),
+    );
+
+    const oldRead = getEntries({ limit: 20 });
+    await oldRequestStarted.promise;
+    await api('/entries', { method: 'POST', body: '{}' });
+    oldResponse.resolve(Response.json({ items: [{ id: 'old' }], nextCursor: null }));
+    await oldRead;
+
+    const current = await getEntries({ limit: 20 });
+    expect(listRequestCount).toBe(2);
+    expect(current.items[0]?.id).toBe('new');
+  });
+
+  it('shares concurrent un-aborted reads for the same page and scope', async () => {
+    const response = deferred<Response>();
+    const requestStarted = deferred<void>();
+    let listRequestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+        if (String(input) === '/api/v1/entries?limit=20') {
+          listRequestCount += 1;
+          requestStarted.resolve();
+          return response.promise;
+        }
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }),
+    );
+
+    const firstRead = getEntries({ limit: 20 });
+    await requestStarted.promise;
+    const secondRead = getEntries({ limit: 20 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listRequestCount).toBe(1);
+
+    response.resolve(Response.json({ items: [{ id: 'shared' }], nextCursor: null }));
+    const [first, second] = await Promise.all([firstRead, secondRead]);
+    expect(first).toEqual(second);
+    expect(first.items[0]?.id).toBe('shared');
+  });
+
+  it('clears cached list pages when a signal-bound page read aborts', async () => {
+    const cursorRequestStarted = deferred<void>();
+    let firstPageRequestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+        if (String(input) === '/api/v1/entries?limit=20') {
+          firstPageRequestCount += 1;
+          return Response.json({
+            items: [{ id: `first-${firstPageRequestCount}` }],
+            nextCursor: 'older-page',
+          });
+        }
+        if (String(input) === '/api/v1/entries?cursor=older-page&limit=20') {
+          cursorRequestStarted.resolve();
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Aborted', 'AbortError')),
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    const controller = new AbortController();
+    const cursorRead = getEntries({ cursor: 'older-page', limit: 20, signal: controller.signal });
+    await cursorRequestStarted.promise;
+    controller.abort();
+    await expect(cursorRead).rejects.toMatchObject({ name: 'AbortError' });
+
+    const firstPageAfterAbort = await getEntries({ limit: 20 });
+    expect(firstPageRequestCount).toBe(2);
+    expect(firstPageAfterAbort.items[0]?.id).toBe('first-2');
+  });
+
+  it('rejects an aborted first-page read without clearing the complete page cache', async () => {
+    const entryRequest = vi
+      .fn()
+      .mockResolvedValue(Response.json({ items: [{ id: 'entry' }], nextCursor: null }));
+    vi.stubGlobal('fetch', mockFetch(entryRequest));
+    await getEntries({ limit: 20 });
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(getEntries({ limit: 20, signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    const current = await getEntries({ limit: 20 });
+    expect(entryRequest).toHaveBeenCalledOnce();
+    expect(current.items[0]?.id).toBe('entry');
+  });
+
+  it('does not cache entry details with an active or unresolved generation', async () => {
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        return Response.json({
+          id: 'entry',
+          diaryDate: '2026-11-07',
+          body: 'test',
+          revision: 1,
+          latestGenerationId: 'generation',
+          latestGeneration: null,
+          createdAt: '2026-11-07T00:00:00.000Z',
+          updatedAt: '2026-11-07T00:00:00.000Z',
+        });
+      }),
+    );
+
+    await getEntry('entry');
+    await getEntry('entry');
+    expect(requestCount).toBe(2);
+  });
 });
 
 describe('API error guidance', () => {

@@ -48,7 +48,7 @@ export function useHomeRecords(
     let active = true;
     async function loadEntries() {
       try {
-        const result = await getEntries({ limit: 20 });
+        const result = await getEntries({ limit: 20, fresh: retryKey > 0 });
         if (active)
           setLoaded({
             config: currentConfig,

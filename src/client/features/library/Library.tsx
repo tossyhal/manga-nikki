@@ -14,6 +14,7 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { Icon } from '../../app/Icon';
 import { useJstToday } from '../../lib/useJstToday';
 import { EntryHistory } from './EntryHistory';
+import { useDelayedLoading } from '../../lib/useDelayedLoading';
 import {
   defaultLibrarySearch,
   parseLibrarySearch,
@@ -52,6 +53,7 @@ export function Library() {
     loadThroughListPage,
     mountedRef,
   } = useLibraryEntries(searchState.month);
+  const showLoading = useDelayedLoading(busy && !error && !sessionUnavailable);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
 
   useLayoutEffect(() => {
@@ -219,9 +221,9 @@ export function Library() {
     setSessionUnavailable(false);
     if (view === 'list' && entries && nextCursor) {
       attemptedListRestoreRef.current = null;
-      void loadThroughListPage(Math.max(1, listPage));
+      void loadThroughListPage(Math.max(1, listPage), true);
     } else {
-      void loadThroughMonth(visibleMonth);
+      void loadThroughMonth(visibleMonth, true);
     }
   }
 
@@ -264,10 +266,12 @@ export function Library() {
       );
     }
     return (
-      <div className="library-state-view">
-        <div className="library-state-card" aria-live="polite">
-          <output className="library-loading">記録を読み込んでいます…</output>
-        </div>
+      <div className="library-state-view" aria-busy={busy}>
+        {showLoading && (
+          <div className="library-state-card" aria-live="polite" aria-busy="true">
+            <output className="library-loading">記録を読み込んでいます…</output>
+          </div>
+        )}
       </div>
     );
   }
@@ -288,6 +292,7 @@ export function Library() {
         role="tabpanel"
         aria-labelledby="library-calendar-tab"
         tabIndex={0}
+        aria-busy={busy}
         hidden={view !== 'calendar'}
       >
         {sessionUnavailable || entries === null ? (
@@ -329,7 +334,11 @@ export function Library() {
 
             <output className="library-calendar-status" aria-live="polite">
               {!monthCovered &&
-                (busy ? 'この月の記録を読み込んでいます…' : 'この月の記録を確認できません。')}
+                (busy
+                  ? showLoading
+                    ? 'この月の記録を読み込んでいます…'
+                    : ''
+                  : 'この月の記録を確認できません。')}
             </output>
 
             <table
@@ -413,7 +422,11 @@ export function Library() {
                 </div>
               ) : (
                 <output className="library-day-unavailable" aria-live="polite">
-                  {busy ? '記録を読み込んでいます…' : '記録の全件を確認できません。'}
+                  {busy
+                    ? showLoading
+                      ? '記録を読み込んでいます…'
+                      : ''
+                    : '記録の全件を確認できません。'}
                   {!busy && (
                     <button type="button" className="library-text-button" onClick={retry}>
                       もう一度読み込む
@@ -443,6 +456,7 @@ export function Library() {
         role="tabpanel"
         aria-labelledby="library-list-tab"
         tabIndex={0}
+        aria-busy={busy}
         hidden={view !== 'list'}
       >
         {sessionUnavailable || entries === null ? (
@@ -460,8 +474,8 @@ export function Library() {
               )}
             </div>
             {listRestorePending ? (
-              <div className="library-list-loading" aria-live="polite">
-                指定したページの記録を読み込んでいます…
+              <div className="library-list-loading" aria-live="polite" aria-busy="true">
+                {showLoading && '指定したページの記録を読み込んでいます…'}
               </div>
             ) : visibleListEntries.length > 0 ? (
               <div className="library-list-records">
@@ -484,7 +498,11 @@ export function Library() {
               </div>
             ) : (
               <div className="library-list-empty" aria-live="polite">
-                {busy ? '記録を読み込んでいます…' : '記録を表示できません。再試行してください。'}
+                {busy
+                  ? showLoading
+                    ? '記録を読み込んでいます…'
+                    : ''
+                  : '記録を表示できません。再試行してください。'}
               </div>
             )}
             {visibleListEntries.length > 0 && !listRestorePending && (

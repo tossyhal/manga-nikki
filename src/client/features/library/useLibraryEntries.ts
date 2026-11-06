@@ -69,7 +69,7 @@ export function useLibraryEntries(initialMonth: string) {
   }, []);
 
   const refreshEntries = useCallback(
-    async (targetMonth: string) => {
+    async (targetMonth: string, fresh = false) => {
       const request = beginRequest();
       syncEntries(null, null);
       setError('');
@@ -85,6 +85,7 @@ export function useLibraryEntries(initialMonth: string) {
           (items, cursor) => {
             if (requestIsActive(request)) syncEntries(items, cursor);
           },
+          fresh,
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
@@ -104,7 +105,7 @@ export function useLibraryEntries(initialMonth: string) {
   );
 
   const loadThroughMonth = useCallback(
-    async (targetMonth: string) => {
+    async (targetMonth: string, fresh = false) => {
       if (loadingRef.current) return;
       const request = beginRequest();
 
@@ -118,6 +119,7 @@ export function useLibraryEntries(initialMonth: string) {
           (items, cursor) => {
             if (requestIsActive(request)) syncEntries(items, cursor);
           },
+          fresh,
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
@@ -133,7 +135,7 @@ export function useLibraryEntries(initialMonth: string) {
   );
 
   const loadThroughListPage = useCallback(
-    async (targetPage: number, requestLimit = maxListRestoreRequests) => {
+    async (targetPage: number, fresh = false) => {
       const current = entriesRef.current;
       const cursor = cursorRef.current;
       if (!current) return null;
@@ -155,8 +157,9 @@ export function useLibraryEntries(initialMonth: string) {
           cursor,
           targetPage,
           () => requestIsActive(request),
-          requestLimit,
+          maxListRestoreRequests,
           request.controller.signal,
+          fresh,
         );
         if (!result || !requestIsActive(request)) return null;
         syncEntries(result.entries, result.cursor);

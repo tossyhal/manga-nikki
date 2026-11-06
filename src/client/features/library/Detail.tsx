@@ -37,6 +37,7 @@ import { ConfirmDialog } from '../../app/ConfirmDialog';
 import { Icon } from '../../app/Icon';
 import { mergeEntryGenerationProgress } from './generationProgress';
 import { completeEntryDetail, isCurrentEntryGeneration } from './entryDetail';
+import { useDelayedLoading } from '../../lib/useDelayedLoading';
 
 function generationActionErrorMessage(failure: unknown, fallback: string): string {
   if (failure instanceof ApiClientError && failure.code === 'DEPENDENCY_UNAVAILABLE') {
@@ -124,6 +125,7 @@ function DetailContent({
   }, []);
   const [error, setError] = useState('');
   const [pollingError, setPollingError] = useState('');
+  const showInitialLoading = useDelayedLoading(entry === null && !error && !pollingError);
   const [foregroundActionFailed, setForegroundActionFailed] = useState(false);
   const displayError = error || pollingError;
   const [busy, setBusy] = useState(false);
@@ -439,7 +441,7 @@ function DetailContent({
     isReadCurrent: () => boolean,
     mode: 'initial' | 'foreground',
   ): Promise<EntryDetail | null> {
-    const result = await getEntry(entryId);
+    const result = await getEntry(entryId, { fresh: mode === 'foreground' });
     if (!isReadCurrent() || result.id !== entryId) return null;
     const latest = await completeEntryDetail(result, getGeneration, mode);
     if (!isReadCurrent()) return null;
@@ -696,7 +698,7 @@ function DetailContent({
     }
   }
   return (
-    <div className={detailPageClass}>
+    <div className={detailPageClass} aria-busy={entry === null && !displayError}>
       {entry && !editing && (
         <DetailToolbar
           backTo={backTo}
@@ -929,7 +931,14 @@ function DetailContent({
           )}
         </>
       ) : (
-        !displayError && <output>読み込んでいます…</output>
+        !displayError &&
+        (showInitialLoading ? (
+          <output>読み込んでいます…</output>
+        ) : (
+          <output className="detail-loading-placeholder" aria-busy="true">
+            <span className="sr-only">読み込んでいます…</span>
+          </output>
+        ))
       )}
       {displayError && !editFormVisible && (
         <p role="alert" className="error">
