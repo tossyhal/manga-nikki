@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  shouldRefreshExpiredAssetOnVisibility,
-  shouldRenewExpiredAsset,
-} from './signedAssetRefresh';
+import { shouldRenewExpiredAsset } from './signedAssetRefresh';
 
 describe('expired signed asset refresh', () => {
   const requestedAt = 10_000;
@@ -76,45 +73,6 @@ describe('expired signed asset refresh', () => {
         requestedAt + 65_000,
         requestedAtWall + 65_000,
         expiresAt,
-      ),
-    ).toBe(true);
-  });
-
-  it('renews an expired terminal thumbnail once when the page becomes visible', () => {
-    const expiredAt = new Date(requestedAtWall - 1).toISOString();
-    expect(
-      shouldRefreshExpiredAssetOnVisibility(
-        requestedAt,
-        requestedAtWall,
-        false,
-        expiredAt,
-        requestedAt + 1_000,
-        requestedAtWall + 1_000,
-      ),
-    ).toBe(true);
-    expect(
-      shouldRefreshExpiredAssetOnVisibility(
-        requestedAt,
-        requestedAtWall,
-        true,
-        expiredAt,
-        requestedAt + 1_000,
-        requestedAtWall + 1_000,
-      ),
-    ).toBe(false);
-  });
-
-  it('uses elapsed clocks if the client wall clock has not reached the server expiry', () => {
-    const clientBehindByAnHour = requestedAtWall - 3_600_000;
-    const expiresAt = new Date(requestedAtWall + 60_000).toISOString();
-    expect(
-      shouldRefreshExpiredAssetOnVisibility(
-        requestedAt,
-        clientBehindByAnHour,
-        false,
-        expiresAt,
-        requestedAt + 65_000,
-        clientBehindByAnHour + 65_000,
       ),
     ).toBe(true);
   });

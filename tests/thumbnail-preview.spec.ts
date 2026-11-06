@@ -198,6 +198,88 @@ test('表示済みのHomeサムネイルは可視復帰時に再取得せず表�
   await expect(page.getByRole('button', { name: '漫画画像を再読み込み' })).toHaveCount(0);
 });
 
+test('非表示中の期限画像エラーは可視復帰で一度自動更新し、失敗後も手動再試行できる', async ({
+  page,
+}) => {
+  await page.clock.install({ time: clockStart });
+  const todayEntry = entry(
+    todayEntryId,
+    today,
+    '非表示中の画像失敗を確認する架空日記',
+    todayGenerationId,
+  );
+  const todayGeneration = generationWithAsset(todayGenerationId, todayEntryId, todayAssetId);
+  const detail: EntryDetail = {
+    ...todayEntry,
+    latestGeneration: todayGeneration,
+    lastSuccessfulGeneration: todayGeneration,
+  };
+  await installEntries(page, [todayEntry], [detail]);
+
+  let assetUrlReads = 0;
+  let releaseExpiredImage!: () => void;
+  let notifyExpiredImage!: () => void;
+  const expiredImageGate = new Promise<void>((resolve) => {
+    releaseExpiredImage = resolve;
+  });
+  const expiredImageRequested = new Promise<void>((resolve) => {
+    notifyExpiredImage = resolve;
+  });
+  await page.route('**/api/v1/assets/*/url', (route) => {
+    assetUrlReads++;
+    if (assetUrlReads === 1)
+      return route.fulfill({
+        json: {
+          url: '/hidden-expired-thumbnail.svg',
+          expiresAt: new Date(clockStart.valueOf() + 60_000).toISOString(),
+        },
+      });
+    if (assetUrlReads === 2) return route.fulfill({ status: 503, body: '' });
+    return route.fulfill({
+      json: {
+        url: '/hidden-fresh-thumbnail.svg',
+        expiresAt: new Date(clockStart.valueOf() + 180_000).toISOString(),
+      },
+    });
+  });
+  await page.route('**/hidden-expired-thumbnail.svg', async (route) => {
+    notifyExpiredImage();
+    await expiredImageGate;
+    await route.abort('failed');
+  });
+  await page.route('**/hidden-fresh-thumbnail.svg', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg }),
+  );
+
+  await page.goto('/');
+  const image = page.locator('.home-today-image-link img.entry-thumbnail-image');
+  await expect(image).toHaveAttribute('src', '/hidden-expired-thumbnail.svg');
+  await expiredImageRequested;
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+  });
+  await page.clock.fastForward(65_000);
+  releaseExpiredImage();
+
+  const retry = page.getByRole('button', { name: '漫画画像を再読み込み' });
+  await expect(retry).toBeVisible();
+  expect(assetUrlReads).toBe(1);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => assetUrlReads).toBe(2);
+  await expect(retry).toBeVisible();
+
+  await retry.click();
+  await expect.poll(() => assetUrlReads).toBe(3);
+  await expect(image).toHaveAttribute('src', '/hidden-fresh-thumbnail.svg');
+  await expect
+    .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+    .toBe(4);
+  await expect(retry).toHaveCount(0);
+});
+
 test('非選択tabにある未読込Libraryサムネイルは期限後も署名URLを取得しない', async ({ page }) => {
   await page.clock.install({ time: clockStart });
   const dateAtOffset = (days: number) => {
