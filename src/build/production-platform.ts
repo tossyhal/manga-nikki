@@ -27,6 +27,7 @@ type PlatformCode =
   | 'PLATFORM_REQUEST_FAILED'
   | 'PLATFORM_RESPONSE_INVALID'
   | 'QUEUE_PERMISSION_REQUIRED'
+  | 'WORKER_SCHEDULE_PERMISSION_REQUIRED'
   | 'QUEUE_MISSING'
   | 'QUEUE_INVALID'
   | 'STORAGE_MISSING'
@@ -148,7 +149,11 @@ export async function runProductionPlatform(
     return fail('PLATFORM_INPUT_INVALID');
   }
   const base = `https://api.cloudflare.com/client/v4/accounts/${PRODUCTION_PLATFORM.accountId}`;
-  const cfRequest = async (path: string, body?: unknown): Promise<unknown> => {
+  const cfRequest = async (
+    stage: 'QUEUE_GET' | 'QUEUE_CREATE' | 'WORKER_SCHEDULES_GET',
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> => {
     let response: Response;
     try {
       response = await fetcher(`${base}${path}`, {
@@ -159,10 +164,16 @@ export async function runProductionPlatform(
         signal: AbortSignal.timeout(15_000),
       });
     } catch {
+      console.log(`production-platform-api: ${stage} NO_RESPONSE`);
       return fail('PLATFORM_REQUEST_FAILED');
     }
+    console.log(`production-platform-api: ${stage} ${response.status}`);
     if (response.status === 401 || response.status === 403) {
-      return fail('QUEUE_PERMISSION_REQUIRED');
+      return fail(
+        stage === 'WORKER_SCHEDULES_GET'
+          ? 'WORKER_SCHEDULE_PERMISSION_REQUIRED'
+          : 'QUEUE_PERMISSION_REQUIRED',
+      );
     }
     if (!response.ok) return fail('PLATFORM_REQUEST_FAILED');
     const json = await boundedJson(response);
@@ -171,7 +182,10 @@ export async function runProductionPlatform(
   };
   let queue: ProductionPlatformResult['queue'] = 'present';
   try {
-    const queues = await cfRequest(`/queues?name=${PRODUCTION_PLATFORM.queueName}&per_page=100`);
+    const queues = await cfRequest(
+      'QUEUE_GET',
+      `/queues?name=${PRODUCTION_PLATFORM.queueName}&per_page=100`,
+    );
     if (!Array.isArray(queues)) return fail('PLATFORM_RESPONSE_INVALID');
     const matches = queues.filter(
       (item) => record(item) && item.queue_name === PRODUCTION_PLATFORM.queueName,
@@ -180,7 +194,9 @@ export async function runProductionPlatform(
     if (matches.length === 0) {
       queue = 'missing';
       if (input.operation === 'setup') {
-        const created = await cfRequest('/queues', { queue_name: PRODUCTION_PLATFORM.queueName });
+        const created = await cfRequest('QUEUE_CREATE', '/queues', {
+          queue_name: PRODUCTION_PLATFORM.queueName,
+        });
         if (!record(created) || created.queue_name !== PRODUCTION_PLATFORM.queueName)
           return fail('QUEUE_INVALID');
         queue = 'created';
@@ -191,7 +207,10 @@ export async function runProductionPlatform(
       throw error;
     queue = 'permission-required';
   }
-  const schedules = await cfRequest(`/workers/scripts/${PRODUCTION_PLATFORM.workerName}/schedules`);
+  const schedules = await cfRequest(
+    'WORKER_SCHEDULES_GET',
+    `/workers/scripts/${PRODUCTION_PLATFORM.workerName}/schedules`,
+  );
   if (!record(schedules) || !Array.isArray(schedules.schedules))
     return fail('PLATFORM_RESPONSE_INVALID');
   const crons = schedules.schedules
@@ -224,6 +243,7 @@ export async function runProductionPlatform(
   });
   let bucket: ProductionPlatformResult['bucket'] = 'private-present';
   try {
+    console.log('production-platform-api: STORAGE_BUCKET_CHECK REACHED');
     const existing = await admin.storage.getBucket('comics');
     if (existing.error) {
       if (
