@@ -81,6 +81,42 @@ function rpcFetcher(
   };
 }
 
+function rpcFetcherForOpenAI(
+  generation: ReturnType<typeof openAIClaim>,
+  calls: { name: string; body: Record<string, unknown> }[],
+) {
+  return rpcFetcher((name, body) => {
+    if (name === 'claim_generation') return generation;
+    if (name === 'begin_provider_attempt')
+      return {
+        attempt_id: crypto.randomUUID(),
+        generation_id: generationId,
+        stage: body.p_stage,
+        call_index: body.p_call_index,
+        mode: 'provider',
+        is_mock: false,
+      };
+    if (name === 'finish_provider_attempt')
+      return {
+        attempt_id: body.p_attempt_id,
+        state: body.p_state,
+        request_id: body.p_request_id,
+        finished_at: new Date().toISOString(),
+        is_mock: false,
+      };
+    if (name === 'mark_generation_saving')
+      return { generation_id: generationId, status: 'running', stage: 'saving' };
+    if (name === 'fail_or_hold_generation')
+      return {
+        generation_id: generationId,
+        status: 'failed',
+        reservation_state: 'consumed',
+        released: false,
+      };
+    throw new Error(`unexpected RPC: ${name}`);
+  }, calls);
+}
+
 function successfulOpenAIProviders() {
   const script = scriptSchema.parse(structuredClone(scriptSample));
   const png = Uint8Array.from(
@@ -491,6 +527,154 @@ describe('generation queue consumer', () => {
         p_generation_enabled: true,
       })),
     ]);
+  });
+
+  it.each([0, 408, 429, 503])(
+    'retries one transient saving transition failure (status %i) without replaying provider attempts',
+    async (transientStatus) => {
+      const calls: { name: string; body: Record<string, unknown> }[] = [];
+      const queue = { send: vi.fn(async () => undefined) };
+      const liveDemo: Environment = {
+        ...environment(queue),
+        AI_MODE: 'live',
+        GENERATION_ENABLED: 'true',
+        OPENAI_API_KEY: 'provider-key-for-test-only',
+      };
+      const generation = openAIClaim();
+      const providers = successfulOpenAIProviders();
+      const rpcFetcher = rpcFetcherForOpenAI(generation, calls);
+      let markCalls = 0;
+      const fetcher: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        if (new URL(request.url).pathname.endsWith('/mark_generation_saving')) {
+          markCalls++;
+          expect(request.signal.aborted).toBe(false);
+          if (markCalls === 1) {
+            if (transientStatus === 0) throw new TypeError('temporary transport failure');
+            return Response.json(
+              { code: 'PGRST000', message: 'temporary dependency failure' },
+              { status: transientStatus },
+            );
+          }
+        }
+        return rpcFetcher(input, init);
+      };
+      const saveGeneratedComic = vi.fn<SaveGeneratedComic>(async () => ({
+        generationId,
+        status: 'succeeded',
+      }));
+
+      const outcome = await processGenerationMessage(liveDemo, generationId, fetcher, {
+        saveGeneratedComic,
+        recoverGeneratedComic: async (requestedId) => ({
+          generationId: requestedId,
+          status: 'pending',
+        }),
+        createScriptProvider: () => providers.scriptProvider,
+        createImageProvider: () => providers.imageProvider,
+      });
+
+      expect(outcome).toBe('handed-off');
+      expect(markCalls).toBe(2);
+      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+      expect(calls.filter((call) => call.name === 'finish_provider_attempt')).toHaveLength(5);
+      expect(calls.filter((call) => call.name === 'mark_generation_saving')).toHaveLength(1);
+      expect(calls.some((call) => call.name === 'fail_or_hold_generation')).toBe(false);
+      expect(saveGeneratedComic).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not retry a permanent saving transition rejection', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const queue = { send: vi.fn(async () => undefined) };
+    const liveDemo: Environment = {
+      ...environment(queue),
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+      OPENAI_API_KEY: 'provider-key-for-test-only',
+    };
+    const generation = openAIClaim();
+    const providers = successfulOpenAIProviders();
+    const rpcFetcher = rpcFetcherForOpenAI(generation, calls);
+    let markCalls = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.endsWith('/mark_generation_saving')) {
+        markCalls++;
+        return Response.json({ code: 'P0001', message: 'CLAIM_EXPIRED' }, { status: 400 });
+      }
+      return rpcFetcher(input, init);
+    };
+    const saveGeneratedComic = vi.fn<SaveGeneratedComic>();
+
+    const outcome = await processGenerationMessage(liveDemo, generationId, fetcher, {
+      saveGeneratedComic,
+      recoverGeneratedComic: async (requestedId) => ({
+        generationId: requestedId,
+        status: 'pending',
+      }),
+      createScriptProvider: () => providers.scriptProvider,
+      createImageProvider: () => providers.imageProvider,
+    });
+
+    expect(outcome).toBe('failed');
+    expect(markCalls).toBe(1);
+    expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+    expect(calls.filter((call) => call.name === 'finish_provider_attempt')).toHaveLength(5);
+    expect(calls.filter((call) => call.name === 'fail_or_hold_generation')).toHaveLength(1);
+    expect(saveGeneratedComic).not.toHaveBeenCalled();
+  });
+
+  it('aborts the saving transition and skips its retry after the deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-06T00:00:00.000Z'));
+    try {
+      const calls: { name: string; body: Record<string, unknown> }[] = [];
+      const queue = { send: vi.fn(async () => undefined) };
+      const liveDemo: Environment = {
+        ...environment(queue),
+        AI_MODE: 'live',
+        GENERATION_ENABLED: 'true',
+        OPENAI_API_KEY: 'provider-key-for-test-only',
+      };
+      const generation = openAIClaim();
+      const providers = successfulOpenAIProviders();
+      const rpcFetcher = rpcFetcherForOpenAI(generation, calls);
+      let markCalls = 0;
+      const fetcher: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        if (new URL(request.url).pathname.endsWith('/mark_generation_saving')) {
+          markCalls++;
+          expect(request.signal.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(14 * 60_000 + 1);
+          expect(request.signal.aborted).toBe(true);
+          return Response.json(
+            { code: 'PGRST000', message: 'temporary dependency failure' },
+            { status: 503 },
+          );
+        }
+        return rpcFetcher(input, init);
+      };
+      const saveGeneratedComic = vi.fn<SaveGeneratedComic>();
+
+      await expect(
+        runOpenAIGeneration(liveDemo, fetcher, generation, {
+          saveGeneratedComic,
+          recoverGeneratedComic: async (requestedId) => ({
+            generationId: requestedId,
+            status: 'pending',
+          }),
+          createScriptProvider: () => providers.scriptProvider,
+          createImageProvider: () => providers.imageProvider,
+        }),
+      ).rejects.toMatchObject({ name: 'TimeoutError' });
+
+      expect(markCalls).toBe(1);
+      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+      expect(saveGeneratedComic).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('guards direct OpenAI runner calls when recovery is not configured', async () => {

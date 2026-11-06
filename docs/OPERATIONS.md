@@ -101,6 +101,7 @@
 - 同じowner・entry・revisionに`status=succeeded`のgenerationがある場合、新しいIdempotency-Keyは`409 REVISION_ALREADY_GENERATED`で拒否します。同一keyのreceipt確認後にentryをrow lockし、revisionの照合後・quota上限判定前に検査するため、完了処理との競合も直列化します。別revisionとfailed後の再受付を許可し、`unknown` / `held`の扱いは変更しません。
 - `model_profile_json`はDB policyの正本です。空オブジェクトは未設定として停止します。現在コードが許可する実AI profileはOpenAI脚本`gpt-4.1-mini-2025-04-14` + 白黒画像`gpt-image-2.5-flare`、4 image callsです。profileには`profile_id`、`is_mock=false`、DB管理の正整数`max_cost_micro_usd`を含め、最大費用を予約します。provider/model/color modeなどは固定allowlistと一致しなければ停止し、日記本文やHTTP bodyから受けません。初期policyはdisabled・予算0で、費用負担者と実際の利用可能モデル権限は未確認です。
 - `reserve_generation`の予約ロック順は`generation_policy`→global total→global day→user day→entry/jobです。全予約がglobal total counterをロックするため、最後の全期間枠と総予算を超える並行受付は起きません。
+- 5件のprovider attempt成功後に`mark_generation_saving`の依存先がtransport失敗またはHTTP 408 / 429 / 5xx（501 / 505を除く）を返した場合、期限とsignalが有効なときだけ同じclaimでRPCを最大1回再送します。P0001の業務拒否・期限切れは再送せず、provider APIは再実行しません。
 - policy設定を変える運用者は、単独の短いtransactionで更新してcommitします。更新triggerと予約RPCは同じ2整数advisory transaction lockを使い、変更中のpolicy snapshotで予約が進まないよう直列化します。
 - 匿名認証のユーザーIDは「ブラウザ単位」であり「人間1人」を保証しないため、ユーザー単位の上限だけでなくシステム全体の上限（全体枠・総予算）が必須です。
 
