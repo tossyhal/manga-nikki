@@ -2,7 +2,9 @@
 
 [PNGを開く](architecture.png)／[編集用HTMLを開く](architecture.html)
 
-発表用のライトモード・横長1枚（PNG：3200×1800、16:9）です。日記の入力、匿名認証、非同期の脚本・画像生成、非公開保存、本人による閲覧を示します。定期処理と開発・デプロイの仕組みは図から省略しています。アプリの実装や設定は変更していません。
+発表用のライトモード・横長1枚（PNG：3200×1800、16:9）です。日記の入力から、非同期での脚本・画像生成、非公開保存までの主な流れを示します。ボックス内の説明は役割を中心に1〜2行へ絞っています。
+
+定期処理、開発・デプロイ、認証トークンや画像閲覧の細かな通信経路は図から省略しています。OpenAIの呼び出しと画像の保存はConsumerが担当します。「技術的な工夫」の別枠やAppendixは設けていません。アプリの実装や設定は変更していません。
 
 ## 編集と再生成
 
@@ -24,7 +26,7 @@ Python3.9以上、uv、Chromiumの実行に必要なOSライブラリ、日本�
 
 アプリの参照コミットは`909ee02`です。主な照合先は`src/server/index.ts`、`src/server/auth.ts`、`src/server/live-generations.ts`、`src/server/generation-queue.ts`、`src/server/comic-save-runtime.ts`、`src/server/ai/openai-*-provider.ts`、`src/client/lib/auth.ts`です。
 
-APIとQueue Consumerは同一Workerの処理です。Supabaseへの読み取りは利用者JWTとRLS、書き込み・生成枠の予約はサーバー専用RPCを使います。画像はprivate Storageへ保存し、所有者確認後に短命の署名URLを発行します。
+APIとQueue Consumerは同一Workerの処理です。Supabaseへの読み取りは利用者JWTとRLS、書き込み・生成枠の予約はサーバー専用RPCを使います。画像はprivate Storageへ保存し、所有者確認後に短命の署名URLを発行します。署名URLは有効期間中、そのURLを知っている人が利用できるため、図では「本人だけが閲覧できる」とは表現していません。重複配信への対策も、二重課金の完全防止を保証する表現にはしていません。
 
 ## 出典とライセンス
 
