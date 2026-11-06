@@ -155,17 +155,19 @@ export function Home({
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
   const sampleOpen = new URLSearchParams(location.search).get('sample') === '1';
-  const openSample = () => navigate('/?sample=1');
+  const openedSampleInApp =
+    (location.state as { openedSampleInApp?: boolean } | null)?.openedSampleInApp === true;
+  const openSample = () => navigate('/?sample=1', { state: { openedSampleInApp: true } });
+  const closeSample = () => {
+    if (openedSampleInApp) navigate(-1);
+    else navigate('/', { replace: true });
+  };
 
   if (showSample && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
-          <button
-            className="icon-button"
-            type="button"
-            onClick={() => navigate('/', { replace: true })}
-          >
+          <button className="icon-button" type="button" onClick={closeSample}>
             <Icon name="back" />
             <span className="sr-only">戻る</span>
           </button>

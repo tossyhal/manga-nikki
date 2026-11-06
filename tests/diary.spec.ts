@@ -205,6 +205,33 @@ test('サンプルを閲覧するだけでは匿名登録やCAPTCHAを呼び出�
   expect(externalAuthRequests).toEqual([]);
 });
 
+test('サンプルを2回開閉しても戻る操作1回で前の画面に戻る', async ({ page }) => {
+  await page.route('**/api/v1/config', (route) =>
+    route.fulfill({
+      json: {
+        dataMode: 'sample',
+        generationAvailable: false,
+        consentVersion: 'v1',
+        retentionDays: 30,
+      },
+    }),
+  );
+  await page.goto('/library');
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.getByRole('button', { name: '漫画を読む' }).click();
+    await expect(page).toHaveURL(/\/\?sample=1$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();
+    await page.getByRole('button', { name: '戻る' }).click();
+    await expect(page).toHaveURL(/\/$/);
+  }
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/library$/);
+});
+
 test('liveホームは履歴取得と匿名登録を始めない', async ({ page }) => {
   let personalEntryReads = 0;
   const externalAuthRequests: string[] = [];

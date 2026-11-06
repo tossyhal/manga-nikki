@@ -296,6 +296,35 @@ test('詳細メニューは外側操作とTab離脱で閉じ、Escapeと矢印�
   await expect(trigger).toBeFocused();
 });
 
+test('ポインターでメニューを閉じる際にblurが先行しても再度開かない', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  await trigger.click();
+  await expect(menu).toBeVisible();
+
+  await page.evaluate(() => {
+    const triggerButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="その他の操作"]',
+    );
+    const menuItem = document.querySelector<HTMLButtonElement>('[role="menuitem"]');
+    if (!triggerButton || !menuItem) throw new Error('詳細メニューがありません');
+    menuItem.focus();
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }),
+    );
+    menuItem.blur();
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse', button: 0 }),
+    );
+    triggerButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
   await installMockUiRoutes(page);
 
