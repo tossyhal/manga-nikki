@@ -14,7 +14,7 @@
   min-height: 100%;
   place-items: center;
   padding: 24px;
-  background: #fff;
+  background: var(--color-canvas, #f5f5fb);
   color: #252525;
 }
 

@@ -30,7 +30,7 @@ export function BottomNav() {
         </span>
       </Link>
       <Link
-        className={`bottom-nav-item${active === 'write' ? ' is-active' : ''}`}
+        className={`bottom-nav-item bottom-nav-item--write${active === 'write' ? ' is-active' : ''}`}
         to="/new"
         aria-label="日記を書く"
         aria-current={active === 'write' ? 'page' : undefined}

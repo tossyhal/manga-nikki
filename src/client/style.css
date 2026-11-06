@@ -3,16 +3,17 @@
 @theme {
   --color-ink: #252525;
   --color-paper: #ffffff;
+  --color-canvas: #f5f5fb;
   --color-surface: #f6f6f6;
   --color-surface-alt: #efefef;
-  --color-nav-active: #ebebeb;
-  --color-muted: #858585;
+  --color-nav-active: #ebebf0;
+  --color-muted: #6f6f7b;
   --color-border: #e4e4e4;
 }
 
 :root {
   color: #252525;
-  background: #ffffff;
+  background: var(--color-canvas);
   font-family: 'Noto Sans JP', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
   font-synthesis: none;
   line-height: 1.55;
@@ -30,7 +31,7 @@
 html {
   min-width: 320px;
   min-height: 100%;
-  background: #ffffff;
+  background: var(--color-canvas);
 }
 
 body {
@@ -38,7 +39,7 @@ body {
   min-height: 100vh;
   min-height: 100svh;
   margin: 0;
-  background: #ffffff;
+  background: var(--color-canvas);
 }
 
 button,
@@ -87,7 +88,7 @@ a {
   min-height: 100vh;
   min-height: 100svh;
   margin: 0 auto;
-  background: #ffffff;
+  background: var(--color-canvas);
 }
 
 .app-shell.primary-shell {
@@ -280,7 +281,7 @@ p {
   gap: 6px;
   padding: 16px 16px 10px;
   border-radius: 22px;
-  background: #f6f6f6;
+  background: var(--color-paper);
 }
 
 .today-empty-card > p {
@@ -319,7 +320,7 @@ p {
 
 .today-card-loading {
   justify-content: center;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
 }
 
@@ -331,7 +332,7 @@ p {
   gap: 10px;
   padding: 18px;
   border-radius: 22px;
-  background: #f6f6f6;
+  background: var(--color-paper);
   color: #505050;
   text-align: center;
 }
@@ -413,7 +414,7 @@ p {
   gap: 14px;
   padding: 18px 16px;
   border-radius: 22px;
-  background: #f6f6f6;
+  background: var(--color-paper);
 }
 
 .today-sample-card > img {
@@ -433,7 +434,7 @@ p {
   gap: 12px;
   padding: 16px;
   border-radius: 22px;
-  background: #f6f6f6;
+  background: var(--color-paper);
 }
 
 .home-today-image {
@@ -568,7 +569,7 @@ p {
 
 .today-sample-copy p {
   margin: 0 0 8px;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 12px;
 }
 
@@ -821,7 +822,7 @@ p {
   flex-direction: column;
   padding: 18px 15px 10px;
   border-radius: 22px;
-  background: #f6f6f6;
+  background: var(--color-paper);
 }
 
 .primary-shell .new-entry-page .entry-editor-card {
@@ -915,7 +916,7 @@ p {
   margin: 0 0 12px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: #f6f6f6;
+  background: var(--color-paper);
   color: #505050;
   font-size: 12px;
   line-height: 1.6;
@@ -952,7 +953,7 @@ p {
   margin-top: 16px;
   padding: 24px 20px 22px;
   border-radius: 19px;
-  background: #f6f6f6;
+  background: var(--color-paper);
   text-align: center;
 }
 
@@ -1954,9 +1955,10 @@ p {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
   transform: translateX(-50%);
-  border: 1px solid #e4e4e4;
-  border-radius: 27px;
-  background: #ffffff;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--color-paper);
+  box-shadow: 0 8px 24px rgb(37 40 60 / 10%);
 }
 
 .bottom-nav-item {
@@ -1967,7 +1969,8 @@ p {
   align-items: center;
   justify-content: center;
   gap: 1px;
-  color: #252525;
+  border-radius: 999px;
+  color: #73737b;
   text-decoration: none;
 }
 
@@ -1976,7 +1979,44 @@ p {
 }
 
 .bottom-nav-item.is-active {
-  background: #ebebeb;
+  background: var(--color-nav-active);
+  color: #252525;
+}
+
+.bottom-nav-item--write {
+  position: relative;
+  isolation: isolate;
+}
+
+.bottom-nav-item--write::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: -1;
+  width: 48px;
+  height: 48px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #3f3f3f;
+  content: '';
+}
+
+.bottom-nav-item--write.is-active::before {
+  top: calc(50% - 9.5px);
+  width: 36px;
+  height: 36px;
+}
+
+.bottom-nav-item--write .bottom-nav-icon {
+  color: #ffffff;
+}
+
+.bottom-nav-item--write .bottom-nav-label {
+  color: #ffffff;
+}
+
+.bottom-nav-item--write.is-active .bottom-nav-label {
+  color: #252525;
 }
 
 .bottom-nav-icon {
@@ -2008,7 +2048,7 @@ p {
   width: min(390px, calc(100vw - 40px));
   height: 68px;
   margin: 0 auto calc(12px + env(safe-area-inset-bottom, 0px));
-  padding-bottom: 0;
+  padding-bottom: 4px;
   transform: none;
 }
 

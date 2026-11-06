@@ -36,7 +36,7 @@
   margin: 0;
   padding: 3px;
   border-radius: 999px;
-  background: #f2f2f2;
+  background: #ffffff;
 }
 
 .library-view-tab {
@@ -58,10 +58,9 @@
 }
 
 .library-view-tab[aria-selected='true'] {
-  background: #ffffff;
+  background: #ebebf0;
   color: #252525;
   font-weight: 700;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
 }
 
 .library-view-tab:focus-visible {
@@ -105,7 +104,10 @@
   cursor: pointer;
 }
 
-.library-view-tab:hover:not([aria-selected='true']),
+.library-view-tab:hover:not([aria-selected='true']) {
+  background: #f5f5fb;
+}
+
 .library-month-button:hover:not(:disabled) {
   background: #f6f6f6;
 }
@@ -183,7 +185,7 @@
   min-height: 18px;
   flex: 0 0 18px;
   margin: 0;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 12px;
   line-height: 18px;
   text-align: center;
@@ -203,7 +205,7 @@
 .library-calendar th {
   height: 24px;
   padding: 0;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 12px;
   font-weight: 400;
   line-height: 1;
@@ -239,7 +241,9 @@
 }
 
 .library-day-button[aria-pressed='true'] {
-  background: #ebebeb;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px #81818e;
+  font-weight: 700;
 }
 
 .library-day-button--future {
@@ -318,7 +322,7 @@
 
 .library-day-empty > p {
   margin: 0 0 12px;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
   line-height: 1.6;
   text-align: center;
@@ -356,7 +360,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
   line-height: 1.6;
   text-align: center;
@@ -391,7 +395,7 @@
 }
 
 .library-page-controls span {
-  color: #858585;
+  color: var(--color-muted);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -418,7 +422,7 @@
   min-height: 96px;
   flex: 1 0 auto;
   place-items: center;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
   text-align: center;
 }
@@ -436,7 +440,7 @@
 
 .library-list-empty-state > svg:first-child {
   margin-bottom: 16px;
-  color: #858585;
+  color: var(--color-muted);
 }
 
 .library-list-empty-state h2 {
@@ -503,7 +507,7 @@
 
 .library-state-card p {
   margin: 12px 0 0;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -527,7 +531,7 @@
 .library-loading {
   display: block;
   padding-block: 24px;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 14px;
 }
 
@@ -642,7 +646,7 @@
   place-items: center;
   border-radius: 10px;
   background: #f6f6f6;
-  color: #858585;
+  color: var(--color-muted);
 }
 
 .entry-thumbnail {
@@ -689,7 +693,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 10px;
-  color: #858585;
+  color: var(--color-muted);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -708,7 +712,7 @@
 
 .entry-history-card > svg:last-child {
   flex: 0 0 auto;
-  color: #858585;
+  color: var(--color-muted);
 }
 
 .entry-history-list--compact {
