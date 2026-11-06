@@ -437,6 +437,7 @@ p {
 }
 
 .home-today-image {
+  position: relative;
   display: grid;
   grid-column: 1;
   grid-row: 1;
@@ -446,6 +447,41 @@ p {
   overflow: hidden;
   border-radius: 14px;
   background: #ffffff;
+}
+
+.home-today-image-link {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.thumbnail-retry-button {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 1;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid #e4e4e4;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #252525;
+  cursor: pointer;
+}
+
+.thumbnail-retry-button:focus-visible {
+  outline: 2px solid #222222;
+  outline-offset: 2px;
+}
+
+.thumbnail-retry-button:disabled {
+  color: #858585;
+  cursor: default;
 }
 
 .home-today-image-preview {

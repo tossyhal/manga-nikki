@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { shouldRenewExpiredAsset } from './signedAssetRefresh';
+import {
+  shouldRefreshExpiredAssetOnVisibility,
+  shouldRenewExpiredAsset,
+} from './signedAssetRefresh';
 
 describe('expired signed asset refresh', () => {
   const requestedAt = 10_000;
@@ -35,6 +38,83 @@ describe('expired signed asset refresh', () => {
         false,
         responseArrivesAt + 51_000,
         requestedAtWall + 61_000,
+      ),
+    ).toBe(true);
+  });
+
+  it('uses expiresAt with elapsed time when a request takes time to return', () => {
+    const expiresAt = new Date(requestedAtWall + 70_000).toISOString();
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 60_000,
+        requestedAtWall + 60_000,
+        expiresAt,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 70_000,
+        requestedAtWall + 70_000,
+        expiresAt,
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to elapsed clocks when the client wall clock is behind expiresAt', () => {
+    const expiresAt = new Date(requestedAtWall + 3_600_000 + 60_000).toISOString();
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 65_000,
+        requestedAtWall + 65_000,
+        expiresAt,
+      ),
+    ).toBe(true);
+  });
+
+  it('renews an expired terminal thumbnail once when the page becomes visible', () => {
+    const expiredAt = new Date(requestedAtWall - 1).toISOString();
+    expect(
+      shouldRefreshExpiredAssetOnVisibility(
+        requestedAt,
+        requestedAtWall,
+        false,
+        expiredAt,
+        requestedAt + 1_000,
+        requestedAtWall + 1_000,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRefreshExpiredAssetOnVisibility(
+        requestedAt,
+        requestedAtWall,
+        true,
+        expiredAt,
+        requestedAt + 1_000,
+        requestedAtWall + 1_000,
+      ),
+    ).toBe(false);
+  });
+
+  it('uses elapsed clocks if the client wall clock has not reached the server expiry', () => {
+    const clientBehindByAnHour = requestedAtWall - 3_600_000;
+    const expiresAt = new Date(requestedAtWall + 60_000).toISOString();
+    expect(
+      shouldRefreshExpiredAssetOnVisibility(
+        requestedAt,
+        clientBehindByAnHour,
+        false,
+        expiresAt,
+        requestedAt + 65_000,
+        clientBehindByAnHour + 65_000,
       ),
     ).toBe(true);
   });
