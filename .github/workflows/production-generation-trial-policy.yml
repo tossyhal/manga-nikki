@@ -3,18 +3,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: checkは読取、prepareは停止を維持した固定1漫画/1USD枠、enableは費用検証後のみ、stopは受付停止
+        description: checkは読取、prepareは停止を維持した固定1漫画/1USD枠、enableは費用検証後のみ、stopは受付停止、activate-public80は累積80USD・通常3回/JST日・ownerデバッグ例外
         type: choice
-        options: [check, prepare, enable, stop]
+        options: [check, prepare, enable, stop, activate-public80]
         default: check
         required: true
       confirmation:
-        description: prepare=PREPARE_ONE_COMIC_1USD_TRIAL、enable=ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST、stop=STOP_GENERATION
+        description: prepare=PREPARE_ONE_COMIC_1USD_TRIAL、enable=ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST、stop=STOP_GENERATION、activate-public80=ENABLE_PUBLIC_80USD_3_PER_JST_DAY_OWNER_DEBUG
         type: string
         default: ''
         required: false
       provider_cost_verified:
-        description: enable専用。脚本1回＋画像4回の実請求上限を別途検証済み（DB予約額だけではprovider capにならない）
+        description: enable/activate-public80専用。費用条件を確認し承認済み（厳密な実請求停止を保証しない）
         type: boolean
         default: false
         required: true
@@ -33,13 +33,13 @@ jobs:
           PROVIDER_COST_VERIFIED: ${{ inputs.provider_cost_verified }}
         run: |
           node --input-type=module <<'NODE'
-          const confirmations={prepare:'PREPARE_ONE_COMIC_1USD_TRIAL',enable:'ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST',stop:'STOP_GENERATION'};
+          const confirmations={prepare:'PREPARE_ONE_COMIC_1USD_TRIAL',enable:'ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST',stop:'STOP_GENERATION','activate-public80':'ENABLE_PUBLIC_80USD_3_PER_JST_DAY_OWNER_DEBUG'};
           const operation=process.env.OPERATION;
           if (process.env.GITHUB_ACTOR_ID !== '92223710' || process.env.GITHUB_TRIGGERING_ACTOR !== 'tossyhal' ||
               !/^[0-9a-f]{40}$/i.test(process.env.GITHUB_SHA ?? '') ||
-              !['check','prepare','enable','stop'].includes(operation ?? '') ||
+              !['check','prepare','enable','stop','activate-public80'].includes(operation ?? '') ||
               (operation !== 'check' && (process.env.GITHUB_RUN_ATTEMPT !== '1' || process.env.CONFIRMATION !== confirmations[operation])) ||
-              (operation === 'enable' && process.env.PROVIDER_COST_VERIFIED !== 'true')) {
+              (['enable','activate-public80'].includes(operation) && process.env.PROVIDER_COST_VERIFIED !== 'true')) {
             console.error('OWNER_GATE_OR_INPUT_REJECTED');
             process.exitCode=1;
           }
