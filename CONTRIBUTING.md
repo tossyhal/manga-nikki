@@ -1,232 +1,89 @@
-# 開発手順（CONTRIBUTING）
+# 開発手順
 
-PR#29までの変更は`main`へ統合済みです。現在のbranchではOpenAI白黒生成のQueue経路にprivate画像保存・assets登録・成功確定RPC・保存復旧を接続しています。実AI生成を受付可能にするには環境・予算・認証・Queue等の追加設定が必要で、共有DBへのmigration適用と実AI検証は未実施です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+実装と設定を正本とし、起動・検査・変更の手順をここにまとめます。
+認証・DB・AI・公開設定を扱う場合は[運用手順](docs/OPERATIONS.md)も確認してください。
 
-## 1. 最初にやること（ツールの準備）
+## 環境構築
 
-初期基盤と固定版の設定は追加済みです。この節でツールとエディターを準備し、次の節で開発サーバーを起動します。
+Git、mise、任意のエディターを用意します。Node.jsとpnpmの固定版は[mise.toml](mise.toml)・[mise.lock](mise.lock)を使います。
+Node.jsやpnpmを別途更新せず、`package.json`の`packageManager`と揃えてください。
+WindowsとWSLで`node_modules`を共有しません。画面のモック開発にはDockerやSupabase CLIは不要です。
 
-### ツールと採用バージョン
-
-Git、mise、任意のエディターを用意します。Node.jsは`24.22.1`、pnpmは`12.11.2`に固定済みです。miseも検証した`2026.10.19`以降を使います。
-
-Node.jsとpnpmはmise、依存パッケージはpnpmと`pnpm-lock.yaml`で管理します。package.jsonの`packageManager`には`pnpm@12.11.2`を設定します。WindowsとWSLで`node_modules`を共有しません。通常の画面開発にDockerやSupabase CLIは不要です。
-
-### Windowsのmise導入
-
-1. PowerShellで次を実行します。既にmiseがあればインストールは不要です。
-
-   ```powershell
-   winget install jdx.mise
-   ```
-
-2. ターミナルを開き直し、`mise --version`で認識されることを確認します。
-3. 現在のPowerShellでmiseを有効にします。
-
-   ```powershell
-   (&mise activate pwsh) | Out-String | Invoke-Expression
-   ```
-
-4. 毎回有効にするには、`$PROFILE`が示すプロファイルに同じ有効化の1行を一度だけ追加します。ファイルがなければ親フォルダーごと作成し、既存の内容は残します。VS Code内のPowerShellと別のPowerShellでは、使うプロファイルが異なる場合があります。
-   プロファイルを開く操作例です。開いたファイルへ有効化の1行を追記して保存します。
-
-   ```powershell
-   if (-not (Test-Path $PROFILE)) {
-       New-Item -ItemType File -Path $PROFILE -Force | Out-Null
-   }
-   notepad $PROFILE
-   ```
-
-5. 新しいターミナルで再確認します。プロファイル実行が制限されている場合は設定を無条件に緩めず、下の`mise exec`方式を使います。
-
-macOSはHomebrew導入済みなら`brew install mise`、Linux/WSLは[公式インストール手順](https://mise.jdx.dev/installing-mise.html)に従います。シェル設定はzshなら`~/.zshrc`へ`eval "$(mise activate zsh)"`、bashなら`~/.bashrc`へ`eval "$(mise activate bash)"`を一度だけ追加します。mise本体がPATHにない場合は、公式手順に従ってからターミナルを開き直します。
-
-### エディターと改行
-
-VS Codeでリポジトリを開き、拡張機能の推奨一覧からEditorConfig拡張をインストールします。[推奨拡張の設定](.vscode/extensions.json)は自動インストールではありません。他のエディターでもEditorConfig対応を有効にしてください。
-
-`.editorconfig`は保存時のLF・文字コード・インデント、`.gitattributes`はGitのテキスト改行をLFへ揃えます。個人の`core.autocrlf`設定を変更する必要はありません。日本語と英数字の間に不要な半角スペースは入れず、コード・URL・コマンド内の空白は維持します。
-
-## 2. 初回起動
-
-リポジトリにある4つの設定・lockfileを使います。既にclone済みなら取得を繰り返しません。招待を承諾したGitHubアカウントで認証し、URLにトークンを埋め込みません。
-
-```powershell
-git clone https://github.com/tossyhal/manga-nikki.git
-cd manga-nikki
-```
-
-リポジトリの`mise.toml`を確認してから信頼し、固定版を導入します。
-
-```powershell
+```sh
 mise trust
 mise install --locked
-node --version
-pnpm --version
-```
-
-pnpmが`12.11.2`であり、Node.jsが`mise.lock`の版と一致することを確認します。別のインストール先が優先される場合は、`mise which node`・`mise which pnpm`で切り分けます。シェル有効化を使えない場合は、以降のコマンドを`mise exec -- pnpm ...`の形で実行できます。
-
-```powershell
 pnpm install --frozen-lockfile
 ```
 
-設定ファイルを初回だけコピーします。既存ファイルがある場合は上書きせず差分を確認します。macOS/Linux/WSLは`Copy-Item`を`cp`へ置き換えます。
+`mise trust`の前に設定内容を確認します。シェルの有効化が使えない場合は`mise exec -- pnpm ...`で実行できます。
+`mise which node`・`mise which pnpm`で実際の実行先を確認できます。
+EditorConfig対応を有効にし、LFとUTF-8を維持してください。
 
-```powershell
-Copy-Item .env.example .env.local
-Copy-Item .dev.vars.example .dev.vars
+## モックで起動
+
+初回だけ設定をコピーします。既存ファイルがある場合は上書きせず差分を確認します。
+Windows PowerShellでは`cp`を`Copy-Item`へ置き換えられます。
+
+```sh
+cp .env.example .env.local
+cp .dev.vars.example .dev.vars
 pnpm dev
 ```
 
-初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
+`local-mock`は秘密情報なしで日記入力・固定漫画・履歴を確認するモードです。
+`GENERATION_ENABLED=false`を維持し、実AIキーを入れません。
 
-`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`.env.example`を`.env.local`へ、`dev.vars.local-connected.example`を`.dev.vars.local-connected`へ先にコピーし、コピー先だけ値を設定してから、開発用Supabaseにレビュー済みmigrationを適用して起動します。コピー元のexampleには秘密情報を書かないでください。`.env.local`にはブラウザー用のSupabase URL・publishable key・Turnstile site keyを、`.dev.vars.local-connected`にはサーバー用設定とsecret keyを設定します。サーバー専用secretをブラウザー用設定へ入れないでください。
+## 開発用Supabaseへ接続
 
-`pnpm dev:connected`は`.dev.vars.local-connected`が存在しない場合、Viteを起動する前に停止します。`.env.local`は通常の`pnpm dev`や`pnpm build`にも読み込まれます。初期設定の`local-mock`は画面を表示するだけでは匿名Authを開始しないため、`.env.local`を接続確認のたびに退避する必要はありません。サンプルpreviewには`pnpm build:staging`を使います。
+`local-connected`はAuth/DBと固定mock Queue経路の結合確認用です。
+承認された開発用Supabaseを使い、本番の日記や認証情報を流用しません。
 
 ```sh
+cp .env.example .env.local
+cp dev.vars.local-connected.example .dev.vars.local-connected
 pnpm dev:connected
 ```
 
-このモードでは日記をSupabaseへ保存・読み込みます。漫画は固定mockのみで、実AIは呼び出しません。新しい匿名セッションは、利用条件への同意後、登録用CAPTCHAの確認が必要です。Turnstile検証用secretと許可hostnameがない場合、生成受付は停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
+起動前にコピー先へ値を設定し、接続先へレビュー済みmigrationと必要なStorage設定が適用されていることを確認します。
+`.env.local`にはブラウザ公開用のSupabase URL・publishable key・Turnstile site keyだけを入れます。
+`.dev.vars.local-connected`にはWorker用Supabase設定・secret key・Turnstile検証用secretと許可hostnameを設定します。
+詳細なキー名はexampleを参照し、`AI_MODE=mock`・`GENERATION_ENABLED=false`を維持します。
+exampleへの秘密情報の書込みや、認証・CAPTCHAの解除による回避は禁止です。
+DBの検査は[supabase/README.md](supabase/README.md)を参照してください。
 
-## 3. 初期基盤の範囲
-
-以下は初期基盤を作った時点の担当範囲です。現在のbranchにはOpenAI白黒生成のQueue経路、private画像保存・assets登録・完了確定RPC・保存復旧runtimeがあります。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackが保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。共有DB適用、実AI課金・品質、実環境のTurnstile / Queue / Cronは未確認です。現在の状態と別承認が必要なdemo準備は[PLAN](docs/PLAN.md)と[OPERATIONS](docs/OPERATIONS.md)を参照してください。
-
-- [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
-- 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
-- 標準コマンド・lint/format・型確認・unit/E2E・CIを用意し、秘密情報なしの新規Windows環境で起動と検査が通ることを確認する。
-- モック表示、localhost制限、動作モードの起動時検証を入れる。初期基盤の対象外だったDB・Queue・実AI・本番公開は後続段階で扱い、実AIと外部公開には別途承認を要します。
-
-以下は基盤設定を更新するときだけの参考です。通常の参加者は作り直さず、前節の`--locked`で導入します。
+## 検査
 
 ```sh
-mise use node@24.22.1 pnpm@12.11.2
-mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
+pnpm format
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-利用者のOS/CPUに合わせて対象を追加し、各環境で`mise install --locked`を確認します。Node.jsの解決版とpnpmの指定版を確認し、miseの設定・lockfileを一緒に管理します。package.jsonの`packageManager`とCIも同じ版へ揃えます。
+DB変更時は`pnpm test:db`、画面変更時は`pnpm test:e2e`、PWA変更時は`pnpm test:e2e:pwa`も実行します。
+E2E用Chromiumは`pnpm exec playwright install --only-shell chromium`で準備できます。
+環境別設定の変更時は`pnpm test:release-environment`を実行します。
+実行できなかった検査は理由を報告し、検査を弱めて成功扱いにしません。
 
-## 4. 標準コマンド一覧
-
-初期基盤のコマンドと日記DBテスト、環境を明示したstaging/productionビルドを用意しています。`package.json`の`scripts`を正本とします。
-
-| コマンド | 用途 | いつ用意するか |
-|---|---|---|
-| `pnpm dev` | 画面とAPIの開発サーバー | 実装済み |
-| `pnpm dev:connected` | 設定した開発用Supabaseへ接続するローカル開発サーバー | 実装済み |
-| `pnpm lint` | 静的ルール検査 | 実装済み |
-| `pnpm typecheck` | TypeScriptの型検査 | 実装済み |
-| `pnpm test` | Vitestの非watch実行 | 実装済み |
-| `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
-| `pnpm build` | ビルド検証。公開しない | 実装済み |
-| `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
-| `pnpm test:release-environment` | 隔離fixtureで環境変数の混入を検査 | 実装済み |
-| `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
-| `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
-
-`pnpm-workspace.yaml`の`allowBuilds`でesbuildとworkerdだけのインストールスクリプトを許可しています。知らない依存を一括承認せず、変更時はレビューします。CIはUbuntuだけで実行し、mise-actionで同じ版を導入します。同じブランチの古い実行はキャンセルします。scriptsはWindowsでも動くコマンドで書き、シェル固有のコピー・削除・環境変数代入は避けます。
-
-実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
-
-`pnpm test:e2e`は通常開発サーバー（5173）と分けた4176で専用サーバーを起動します。既存のサーバーは再利用しないため、4176を別のプロセスが使用中ならE2Eは起動に失敗します。専用ポートを変える場合は`PLAYWRIGHT_PORT`を設定してください。E2E専用サーバーは通常dev serverと別のViteキャッシュを使います。
-
-### 環境別ビルド
-
-staging sample、production connected、隔離demo buildは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+架空サンプルのpreviewは次の手順です。
 
 ```sh
 pnpm build:staging
-pnpm build:production
-pnpm build:demo
+pnpm preview
 ```
 
-stagingは`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`を維持します。production targetの固定Worker名は`manga-nikki`で、`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、期限削除Cronだけを使い、Queue bindingはありません。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
+`build:production`と`build:demo`もローカル成果物の作成・検査だけです。公開や実AIの承認にはなりません。
+環境別の公開値は対応する`.env.*.example`とbuildコードで確認してください。
+個人の日記・生成画像はPWAのキャッシュへ保存しません。
 
-staging / productionのローカルbuildでは`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして公開3値を設定します。CI production connected buildは固定Supabase URLとBWSから得たpublishable key・Turnstile site keyで一時ファイルを作り、build後に削除します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
+## ブランチとPR
 
-`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けません。production connected CDは別jobで、main・owner actor・CI成功が揃ったjobで起動します。production Environment variable`PRODUCTION_CONNECTED_CD_ENABLED`が`true`でない場合は成功skipし、現在は`false`です。旧sample flagは参照しません。公開前の確認・実行条件・失敗時の対応は[PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md)を参照してください。
-
-DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
-
-初期設定専用workflowは退役済みです。staging sample CDは架空データだけを公開し、Supabase/Auth/Turnstile・実AIを使いません。production connected CDはowner専用・無効既定で、日記CRUD/Auth/Turnstileへ接続し、実AI・Queueは使いません。
-
-## 5. ブランチ運用とPull Request（PR）の進め方
-
-### 作業の分担とStacked PR
-
-- 親担当者が計画・作業範囲・base branchを決め、実装はfreshなGPT-6-Luna Maxで行います。Figmaデザインと漫画生成・保存の主担当は別メンバーですが、接続に必要な修正は担当PRに含めて構いません。
-- PRは通常`main`をbaseにします。Stacked PRは親branchをbaseにし、親側の修正を子branchへmergeして伝播させます。親PRがmergeされた後は子PRのbaseを`main`へ切り替えます。履歴の通常rebaseやforce pushは行いません。
-
-### ① 作業ブランチの作成
-
-通常は最新の`main`ブランチから作業ブランチを作成し、「1タスク＝1PR」の小さな単位で進めます。Stacked PRでは親担当者が指定した親branchから作成します。
-作業を始める前に、`git status`で未コミットの変更がないことを確認してください。
-
-```sh
-git switch main
-git pull --ff-only origin main
-git switch -c feat/diary-form
-```
-
-### ② 変更の確認とコミット
-
-1. コードを変更したら、関連する標準コマンド（`pnpm lint`、`pnpm typecheck`、`pnpm test`など）と`git diff`で変更内容を確認します。
-2. `git add <ファイル名>`で追加するファイルを個別に指定します。
-3. コミット前に必ず`git diff --cached`を実行し、秘密情報や無関係な変更が含まれていないことを確認します。
-4. コミットメッセージは`feat: 日記入力を追加`のようにConventional Commits形式＋日本語1行で作成します（AIの署名や`Co-authored-by`行は付けません）。
-
-### ③ PRの作成とレビュー
-
-1. PR作成前にCLIからfreshなOpus 5.5（medium）とGPT-6.1-sol（medium）の独立レビューを行い、指摘を修正して両方のレビューを通します。画面・操作の変更はその後`agent-browser`で実画面を確認します。
-2. ブランチをpushし、通常はbaseを`main`、Stacked PRは指定された親branchとしてPRを作成します。本文は[日本語PRテンプレート](.github/PULL_REQUEST_TEMPLATE.md)に沿って記載し、画面変更にはスクリーンショットを添付します（作業途中の場合はDraft PRにします）。
-3. レビューは変更者以外のチームメンバーにも依頼します。
-   - 認証・RLS・RPC・予算制限・公開設定・DB migrationに関わる変更は、人間によるレビューを必須とします。
-   - AIツールが生成したコードであっても、PRを出す担当者自身が「何を入力して何が出力されるか」「どう動作確認したか」を説明できるようにしてください。
-
-### ④ マージとブランチの更新
-
-- マージ方法：ユーザーがレビュー承認後にMerge commitで統合します（Squash mergeやRebase mergeには変更しないでください）。
-- 禁止事項：`main`ブランチへの直接コミット、`force push`、他人のコミット履歴の書き換えは禁止です。
-- CIの必須化：GitHub ActionsのCIをrequired check（マージ必須条件）に設定するのは、実際に成功するジョブが動いてからにします。
-- 作業中に`main`が進んだ場合：
-  - 作業ブランチ上で`git fetch origin` → `git merge origin/main`を実行して取り込みます。
-  - 競合（コンフリクト）が起きた際、自分の担当外のコードを消して解消しないでください。
-  - 共有型・lockfile・wrangler設定などを複数人で同時に触る必要がある場合は、事前に相談してください。
-- マージ後の片付け：`main`ブランチを最新に更新（`git switch main && git pull --ff-only`）し、マージ済みの自分の作業ブランチだけを`git branch -d <ブランチ名>`で削除します。
-
----
-
-## 6. 困ったとき・実装時の参考リンク
-
-### 15〜30分詰まったらSlackで相談
-
-エラーや手順で15〜30分ほど手が止まったら、一人で抱え込まずに以下の項目をSlackで共有してください（※秘密情報やトークンは貼らないこと）。
-
-- 担当しているIssue / 作業ブランチ名
-- やりたいこと
-- 実行したコマンド
-- 実際の結果（エラー文など）と、期待していた結果
-- すでに試したこと
-
-※ 画像が表示されないトラブルの場合でも、Storageのprivate（非公開）設定は解除せず、「所有者」「署名URLの有効期限」「接続先設定」を確認してください。
-
-### 公式ガイドの参照（基盤構築・DB担当向け）
-
-- 初期基盤の構築時：
-  [Cloudflare Workers × Hono公式ガイド](https://developers.cloudflare.com/workers/framework-guides/web-apps/more-web-frameworks/hono/)を確認し、テンプレートはリポジトリ外の一時ディレクトリで生成してから、必要なファイルだけを取り込みます。
-- DB migrationの作業時：
-  [Supabase公式migration手順](https://supabase.com/docs/guides/local-development/database-migrations/)を確認し、「ローカルDBのreset」と「共有DBへのmigration適用」を明確に区別してください。**共有DBや本番DBではresetを実行しないでください。**（CLIの具体的な操作手順は、採用バージョンの動作確認後に追記します）。
-
-miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導入手順](https://mise.jdx.dev/installing-mise.html)・[シェル設定](https://mise.jdx.dev/shell-setup.html)・[lockfile仕様](https://mise.jdx.dev/dev-tools/mise-lock.html)と手元のmiseのhelpを確認しました。Windows/macOSでの起動は未検証です。
-
-
-## 開発モックの制限
-
-- `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
-- `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、private画像保存・署名URL・保存復旧runtimeを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。production DB migration 10本は適用済み(run `42211812661`)ですが、実Turnstile・実Cloudflare Queue / Cron・公開環境Storage API・実AI課金と品質・iPhone Safari HTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AI受付は保存handlerと復旧callbackをdefault Workerへ注入済みですが、stagingは`sample` / `mock`、productionは`live` / `live`・`GENERATION_ENABLED=false`でQueue未設定です。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
-- `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
-- E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。
+- 通常は最新`main`から目的ごとに作業ブランチを作ります。`main`へ直接コミットしません。
+- Stacked PRは親ブランチをbaseにし、親側の変更はmergeで伝播します。親の統合後はbaseを`main`へ変更します。
+- 変更、必要な検査、差分確認、コミットまで行います。コミットは`fix: 日記保存時の表示を修正`のように日本語1行とし、AI署名・共同作者行を付けません。
+- 共有型、migration、依存関係・lockfile、Wrangler設定は編集前に担当者へ共有し、呼出し側とテストも揃えます。
+- PR前に[AGENTS.md](AGENTS.md)のレビュー手順を通し、画面変更は`agent-browser`で確認します。
+- [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)に検査結果、未検証事項、migration・環境変数の有無を記載します。
+- pushとPR作成はユーザーの許可範囲に従い、ユーザーがMerge commitで統合します。force pushや破壊的なreset/cleanは行いません。
+- `develop`への統合はstaging sample配信、`main`への統合は本番CDの対象です。配信条件は運用手順を確認してください。
