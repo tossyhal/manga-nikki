@@ -47,6 +47,14 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm test:release-environment
+      - name: Ubuntu公式mirrorを使用
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Azure mirrorの低速なfont downloadを避ける。
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
       - run: pnpm exec playwright install --with-deps --only-shell chromium
       - run: pnpm test:e2e
       - name: PWA検査（検査済みのビルド成果物を再利用）
@@ -102,3 +110,71 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STAGING_WORKER_URL: ${{ vars.STAGING_WORKER_URL }}
         run: node --experimental-strip-types scripts/deploy-staging-sample.ts
+
+  production-sample-deploy:
+    needs: [database, check]
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.actor_id == '92223710' &&
+      github.triggering_actor == 'tossyhal' &&
+      needs.database.result == 'success' &&
+      needs.check.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: manga-nikki-deploy-production
+      queue: max
+      cancel-in-progress: false
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: 固定Node.jsとpnpmを設定
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: Bitwarden取得前にmain・actor・対象・Secret IDを検証
+        id: main_gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          PRODUCTION_SAMPLE_CD_ENABLED: ${{ vars.PRODUCTION_SAMPLE_CD_ENABLED }}
+          PRODUCTION_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
+          BWS_CLOUDFLARE_SECRET_ID: ${{ vars.BWS_CLOUDFLARE_SECRET_ID }}
+        run: node --experimental-strip-types scripts/check-production-sample-preflight.ts
+      - run: pnpm install --frozen-lockfile
+        if: steps.main_gate.outputs.deploy == 'true'
+      - name: production公開設定ファイルがないことを確認
+        if: steps.main_gate.outputs.deploy == 'true'
+        run: |
+          node --input-type=module -e "import { lstatSync } from 'node:fs'; try { lstatSync('.env.production.local'); console.error('PRODUCTION_ENV_FILE_PRESENT'); process.exitCode = 1; } catch (error) { if (error.code !== 'ENOENT') { console.error('PRODUCTION_ENV_FILE_CHECK_FAILED'); process.exitCode = 1; } }"
+      - run: pnpm build:production
+        if: steps.main_gate.outputs.deploy == 'true'
+      - name: Bitwardenからproduction Worker用tokenを取得
+        if: steps.main_gate.outputs.deploy == 'true'
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_CLOUDFLARE_SECRET_ID }} > CLOUDFLARE_API_TOKEN
+      - name: 既存production Workerへ架空sampleを配信して確認
+        if: steps.main_gate.outputs.deploy == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRODUCTION_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: node --experimental-strip-types scripts/deploy-production-sample.ts

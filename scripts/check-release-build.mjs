@@ -51,7 +51,10 @@ const workerConfig = workerConfigs.find(({ config }) => config.targetEnvironment
 assert.ok(workerConfig, `${target}用Worker設定がありません。`);
 assert.equal(workerConfig.config.vars?.APP_ENV, expectedAppEnvironment);
 assert.equal(workerConfig.config.targetEnvironment, target);
-assert.equal(workerConfig.config.name, `manga-nikki-${target}`);
+assert.equal(
+  workerConfig.config.name,
+  target === 'production' ? 'manga-nikki' : `manga-nikki-${target}`,
+);
 const expectedVars =
   target === 'demo'
     ? {
@@ -67,6 +70,17 @@ const expectedVars =
         GENERATION_ENABLED: 'false',
       };
 assert.deepEqual(workerConfig.config.vars, expectedVars);
+
+if (target === 'production') {
+  assert.equal(workerConfig.config.workers_dev, true);
+  assert.equal(workerConfig.config.preview_urls, false);
+  assert.deepEqual(workerConfig.config.triggers?.crons, []);
+  if (workerConfig.config.queues !== undefined) {
+    assert.deepEqual(workerConfig.config.queues, { producers: [], consumers: [] });
+  }
+  assert.equal(workerConfig.config.route, undefined);
+  assert.equal(workerConfig.config.routes, undefined);
+}
 
 if (target === 'demo') {
   assert.equal(workerConfig.config.workers_dev, false);

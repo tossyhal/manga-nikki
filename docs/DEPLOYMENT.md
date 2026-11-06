@@ -1,6 +1,6 @@
 # Stagingデプロイ運用
 
-この文書はstaging Workerの初期作成と、架空sample専用CDの運用を記録します。初期作成用資格情報は退役扱いです（確認範囲は下記の状態を参照）。開発Supabaseのowner専用・読み取り確認は[開発DBの接続確認](DEV_DATABASE.md)を参照してください。Supabaseへのmigration適用や本番Workerの作成・配信は扱いません。
+この文書はstaging Workerの初期作成と、架空sample専用CDの運用を記録します。初期作成用資格情報は退役扱いです（確認範囲は下記の状態を参照）。開発Supabaseのowner専用・読み取り確認は[開発DBの接続確認](DEV_DATABASE.md)を参照してください。Supabaseへのmigration適用やproduction Workerの配信手順は扱いません。productionの架空sample CDは[PRODUCTION_DEPLOYMENT](PRODUCTION_DEPLOYMENT.md)を参照してください。
 
 ## 2026-11-06時点の状態
 

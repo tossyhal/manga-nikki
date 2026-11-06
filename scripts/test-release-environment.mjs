@@ -238,6 +238,67 @@ try {
   }
 
   await rm(path.join(fixtureRoot, 'dist'), { recursive: true, force: true });
+  await rm(path.join(fixtureRoot, '.env.production.local'));
+  assert.equal(
+    await exists(path.join(fixtureRoot, '.env.production.local')),
+    false,
+    'productionの公開設定ファイルはない状態でbuildします。',
+  );
+  try {
+    await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'production'], {
+      cwd: fixtureRoot,
+      env: childEnvironment,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (error) {
+    const details = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    throw new Error(
+      `隔離fixtureのproduction sample buildが失敗しました。${details ? `\n${details}` : ''}`,
+    );
+  }
+  const productionArtifactFiles = await collectFiles(path.join(fixtureRoot, 'dist'));
+  const productionArtifactContents = await Promise.all(
+    productionArtifactFiles.map((file) => readFile(file)),
+  );
+  const productionArtifactText = Buffer.concat(productionArtifactContents).toString('utf8');
+  for (const sentinel of [
+    'wrong-production-target-sentinel',
+    'process-env-supabase-sentinel',
+    'process-env-publishable-sentinel',
+    'process-env-sitekey-sentinel',
+    'process-env-server-secret-sentinel',
+    'process-env-turnstile-secret-sentinel',
+    'process-env-ai-secret-sentinel',
+    'worker-secret-sentinel',
+    'turnstile-secret-sentinel',
+    'ai-secret-sentinel',
+  ]) {
+    assert.ok(
+      !productionArtifactText.includes(sentinel),
+      `production成果物へ値が混入しました: ${sentinel}`,
+    );
+  }
+  const productionWorkerConfigPath = productionArtifactFiles.find(
+    (file) => path.basename(file) === 'wrangler.json',
+  );
+  assert.ok(productionWorkerConfigPath, 'production Worker設定が成果物にありません。');
+  const productionWorkerConfig = JSON.parse(await readFile(productionWorkerConfigPath, 'utf8'));
+  assert.equal(productionWorkerConfig.name, 'manga-nikki');
+  assert.equal(productionWorkerConfig.targetEnvironment, 'production');
+  assert.deepEqual(productionWorkerConfig.vars, {
+    APP_ENV: 'production',
+    DATA_MODE: 'sample',
+    AI_MODE: 'mock',
+    GENERATION_ENABLED: 'false',
+  });
+  assert.equal(productionWorkerConfig.workers_dev, true);
+  assert.equal(productionWorkerConfig.preview_urls, false);
+  assert.deepEqual(productionWorkerConfig.triggers?.crons, []);
+  if (productionWorkerConfig.queues !== undefined) {
+    assert.deepEqual(productionWorkerConfig.queues, { producers: [], consumers: [] });
+  }
+
+  await rm(path.join(fixtureRoot, 'dist'), { recursive: true, force: true });
   await rm(path.join(fixtureRoot, '.env.demo.local'));
   let missingDemoFailure;
   try {
