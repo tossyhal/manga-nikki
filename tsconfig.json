@@ -21,6 +21,7 @@
     "tests",
     "scripts/bootstrap-staging.ts",
     "scripts/deploy-staging-sample.ts",
+    "scripts/check-dev-database.ts",
     "*.config.ts"
   ]
 }

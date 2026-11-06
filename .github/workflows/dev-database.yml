@@ -1,0 +1,103 @@
+name: 開発DB読み取り確認
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  authorize:
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: owner、main ref、commit形式を確認
+        env:
+          CHECK_REPOSITORY: ${{ github.repository }}
+          CHECK_REF: ${{ github.ref }}
+          CHECK_SHA: ${{ github.sha }}
+          CHECK_ACTOR_ID: ${{ github.actor_id }}
+          CHECK_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          node --input-type=module <<'NODE'
+          const allowed =
+            process.env.CHECK_REPOSITORY === 'tossyhal/manga-nikki' &&
+            process.env.CHECK_REF === 'refs/heads/main' &&
+            process.env.CHECK_ACTOR_ID === '92223710' &&
+            process.env.CHECK_TRIGGERING_ACTOR === 'tossyhal' &&
+            /^[0-9a-f]{40}$/i.test(process.env.CHECK_SHA ?? '');
+          if (!allowed) {
+            console.error('OWNER_GATE_REJECTED');
+            process.exitCode = 1;
+          }
+          NODE
+
+  checks:
+    needs: authorize
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main' &&
+      needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - run: node -e "require('node:fs').copyFileSync('.dev.vars.example', '.dev.vars')"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  preflight:
+    needs: [authorize, checks]
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main' &&
+      needs.authorize.result == 'success' &&
+      needs.checks.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev-database-setup
+    concurrency:
+      group: manga-nikki-dev-database-setup
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: ownerと最新mainを秘密取得前に再確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+        run: node --experimental-strip-types scripts/check-dev-database.ts --gate-only
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y postgresql-client-16
+      - name: Bitwardenから開発DB passwordだけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }} > SUPABASE_DB_PASSWORD
+      - name: 開発Supabaseを読み取り専用で確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+        run: node --experimental-strip-types scripts/check-dev-database.ts
