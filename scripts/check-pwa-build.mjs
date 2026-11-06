@@ -27,6 +27,7 @@ assert.ok(
 );
 assert.ok(precacheUrls.includes('icon-192.png'));
 assert.ok(precacheUrls.includes('icon-512.png'));
+assert.ok(precacheUrls.includes('cat-mascot.png'));
 assert.ok(precacheUrls.some((url) => /^assets\/.+\.js$/.test(url)));
 assert.ok(precacheUrls.some((url) => /^assets\/.+\.css$/.test(url)));
 assert.equal(
@@ -38,7 +39,12 @@ assert.equal(
 for (const url of precacheUrls) {
   const isAppShell = url === 'index.html' || url === 'manifest.webmanifest';
   const isStaticAsset = /^assets\/.+\.(?:js|css)$/.test(url);
-  const isPublicFixture = ['icon-192.png', 'icon-512.png', 'sample-comic.svg'].includes(url);
+  const isPublicFixture = [
+    'icon-192.png',
+    'icon-512.png',
+    'sample-comic.svg',
+    'cat-mascot.png',
+  ].includes(url);
   assert.ok(
     isAppShell || isStaticAsset || isPublicFixture,
     `許可していないキャッシュ対象です: ${url}`,

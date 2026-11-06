@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import type { Entry } from '../../../shared/schemas';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
-import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
 import { Comic } from '../comic/Comic';
 import { EntryHistory } from '../library/EntryHistory';
 import { EntryThumbnail, useEntryPreview } from '../library/EntryPreview';
@@ -252,7 +251,7 @@ export function Home({
         ) : (
           <div className="today-empty-card">
             <p>今日はまだ記録がありません</p>
-            <img src={catSleeping} alt="丸くなって眠る猫" width="148" height="100" />
+            <img src="/cat-mascot.png" alt="" width={480} height={363} />
             <Link className="today-write-link" to="/new">
               <Icon name="plus" size={20} />
               <span>日記を書く</span>

@@ -46,7 +46,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['index.html', 'assets/**/*.{js,css}', 'sample-comic.svg'],
+        globPatterns: ['index.html', 'assets/**/*.{js,css}', 'sample-comic.svg', 'cat-mascot.png'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api(?:\/|$)/],
         skipWaiting: false,

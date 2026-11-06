@@ -293,9 +293,9 @@ p {
 }
 
 .today-empty-card > img {
-  width: 180px;
-  height: 120px;
-  object-fit: contain;
+  width: 190px;
+  max-width: 100%;
+  height: auto;
 }
 
 .today-write-link {

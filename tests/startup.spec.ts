@@ -24,7 +24,7 @@ test('JavaScriptの起動前もHTMLの起動画面を表示する', async ({ pag
   await expect(fallback).toBeVisible();
   await expect(fallback).toContainText('漫画日記');
   await expect(fallback).toContainText('準備中');
-  await expect(fallback.locator('img')).toHaveAttribute('src', '/icon-192.png');
+  await expect(fallback.locator('img')).toHaveAttribute('src', '/cat-mascot.png');
   await expect(page.getByRole('status')).toHaveText('準備中…');
 
   release();
@@ -48,6 +48,10 @@ test('初回の設定取得中だけ起動画面を表示し、画面遷移で�
   await page.goto('/new');
   const startupScreen = page.locator('.startup-screen');
   await expect(startupScreen).toBeVisible();
+  await expect(startupScreen.locator('.startup-screen__mark')).toHaveAttribute(
+    'src',
+    '/cat-mascot.png',
+  );
   await expect(startupScreen).toContainText('漫画日記');
   await expect(startupScreen).toContainText('準備中');
   await expect(startupScreen.getByRole('status')).toHaveText('準備中…');
