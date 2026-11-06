@@ -647,8 +647,8 @@ test('匿名登録CAPTCHA待機中は入力と保存をロックし、確認後�
   expect(signupTokens).toEqual([]);
 
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
-  await clickAppDialogButton(page, '処理中です', '入力に戻る');
+  await expect(page.getByRole('dialog', { name: '入力内容が保存されていません' })).toBeVisible();
+  await clickAppDialogButton(page, '入力内容が保存されていません', '入力に戻る');
   const entryResponse = page.waitForResponse((response) => {
     const request = response.request();
     return request.method() === 'POST' && new URL(response.url()).pathname === '/api/v1/entries';
@@ -732,8 +732,8 @@ test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れて�
     .poll(() => page.evaluate(() => Boolean(window.__releaseE2eRegistrationCaptcha)))
     .toBe(true);
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
-  await clickAppDialogButton(page, '処理中です', '移動する');
+  await expect(page.getByRole('dialog', { name: '入力内容が保存されていません' })).toBeVisible();
+  await clickAppDialogButton(page, '入力内容が保存されていません', '保存せずに離れる');
   await expect(page).toHaveURL(/\/$/);
   await page.evaluate(async () => {
     window.__releaseE2eRegistrationCaptcha?.();
@@ -753,6 +753,109 @@ test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れて�
   ]);
   expect(await page.evaluate(() => window.__e2eSupabaseFetchCalls)).toEqual([]);
   expect(externalRequests).toEqual([]);
+  expect(entryPosts).toBe(0);
+});
+
+test('新規作成APIのAuth再確認中に離れてもPOSTを送信しない', async ({ page }) => {
+  await installTurnstileFake(page, { delayFirstRegistrationCallback: true });
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let refreshRequests = 0;
+  let entryPosts = 0;
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() === 'POST') entryPosts++;
+    return route.continue();
+  });
+  await page.route('https://manga-nikki-e2e.supabase.co/**', async (route) => {
+    const url = new URL(route.request().url());
+    const now = Math.floor(Date.now() / 1000);
+    if (url.pathname === '/auth/v1/signup') {
+      return route.fulfill({
+        status: 200,
+        json: {
+          access_token: 'fixture-live-access-token',
+          token_type: 'bearer',
+          expires_in: 30,
+          expires_at: now + 30,
+          refresh_token: 'fixture-live-refresh-token',
+          user: {
+            id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            aud: 'authenticated',
+            role: 'authenticated',
+            app_metadata: { provider: 'anonymous', providers: ['anonymous'] },
+            user_metadata: {},
+            created_at: new Date().toISOString(),
+            is_anonymous: true,
+          },
+        },
+      });
+    }
+    if (url.pathname !== '/auth/v1/token' || url.searchParams.get('grant_type') !== 'refresh_token')
+      return route.abort();
+    refreshRequests++;
+    await refreshGate;
+    return route.fulfill({
+      status: 200,
+      json: {
+        access_token: 'fixture-refreshed-live-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+        expires_at: now + 3600,
+        refresh_token: 'fixture-refreshed-live-refresh-token',
+        user: {
+          id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          aud: 'authenticated',
+          role: 'authenticated',
+          app_metadata: { provider: 'anonymous', providers: ['anonymous'] },
+          user_metadata: {},
+          created_at: new Date().toISOString(),
+          is_anonymous: true,
+        },
+      },
+    });
+  });
+
+  await page.goto('/new');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('匿名登録応答待ち用の架空日記');
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect(page.getByRole('region', { name: '匿名登録' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => Boolean(window.__releaseE2eRegistrationCaptcha)))
+    .toBe(true);
+  const signupResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === '/auth/v1/signup';
+  });
+  const refreshResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname === '/auth/v1/token' && url.searchParams.get('grant_type') === 'refresh_token'
+    );
+  });
+  await page.evaluate(() => window.__releaseE2eRegistrationCaptcha?.());
+  await signupResponse;
+  await expect.poll(() => refreshRequests).toBe(1);
+  expect(
+    await page.evaluate(() => sessionStorage.getItem('manga-nikki.pending-entry-create') !== null),
+  ).toBe(true);
+
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '入力内容が保存されていません' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('保存されていない変更が失われます');
+  await clickAppDialogButton(page, '入力内容が保存されていません', '保存せずに離れる');
+  await expect(page).toHaveURL(/\/$/);
+
+  releaseRefresh();
+  await refreshResponse;
+  await page.evaluate(() => new Promise<void>((resolve) => window.setTimeout(resolve, 0)));
   expect(entryPosts).toBe(0);
 });
 

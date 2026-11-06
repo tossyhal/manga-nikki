@@ -81,7 +81,10 @@ async function fingerprintPayload(payload: {
  * Keeps the create request ID across a reload so a lost response can be retried
  * without creating a duplicate diary. A changed payload receives a new ID.
  */
-export async function createEntry(input: CreateEntryInput): Promise<Entry> {
+export async function createEntry(
+  input: CreateEntryInput,
+  hooks: { onRequestStart?: () => void } = {},
+): Promise<Entry> {
   const payload = {
     diaryDate: input.diaryDate,
     body: input.body,
@@ -107,10 +110,14 @@ export async function createEntry(input: CreateEntryInput): Promise<Entry> {
   }
 
   try {
-    const entry = await api<Entry>('/entries', {
-      method: 'POST',
-      body: JSON.stringify({ ...payload, createRequestId: requestId }),
-    });
+    const entry = await api<Entry>(
+      '/entries',
+      {
+        method: 'POST',
+        body: JSON.stringify({ ...payload, createRequestId: requestId }),
+      },
+      hooks,
+    );
     if (fingerprint !== null) {
       const pending = readPendingCreateRequests().filter(
         (item) => item.fingerprint !== fingerprint || item.requestId !== requestId,

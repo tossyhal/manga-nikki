@@ -49,6 +49,9 @@ export function App() {
   );
   const blocker = useBlocker(shouldBlockNavigation);
   const blockedActivity = blocker.state === 'blocked' ? diaryActivity : null;
+  const blockedBusy = Boolean(
+    blockedActivity?.busy && !(blockedActivity.dirty && blockedActivity.entrySaveStarted === false),
+  );
   const blockerStateRef = useRef(blocker.state);
   const hasBlockedNavigation = useCallback(() => blockerStateRef.current !== 'unblocked', []);
   useEffect(() => {
@@ -123,15 +126,15 @@ export function App() {
       <BottomNav />
       <ConfirmDialog
         open={showBlockedDialog}
-        variant={blockedActivity !== null && !blockedActivity.busy ? 'navigation-exit' : 'default'}
-        icon={blockedActivity?.busy ? 'alert' : null}
-        title={blockedActivity?.busy ? '処理中です' : '入力内容が保存されていません'}
+        variant={blockedActivity !== null && !blockedBusy ? 'navigation-exit' : 'default'}
+        icon={blockedBusy ? 'alert' : null}
+        title={blockedBusy ? '処理中です' : '入力内容が保存されていません'}
         description={
-          blockedActivity?.busy
+          blockedBusy
             ? '保存結果が確定する前に移動します。保存に失敗すると、未保存の変更をこの画面で確認できなくなることがあります。'
             : 'このまま画面を離れると、保存されていない変更が失われます。'
         }
-        confirmLabel={blockedActivity?.busy ? '移動する' : '保存せずに離れる'}
+        confirmLabel={blockedBusy ? '移動する' : '保存せずに離れる'}
         cancelLabel="入力に戻る"
         cancelPrimary
         destructive
