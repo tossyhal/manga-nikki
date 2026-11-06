@@ -27,7 +27,7 @@ jobs:
       - run: sudo apt-get install -y postgresql-16
       - run: pnpm test:db
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CI: 'true'
