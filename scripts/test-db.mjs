@@ -376,6 +376,8 @@ try {
       assert.equal(metadata.public80SchemaReady, expectedReady);
       assert.equal(metadata.public80Ready, false);
       assert.equal(metadata.public80Prepared, false);
+      assert.equal(metadata.public80Active, false);
+      assert.equal(metadata.event250Prepared, false);
       assert.equal(typeof metadata.initialPolicy, 'boolean');
       assert.equal(typeof metadata.trialPrepared, 'boolean');
       const stopSource = (
@@ -1733,6 +1735,75 @@ select :'race_generation' || '|' || :'race_claim';`;
   );
   assert.equal(succeeded(await sql('select count(*) from public.entries;')), '5000');
   console.log('成功: global retained最終枠は6並列でも1件だけ、purgeが1行回収すると再作成可能');
+
+  const event250CountersBefore = succeeded(
+    await sql(`select
+      coalesce((select count from private.quota_counters where scope = 'global_total'), 0) || ':' ||
+      coalesce((select committed_micro_usd from private.quota_counters where scope = 'global_total'), 0);`),
+  )
+    .split(':')
+    .map(Number);
+  const event250Operation = await readFile(
+    join(root, 'supabase/operations/production-event250-policy-write.sql'),
+    'utf8',
+  );
+  const event250Body = event250Operation.match(/^DO \$\$\n([\s\S]*?)\n\$\$;/m)?.[1];
+  assert.ok(event250Body, 'event250有効化の固定DO本文が存在する');
+  const trialPolicyOperation = await readFile(
+    join(root, 'supabase/operations/production-trial-policy-write.sql'),
+    'utf8',
+  );
+  const trialPolicyBody = trialPolicyOperation.match(/^DO \$\$\n([\s\S]*?)\n\$\$;/m)?.[1];
+  assert.ok(trialPolicyBody, '既存stop operationの固定DO本文が存在する');
+  const event250Test = await readFile(
+    join(root, 'supabase/tests/production_event250_policy.sql'),
+    'utf8',
+  );
+  const trialPolicyCheck = await readFile(
+    join(root, 'supabase/operations/production-trial-policy-check.sql'),
+    'utf8',
+  );
+  assert.equal(event250Test.split('-- EVENT250_ACTIVATION_FUNCTION').length, 2);
+  assert.equal(event250Test.split('-- TRIAL_POLICY_STOP_FUNCTION').length, 2);
+  assert.equal(event250Test.split('-- PUBLIC_POLICY_STATUS_CHECK').length, 2);
+  const event250Fixture = event250Test
+    .replace('-- PUBLIC_POLICY_STATUS_CHECK', () => trialPolicyCheck)
+    .replace(
+      '-- EVENT250_ACTIVATION_FUNCTION',
+      () =>
+        `CREATE FUNCTION pg_temp.activate_event250() RETURNS void LANGUAGE plpgsql AS $event_activation$\n${event250Body}\n$event_activation$;`,
+    )
+    .replace(
+      '-- TRIAL_POLICY_STOP_FUNCTION',
+      () =>
+        `CREATE FUNCTION pg_temp.apply_trial_policy_stop() RETURNS void LANGUAGE plpgsql AS $trial_policy_stop$\n${trialPolicyBody}\n$trial_policy_stop$;`,
+    );
+  const event250FixtureOutput = succeeded(await sql(event250Fixture));
+  const public80StatusLine = event250FixtureOutput
+    .split(/\r?\n/)
+    .find((line) => line.startsWith('{'));
+  assert.ok(public80StatusLine, 'public80のread-only statusを検査する');
+  const public80Status = JSON.parse(public80StatusLine);
+  assert.equal(public80Status.identityOk, true);
+  assert.equal(public80Status.readOnly, true);
+  assert.equal(public80Status.enabled, true);
+  assert.equal(public80Status.public80Active, true);
+  assert.equal(public80Status.event250Prepared, false);
+  assert.equal(public80Status.cumulativeReservedCount, event250CountersBefore[0] + 2);
+  assert.equal(public80Status.cumulativeReservedMicroUsd, event250CountersBefore[1] + 2000000);
+  const finalPolicyMetadata = JSON.parse(
+    succeeded(await sql(`SET ROLE postgres;\n${trialPolicyCheck}`)),
+  );
+  assert.equal(finalPolicyMetadata.identityOk, true);
+  assert.equal(finalPolicyMetadata.readOnly, true);
+  assert.equal(finalPolicyMetadata.enabled, false);
+  assert.equal(finalPolicyMetadata.public80Active, false);
+  assert.equal(finalPolicyMetadata.event250Prepared, true);
+  assert.equal(finalPolicyMetadata.cumulativeReservedCount, event250CountersBefore[0] + 2);
+  assert.equal(finalPolicyMetadata.cumulativeReservedMicroUsd, event250CountersBefore[1] + 2000000);
+  console.log(
+    '成功: 稼働中public80からevent250への一回限り移行、履歴/予約/unknown/stop保持とread-only確認',
+  );
 } catch (error) {
   if (receivedSignal) {
     console.error(`DB検証を${receivedSignal}で中断しました。`);

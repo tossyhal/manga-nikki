@@ -24,11 +24,13 @@ try {
     console.log(`production-trial-policy: PRECHECK ${renderTrialPolicyStatus(status)}`);
     await summary(
       [
-        '## 初回漫画生成試験policy',
+        '## 本番生成policy',
         '',
         `- Operation: ${operation}`,
         `- Existing enabled: ${status.enabled}`,
         `- Fixed trial limits/profile: ${status.trialPrepared}`,
+        `- Public 80 USD policy active: ${status.public80Active}`,
+        `- Event 250 policy prepared: ${status.event250Prepared}`,
         `- Generation history empty: ${status.historyEmpty}`,
         `- Policy update trigger intact: ${status.policyTriggerPresent}`,
         '',
@@ -54,7 +56,9 @@ try {
           ? status.enabled
           : operation === 'activate-public80'
             ? !status.enabled || !status.public80Prepared
-            : !status.trialPrepared || status.enabled !== (operation === 'enable')
+            : operation === 'activate-event250'
+              ? !status.enabled || !status.event250Prepared
+              : !status.trialPrepared || status.enabled !== (operation === 'enable')
       )
         throw new TrialPolicyFailure('TRIAL_POLICY_WRITE_RESULT_UNKNOWN');
     }
@@ -64,8 +68,9 @@ try {
         `- Confirmed enabled: ${status.enabled}`,
         '- 固定試験枠（prepare/enableの設定値）: owner/JST日・全体/JST日・全期間の各上限1漫画、総予算1,000,000 micro USD（1USD）。',
         '- 固定既存OpenAI profileのmax_cost_micro_usd=1,000,000はDB予約額です。providerが実請求を1USD以内に制限する厳密なcapではありません。',
-        '- activate-public80は累積予算80,000,000 micro USD、通常owner/JST日3回、全体件数capなし、初回成功ownerの日次回数例外です。既存予約・デバッグ費用も累積予算に含み、counterや履歴はresetしません。',
-        '- enableとactivate-public80は費用検証済みの明示確認が必要です。80USDは安全側のDB予約予算であり、provider実請求の厳密なcapではありません。prepareは停止を維持します。',
+        '- activate-public80は累積予約budget 80,000,000 micro USD、通常owner/JST日3回、全体件数capなし、初回成功ownerの日次回数例外です。既存予約・デバッグ費用も累積budgetに含みます。',
+        '- activate-event250は稼働中の固定public80 policyからの一回限り移行です。既存利用を含む全期間250件、内部予約budget 250,000,000 micro USD、通常owner/JST日3回を設定し、既存予約・counter・履歴・owner例外を保持します。停止後の再適用はできません。',
+        '- enable、activate-public80、activate-event250は費用検証済みの明示確認が必要です。内部予約budgetはprovider実請求の厳密なcapではありません。prepareは停止を維持します。',
         '- このworkflowはAI APIを呼ばず、counter・reservation・既存generation・履歴を変更しません。stopも既存予約やunknownの枠を解放しません。',
         '',
       ].join('\n'),

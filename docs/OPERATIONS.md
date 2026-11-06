@@ -83,7 +83,7 @@ Queue・private bucket・Storage deny policyはschema migrationとは別です�
 ## 生成枠・停止・再開
 
 生成枠はDBトランザクションで原子的に予約し、モデル・単価・owner・残り回数をブラウザから信用しません。
-現在の公開policyは累積80USDのDB予約上限と、通常匿名アカウント3回/JST日です。
+既存public80 policyは累積80USDのDB予約上限と、通常匿名アカウント3回/JST日です。
 owner初回試験アカウントだけ日次例外があります。任意のユーザーに例外を広げません。
 固定1USD/漫画を予約する方式であり、記帳額は実費とは異なります。
 **80USDはプロバイダ請求の厳密なhard capではありません。**実料金、権限、provider側制限と使用量を別途確認します。
@@ -99,9 +99,15 @@ owner初回試験アカウントだけ日次例外があります。任意のユ
 
 同workflowの`prepare`・`enable`は初回1漫画試験用です。公開80USD設定を停止した後、`enable`で同じ公開設定を再開することはできません。
 `activate-public80`は使用済み初回試験状態からの一回限りの移行で、再開用操作ではありません。
+`activate-event250`は、稼働中の固定public80 policyからownerが一度だけ切り替える操作です。`global_total_limit=250`、内部予約budget 250,000,000 micro USD、通常owner/JST日3回を設定し、ownerデバッグ例外とprofileを保ちます。既存利用も全期間250件に含み、counter・履歴・reserved/held reservation・unknown attemptを変更しません。1件あたりの固定予約上限1,000,000 micro USDも維持します。public80停止中やevent250適用後（停止中を含む）は拒否し、event250の再開操作は用意しません。
+
+このbudgetはDB内の予約上限で、実請求のhard capではありません。100 USDクレジット・自動チャージOFFの条件でも、provider側の請求・反映遅延を含め100 USD以内を保証しません。費用条件を確認し、workflowで`operation=activate-event250`、`confirmation=ACTIVATE_EVENT_250_3_PER_JST_DAY_AFTER_VERIFIED_COST`、`provider_cost_verified=true`を明示します。mergeや通常CDはDB policyを変更しません。
+
 再開時は現DB状態、保持予約、承認済み費用と回数を確認し、レビューされた専用変更を用意します。
 確認文字列を変えたり、counterを初期化したりして既存guardを迂回しません。
 policy操作の詳細条件は[production-trial-policy実装](../src/build/production-trial-policy.ts)を参照してください。
+
+本番Queueの`max_batch_size=1`・`max_retries=3`は維持し、consumerの`max_concurrency`を10にします。初回の滞留を減らすための初期値で、OpenAIのIPM上限を厳密に制御せず、実AIでの速度や80人同時時の完了時間も保証しません。実AIを使った負荷測定は別承認です。
 
 Queueの重複配信はclaim・attempt台帳で制御します。
 外部AIの実行・課金が不明な`unknown`は自動再実行せず、`held`として予約を保持します。
