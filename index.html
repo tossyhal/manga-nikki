@@ -5,11 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>漫画日記</title>
+    <style>
+      body {
+        margin: 0;
+        background: #fff;
+      }
+
+      #startup-fallback {
+        display: grid;
+        min-height: 100vh;
+        min-height: 100svh;
+        place-items: center;
+        color: #252525;
+        font-family: 'Noto Sans JP', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
+      }
+
+      #startup-fallback-content {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+        text-align: center;
+      }
+
+      #startup-fallback img {
+        display: block;
+        width: 76px;
+        height: 76px;
+      }
+
+      #startup-fallback h1 {
+        margin: 4px 0 0;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        line-height: 1.4;
+      }
+
+      #startup-fallback-status {
+        display: block;
+        margin: 0;
+        color: #6f6f6f;
+        font-size: 13px;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="startup-fallback">
+        <div id="startup-fallback-content">
+          <img src="/icon-192.png" alt="" width="76" height="76" />
+          <h1>漫画日記</h1>
+          <output id="startup-fallback-status" aria-live="polite">準備中…</output>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/client/main.tsx"></script>
   </body>
 </html>

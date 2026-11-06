@@ -1,7 +1,7 @@
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { type Entry, type Generation } from '../../../shared/schemas';
+import type { Entry } from '../../../shared/schemas';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
 import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
@@ -32,39 +32,6 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
   );
 }
 
-function generationLabel(
-  generation: Generation | null,
-  entry: Entry,
-  loading: boolean,
-  error?: string,
-  comicGeneration?: Generation | null,
-) {
-  if (!generation) {
-    if (entry.latestGenerationId) {
-      if (error) return '記録の状態を確認できません';
-      return loading ? '状態を確認しています' : '記録の状態を確認できません';
-    }
-    return comicGeneration ? '編集前の漫画' : '下書き';
-  }
-  if (generation.entryRevision !== entry.revision)
-    return comicGeneration ? '編集前の漫画' : '編集済み';
-  switch (generation.status) {
-    case 'queued':
-    case 'running':
-      return '漫画を作成中';
-    case 'unknown':
-      return '生成結果を確認中';
-    case 'failed':
-      return '漫画を生成できませんでした';
-    case 'cancelled':
-      return '生成を終了しました';
-    case 'succeeded':
-      return '完成';
-    default:
-      return '状態を確認しています';
-  }
-}
-
 function TodayEntryHero({ entry }: { entry: Entry }) {
   const preview = useEntryPreview(entry, { eager: true });
   let placeholder = '漫画はまだありません';
@@ -73,27 +40,31 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
   else if (preview.error && !preview.generation) placeholder = '記録の状態を確認できません';
   else if (preview.generation?.status === 'queued' || preview.generation?.status === 'running')
     placeholder = '漫画を作成中';
-  else if (preview.generation?.status === 'failed' || preview.generation?.status === 'cancelled')
-    placeholder = '漫画はありません';
+  else if (preview.generation?.status === 'unknown') placeholder = '生成結果を確認中';
+  else if (preview.generation?.status === 'failed') placeholder = '漫画を生成できませんでした';
+  else if (preview.generation?.status === 'cancelled') placeholder = '生成を終了しました';
   const hasComic = Boolean(preview.comicGeneration);
+  const latestGenerationMessage = hasComic
+    ? preview.generation?.status === 'queued' || preview.generation?.status === 'running'
+      ? '新しい漫画を作成中です。'
+      : preview.generation?.status === 'unknown'
+        ? '新しい漫画の生成結果を確認中です。'
+        : preview.generation?.status === 'failed'
+          ? '新しい漫画を生成できませんでした。'
+          : preview.generation?.status === 'cancelled'
+            ? '新しい漫画の生成を終了しました。'
+            : null
+    : null;
   const comicTitle =
     preview.comicGeneration?.status === 'succeeded'
       ? preview.comicGeneration.comic.title
       : summarizeDiary(entry.body);
-  const label = generationLabel(
-    preview.generation,
-    entry,
-    preview.isLoading,
-    preview.error,
-    preview.comicGeneration,
-  );
-
   return (
     <div className="home-today-hero">
       <div className="home-today-content">
         <h2>{summarizeDiary(entry.body)}</h2>
-        <p>{label}</p>
         {preview.isStale && <p>編集前の漫画を表示しています。</p>}
+        {latestGenerationMessage && <p>{latestGenerationMessage}</p>}
         {preview.error && (preview.generation || preview.comicGeneration) && (
           <p>最新の状態を確認できません。</p>
         )}

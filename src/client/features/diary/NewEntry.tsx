@@ -433,172 +433,168 @@ export function NewEntry({
             }
           />
         </fieldset>
-        {online &&
-          quota &&
-          (showQuotaStatus ? (
-            <div className="quota-limit-card">
-              <GenerationQuotaStatus
-                quota={quota}
-                activeGeneration={activeGeneration}
-                currentGenerationId={null}
-                onRefresh={() => void refreshQuota()}
-                refreshing={refreshing}
-              />
-            </div>
-          ) : (
-            <div className="sr-only">
-              <GenerationQuotaStatus
-                quota={quota}
-                activeGeneration={activeGeneration}
-                currentGenerationId={null}
-              />
-            </div>
-          ))}
-        {online &&
-          !config.generationAvailable &&
-          config.dataMode !== 'sample' &&
-          quotaState !== 'unavailable' &&
-          quota?.generationAvailable !== false && (
+        <div className="entry-compose-support">
+          {online &&
+            quota &&
+            (showQuotaStatus ? (
+              <div className="quota-limit-card">
+                <GenerationQuotaStatus
+                  quota={quota}
+                  activeGeneration={activeGeneration}
+                  currentGenerationId={null}
+                  onRefresh={() => void refreshQuota()}
+                  refreshing={refreshing}
+                />
+              </div>
+            ) : (
+              <div className="sr-only">
+                <GenerationQuotaStatus
+                  quota={quota}
+                  activeGeneration={activeGeneration}
+                  currentGenerationId={null}
+                />
+              </div>
+            ))}
+          {online &&
+            !config.generationAvailable &&
+            config.dataMode !== 'sample' &&
+            quotaState !== 'unavailable' &&
+            quota?.generationAvailable !== false && (
+              <section className="quota-limit-card" aria-label="漫画の利用状況">
+                <p>現在、漫画の受付を停止しています。日記は保存できます。</p>
+              </section>
+            )}
+          {quotaState === 'unavailable' && online && (
             <section className="quota-limit-card" aria-label="漫画の利用状況">
-              <p>現在、漫画の受付を停止しています。日記は保存できます。</p>
+              <p role="alert">
+                利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
+              </p>
+              <button
+                className="button-text"
+                disabled={operationBusy || refreshing}
+                type="button"
+                onClick={() => {
+                  setQuotaState('loading');
+                  void refreshQuota();
+                }}
+              >
+                {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+              </button>
             </section>
           )}
-        {quotaState === 'unavailable' && online && (
-          <section className="quota-limit-card" aria-label="漫画の利用状況">
-            <p role="alert">
-              利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
-            </p>
-            <button
-              className="button-text"
-              disabled={operationBusy || refreshing}
-              type="button"
-              onClick={() => {
-                setQuotaState('loading');
-                void refreshQuota();
-              }}
+          {!online && (
+            <>
+              <section className="offline-entry-card" aria-labelledby="offline-entry-title">
+                <Icon name="wifi-off" size={28} />
+                <div>
+                  <h2 id="offline-entry-title">オフラインです</h2>
+                  <p>入力内容はこの画面に残っています。接続が戻ってから保存してください。</p>
+                </div>
+              </section>
+              <button
+                className="button button-primary offline-recheck-action"
+                type="button"
+                onClick={recheckConnection}
+              >
+                接続を再確認する
+              </button>
+            </>
+          )}
+          {pendingSave !== null && config.dataMode === 'live' && (
+            <section className="captcha-card" aria-label="匿名登録" aria-busy={operationBusy}>
+              <p>匿名登録を続けるため、登録用の確認を行います。</p>
+              {siteKey ? (
+                <RegistrationCaptcha
+                  key={captchaAttempt}
+                  siteKey={siteKey}
+                  requestKey={captchaAttempt}
+                  onToken={(token) => void completeRegistration(token)}
+                  onError={failRegistrationCaptcha}
+                />
+              ) : (
+                <p role="alert" className="error">
+                  匿名登録用の確認を利用できません。本文はこの画面に残っています。
+                </p>
+              )}
+              <button className="button-text" type="button" onClick={cancelRegistrationCaptcha}>
+                確認をやめる
+              </button>
+            </section>
+          )}
+          {saveErrorIntent !== null ? (
+            <section
+              ref={saveErrorCardRef}
+              className="save-error-card"
+              aria-labelledby="save-error-title"
+              role="alert"
+              tabIndex={-1}
             >
-              {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
-            </button>
-          </section>
-        )}
-        {!online && (
-          <>
-            <section className="offline-entry-card" aria-labelledby="offline-entry-title">
-              <Icon name="wifi-off" size={28} />
+              <Icon name="alert" size={22} />
               <div>
-                <h2 id="offline-entry-title">オフラインです</h2>
-                <p>入力内容はこの画面に残っています。接続が戻ってから保存してください。</p>
+                <h2 id="save-error-title">保存できませんでした</h2>
+                <p>{error}</p>
+                <p>本文は消えていません。</p>
               </div>
             </section>
-            <button
-              className="button button-primary offline-recheck-action"
-              type="button"
-              onClick={recheckConnection}
-            >
-              接続を再確認する
-            </button>
-          </>
-        )}
-        {pendingSave !== null && config.dataMode === 'live' && (
-          <section className="captcha-card" aria-label="匿名登録" aria-busy={operationBusy}>
-            <p>匿名登録を続けるため、登録用の確認を行います。</p>
-            {siteKey ? (
-              <RegistrationCaptcha
-                key={captchaAttempt}
-                siteKey={siteKey}
-                requestKey={captchaAttempt}
-                onToken={(token) => void completeRegistration(token)}
-                onError={failRegistrationCaptcha}
-              />
-            ) : (
-              <p role="alert" className="error">
-                匿名登録用の確認を利用できません。本文はこの画面に残っています。
-              </p>
-            )}
-            <button className="button-text" type="button" onClick={cancelRegistrationCaptcha}>
-              確認をやめる
-            </button>
-          </section>
-        )}
-        {saveErrorIntent !== null ? (
-          <section
-            ref={saveErrorCardRef}
-            className="save-error-card"
-            aria-labelledby="save-error-title"
-            role="alert"
-            tabIndex={-1}
-          >
-            <Icon name="alert" size={22} />
-            <div>
-              <h2 id="save-error-title">保存できませんでした</h2>
-              <p>{error}</p>
-              <p>本文は消えていません。</p>
-            </div>
-          </section>
-        ) : error ? (
-          <p ref={errorRef} role="alert" className="error" tabIndex={-1}>
-            {error}
-          </p>
-        ) : null}
-        {generationFailureEntry && (
-          <section className="draft-saved-card" aria-labelledby="generation-failure-saved-title">
-            <div className="draft-saved-check" aria-hidden="true">
-              <Icon name="check" size={40} />
-            </div>
-            <h2 id="generation-failure-saved-title">日記を保存しました</h2>
-            <p>漫画の受付状態は、保存した記録から確認できます。</p>
-            <Link
-              className="button button-secondary"
-              to={`/entries/${encodeURIComponent(generationFailureEntry.id)}`}
-            >
-              保存した記録を見る
-            </Link>
-          </section>
-        )}
-        {generationCheckEntry && (
-          <button
-            className="button button-secondary"
-            disabled={operationBusy}
-            type="button"
-            onClick={() => void checkGenerationReceipt()}
-          >
-            {busy ? '受付結果を確認しています…' : '受付結果を確認'}
-          </button>
-        )}
-        {!online ? null : (
-          <>
-            {import.meta.env.PROD && config.dataMode === 'live' && canGenerate && (
-              <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
-            )}
-            <div className="primary-action-dock">
-              <div className="primary-action-row">
-                <button className="button button-primary" disabled={primaryDisabled} type="submit">
-                  {pendingSave !== null
-                    ? '登録用の確認中…'
-                    : busy
-                      ? '保存しています…'
-                      : saveErrorIntent !== null
-                        ? 'もう一度保存'
-                        : canGenerate
-                          ? '4コマにする'
-                          : quotaState === 'loading' && configAllowsGeneration
-                            ? '利用枠を確認しています…'
-                            : '下書きとして保存'}
-                </button>
-                {quota && !showQuotaStatus && (
-                  <button
-                    className="button-text quota-refresh-action"
-                    disabled={operationBusy || refreshing}
-                    type="button"
-                    onClick={() => void refreshQuota()}
-                  >
-                    {refreshing ? '確認中…' : '枠を更新'}
-                  </button>
-                )}
+          ) : error ? (
+            <p ref={errorRef} role="alert" className="error" tabIndex={-1}>
+              {error}
+            </p>
+          ) : null}
+          {generationFailureEntry && (
+            <section className="draft-saved-card" aria-labelledby="generation-failure-saved-title">
+              <div className="draft-saved-check" aria-hidden="true">
+                <Icon name="check" size={40} />
               </div>
-            </div>
-          </>
-        )}
+              <h2 id="generation-failure-saved-title">日記を保存しました</h2>
+              <p>漫画の受付状態は、保存した記録から確認できます。</p>
+              <Link
+                className="button button-secondary"
+                to={`/entries/${encodeURIComponent(generationFailureEntry.id)}`}
+              >
+                保存した記録を見る
+              </Link>
+            </section>
+          )}
+          {generationCheckEntry && (
+            <button
+              className="button button-secondary"
+              disabled={operationBusy}
+              type="button"
+              onClick={() => void checkGenerationReceipt()}
+            >
+              {busy ? '受付結果を確認しています…' : '受付結果を確認'}
+            </button>
+          )}
+          {!online ? null : (
+            <>
+              {import.meta.env.PROD && config.dataMode === 'live' && canGenerate && (
+                <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
+              )}
+              <div className="primary-action-dock">
+                <div className="primary-action-row">
+                  <button
+                    className="button button-primary"
+                    disabled={primaryDisabled}
+                    type="submit"
+                  >
+                    {pendingSave !== null
+                      ? '登録用の確認中…'
+                      : busy
+                        ? '保存しています…'
+                        : saveErrorIntent !== null
+                          ? 'もう一度保存'
+                          : canGenerate
+                            ? '4コマにする'
+                            : quotaState === 'loading' && configAllowsGeneration
+                              ? '利用枠を確認しています…'
+                              : '下書きとして保存'}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </form>
     </section>
   );

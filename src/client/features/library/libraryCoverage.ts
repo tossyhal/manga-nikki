@@ -25,6 +25,7 @@ export async function fetchMonthCoverage(
   targetMonth: string,
   shouldContinue: () => boolean,
   signal?: AbortSignal,
+  onProgress?: (entries: Entry[], cursor: string | null) => void,
 ) {
   let entries = initialEntries;
   let cursor = initialCursor;
@@ -34,6 +35,7 @@ export async function fetchMonthCoverage(
     if (!shouldContinue()) return null;
     entries = firstPage.items;
     cursor = firstPage.nextCursor;
+    onProgress?.(entries, cursor);
   }
 
   const visitedCursors = new Set<string>();
@@ -50,6 +52,7 @@ export async function fetchMonthCoverage(
     }
     entries = mergeEntries(entries, page.items);
     cursor = page.nextCursor;
+    onProgress?.(entries, cursor);
   }
 
   return { entries, cursor };

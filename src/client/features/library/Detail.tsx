@@ -390,6 +390,7 @@ function DetailContent({
     statusView && 'is-status',
     statusView && statusKind && `is-${statusKind}`,
     statusView && displayedGeneration && 'has-saved-comic',
+    !editing && displayedGeneration && 'has-comic',
     !statusView &&
       (draftSavedConfirmation ||
         (displayedGeneration?.id === generation?.id && generationForCurrentRevision)) &&
@@ -814,6 +815,7 @@ function DetailContent({
               {displayedGeneration && (
                 <SavedComic
                   key={displayedGeneration.id}
+                  generationId={displayedGeneration.id}
                   comic={displayedGeneration.comic}
                   hideTitle={displayedGeneration.entryRevision === entry.revision}
                 />

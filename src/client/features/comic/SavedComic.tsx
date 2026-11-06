@@ -2,9 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
 import { getAssetUrl } from '../../lib/api';
 import { Comic } from './Comic';
+import { ComicActions } from './ComicActions';
 import { shouldRenewExpiredAsset } from './signedAssetRefresh';
 
-export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTitle: boolean }) {
+export function SavedComic({
+  comic,
+  hideTitle,
+  generationId,
+}: {
+  comic: ComicDocument;
+  hideTitle: boolean;
+  generationId?: string;
+}) {
   const [images, setImages] = useState<Record<string, string>>({});
   const [imageRequestedAt, setImageRequestedAt] = useState<Record<string, number>>({});
   const [imageRequestedAtWall, setImageRequestedAtWall] = useState<Record<string, number>>({});
@@ -93,16 +102,30 @@ export function SavedComic({ comic, hideTitle }: { comic: ComicDocument; hideTit
   }
 
   return (
-    <Comic
-      comic={comic}
-      images={images}
-      imageErrors={failedImageIds}
-      imageLoading={loading}
-      imageRetrying={loading}
-      imageResetVersion={reloadVersion}
-      onRetryImages={retryImages}
-      onImageError={handleImageError}
-      hideTitle={hideTitle}
-    />
+    <>
+      <Comic
+        comic={comic}
+        images={images}
+        imageErrors={failedImageIds}
+        imageLoading={loading}
+        imageRetrying={loading}
+        imageResetVersion={reloadVersion}
+        onRetryImages={retryImages}
+        onImageError={handleImageError}
+        hideTitle={hideTitle}
+      />
+      <ComicActions
+        comic={comic}
+        images={images}
+        generationId={generationId}
+        getFreshImages={async () => {
+          const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
+          return Object.fromEntries(
+            await Promise.all(ids.map(async (id) => [id, (await getAssetUrl(id)).url])),
+          );
+        }}
+        ready={!loading && failedImageIds.length === 0}
+      />
+    </>
   );
 }

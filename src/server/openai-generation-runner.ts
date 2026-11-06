@@ -17,6 +17,7 @@ import { scriptSchema } from './ai/script-schema';
 import { resolveMode, type Environment } from './mode';
 import { generationOwnerAllowed } from './generation-owner';
 import { callGenerationRpc, getGenerationQueue, LiveGenerationError } from './live-generations';
+import { createServerRpcClient } from './supabase-clients';
 import {
   GenerationSavePendingError,
   type RecoverGeneratedComic,
@@ -31,6 +32,7 @@ const providerAttemptSchema = z.strictObject({
   mode: z.literal('provider'),
   is_mock: z.literal(false),
 });
+const parallelImageAttemptsSchema = z.array(providerAttemptSchema).length(3);
 const finishAttemptSchema = z.strictObject({
   attempt_id: z.uuid(),
   state: z.enum(['succeeded', 'failed', 'unknown']),
@@ -62,6 +64,22 @@ const saveResultSchema = z.strictObject({
 });
 
 const overallTimeoutMs = 14 * 60_000;
+
+async function parallelImageGenerationReady(
+  environment: Environment,
+  fetcher: typeof fetch | undefined,
+): Promise<boolean> {
+  const { data, error } = await createServerRpcClient(environment, fetcher).rpc(
+    'parallel_image_generation_ready',
+  );
+  if (error) {
+    if (error.code === 'PGRST202') return false;
+    throw new Error('PARALLEL_IMAGE_READINESS_FAILED');
+  }
+  const parsed = z.boolean().safeParse(data);
+  if (!parsed.success) throw new Error('PARALLEL_IMAGE_READINESS_INVALID');
+  return parsed.data;
+}
 
 export type ClaimedOpenAIGeneration = Readonly<{
   generation_id: string;
@@ -172,6 +190,45 @@ export async function runOpenAIGeneration(
       attemptIds.set(key(stage, callIndex), parsed.data.attempt_id);
       return parsed.data.attempt_id;
     },
+    beginBatch: async (stage, callIndices) => {
+      if (
+        stage !== 'images' ||
+        callIndices.length !== 3 ||
+        callIndices.some((callIndex, index) => callIndex !== index + 2) ||
+        callIndices.some((callIndex) => attemptIds.has(key(stage, callIndex)))
+      )
+        throw new Error('PROVIDER_ATTEMPT_BATCH_ORDER_INVALID');
+
+      const result = await callGenerationRpc(
+        environment,
+        fetcher,
+        'begin_parallel_image_attempts',
+        {
+          p_generation_id: claim.generation_id,
+          p_claim_token: claim.claim_token,
+          p_generation_enabled: true,
+        },
+      );
+      const parsed = parallelImageAttemptsSchema.safeParse(result);
+      if (
+        !parsed.success ||
+        parsed.data.some(
+          (attempt, index) =>
+            attempt.generation_id !== claim.generation_id ||
+            attempt.stage !== stage ||
+            attempt.call_index !== callIndices[index],
+        ) ||
+        new Set(parsed.data.map((attempt) => attempt.attempt_id)).size !== 3
+      )
+        throw new Error('PROVIDER_ATTEMPT_BATCH_INVALID');
+
+      const handles = parsed.data.map((attempt) => ({
+        callIndex: attempt.call_index,
+        attemptId: attempt.attempt_id,
+      }));
+      for (const handle of handles) attemptIds.set(key(stage, handle.callIndex), handle.attemptId);
+      return handles;
+    },
     finish: async (stage, callIndex, attemptId, outcome) => {
       const expectedAttemptId = attemptIds.get(key(stage, callIndex));
       if (!expectedAttemptId || expectedAttemptId !== attemptId)
@@ -211,6 +268,10 @@ export async function runOpenAIGeneration(
   };
 
   try {
+    const parallelImagesAvailable = await parallelImageGenerationReady(environment, fetcher);
+    assertBeforeDeadline();
+    if (!parallelImagesAvailable) delete attemptHooks.beginBatch;
+
     const scriptProvider = runtime.createScriptProvider
       ? runtime.createScriptProvider(apiKey)
       : new OpenAIScriptProvider(apiKey);

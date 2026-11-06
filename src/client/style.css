@@ -636,17 +636,18 @@ p {
 .button-danger {
   width: 100%;
   min-height: 54px;
-  background: #222222;
-  color: #ffffff;
+  background: #e5e5e5;
+  color: #252525;
+}
+
+.button-primary:hover:not(:disabled),
+.button-danger:hover:not(:disabled) {
+  background: #dcdcdc;
 }
 
 .button-secondary {
   background: #efefef;
   color: #252525;
-}
-
-.button-danger {
-  background: #222222;
 }
 
 .button-text {
@@ -725,6 +726,16 @@ p {
   flex: 1 1 0;
   min-height: min-content;
   flex-direction: column;
+}
+
+.entry-compose-support {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.new-entry-form .policy-note {
+  margin: 14px 0 18px;
 }
 
 .entry-form-fields {
@@ -2162,13 +2173,43 @@ output {
     min-height: 100%;
   }
 
-  .new-entry-page .entry-editor-card {
-    min-height: 260px;
+  .new-entry-form {
+    display: grid;
+    flex: 0 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
+    align-items: stretch;
+    gap: 24px 32px;
+  }
+
+  .entry-form-fields {
+    min-height: 0;
+  }
+
+  .new-entry-form .policy-note {
+    margin-top: auto;
+  }
+
+  .new-entry-form .primary-action-dock {
+    width: min(520px, 100%);
+    margin: auto 0 0;
+  }
+
+  .primary-shell .new-entry-page .entry-editor-card {
+    min-height: clamp(320px, 54vh, 520px);
   }
 
   .primary-shell .primary-action-dock {
     width: min(520px, 100%);
     margin-top: 16px;
+  }
+
+  .primary-shell .new-entry-form .primary-action-dock {
+    margin: auto 0 0;
+  }
+
+  .primary-shell .new-entry-form .policy-note + .primary-action-dock {
+    margin-top: 0;
   }
 
   .bottom-nav,
@@ -2178,14 +2219,59 @@ output {
 
   .detail-page {
     width: 100%;
-    max-width: 960px;
+    max-width: 1120px;
     margin-inline: auto;
     padding-bottom: 8px;
   }
 
-  .detail-page.is-saved .comic {
+  .detail-page.has-comic {
+    --comic-column-width: 62%;
+    --detail-column-gap: 32px;
+    display: flow-root;
+  }
+
+  .detail-page.has-comic > .detail-toolbar,
+  .detail-page.has-comic > .detail-date-row,
+  .detail-page.has-comic > .detail-revision-note {
+    clear: both;
+  }
+
+  .detail-page.has-comic > .comic {
+    float: left;
+    width: var(--comic-column-width);
+    max-width: 100%;
+    margin: 0 var(--detail-column-gap) 14px 0;
+  }
+
+  .detail-page.has-comic > .comic ~ .detail-revision-note,
+  .detail-page.has-comic > .comic-actions,
+  .detail-page.has-comic > .generation-card,
+  .detail-page.has-comic > .original-diary,
+  .detail-page.has-comic > .detail-quota-card,
+  .detail-page.has-comic > .inline-alert,
+  .detail-page.has-comic > .captcha-card,
+  .detail-page.has-comic > .hint,
+  .detail-page.has-comic > .error,
+  .detail-page.has-comic > .button-secondary,
+  .detail-page.has-comic > .detail-action-dock {
+    clear: none;
+    width: calc(100% - var(--comic-column-width) - var(--detail-column-gap));
+    margin: 0 0 14px calc(var(--comic-column-width) + var(--detail-column-gap));
+    min-width: 0;
+  }
+
+  .detail-page.has-comic > .comic-actions {
+    margin-bottom: 8px;
+  }
+
+  .detail-page.has-comic > .detail-action-dock {
+    max-width: none;
+  }
+
+  .detail-page.has-comic > .detail-action-dock .button-primary {
     width: 100%;
-    margin-inline: auto;
+    max-width: none;
+    margin-inline: 0;
   }
 
   .detail-page .button-primary {

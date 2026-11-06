@@ -411,6 +411,42 @@ test('ホームで既知の旧漫画と状態取得失敗を別々に案内す�
   await expect(unavailableCard).toContainText('状態を確認できません');
 });
 
+test('ホームは旧漫画を表示しながら最新の生成失敗を案内する', async ({ page }) => {
+  const today = jstToday();
+  const oldSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const latestFailureId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const latestFailure = generationFixtures(entryId, latestFailureId, 2).failed;
+  const todayEntry: Entry = {
+    ...draftEntryDetailFixture,
+    diaryDate: today,
+    revision: 2,
+    latestGenerationId: latestFailure.id,
+  };
+  const detail: EntryDetail = {
+    ...todayEntry,
+    latestGeneration: latestFailure,
+    lastSuccessfulGeneration: oldSuccess,
+  };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [todayEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto('/');
+  const todaySection = page.getByRole('region', { name: '今日の記録' });
+  await expect(todaySection.getByText('編集前の漫画を表示しています。')).toBeVisible();
+  await expect(todaySection.getByText('新しい漫画を生成できませんでした。')).toBeVisible();
+  await expect(todaySection.locator('img.entry-thumbnail-image')).toHaveAttribute(
+    'src',
+    '/sample-comic.svg',
+  );
+});
+
 test('編集後の旧generationが失敗済みなら一覧に編集済みと表示する', async ({ page }) => {
   const oldFailure = generationFixtures(entryId, generationId, 1).failed;
   const editedEntry: Entry = {

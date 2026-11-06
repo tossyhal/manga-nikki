@@ -642,7 +642,7 @@ test('Libraryはタブ復帰時に今日の判定を更新し、選択日を保�
   await expect(page).toHaveURL(libraryUrl);
 });
 
-test('一覧の再読み込みは選択状態を保って先頭から取り直し、遅延応答を混ぜない', async ({ page }) => {
+test('一覧を再入場すると先頭から取り直し、遅延応答を混ぜない', async ({ page }) => {
   const today = jstToday();
   const previousMonth = shiftMonth(monthKey(today), -1);
   const firstPage = Array.from({ length: 20 }, (_, index) =>
@@ -711,7 +711,11 @@ test('一覧の再読み込みは選択状態を保って先頭から取り直�
   await staleRequested;
 
   try {
-    await page.getByRole('button', { name: '記録を再読み込み' }).click();
+    await page.locator('.bottom-nav').getByRole('link', { name: '日記を書く' }).click();
+    await expect(page).toHaveURL('/new');
+    await page.locator('.bottom-nav').getByRole('link', { name: '記録' }).click();
+    await expect(page).toHaveURL(/\/library(?:\?.*)?$/);
+    await page.getByRole('tab', { name: 'リスト' }).click();
     await expect(page).toHaveURL(
       `/library?view=list&month=${monthKey(today)}&day=${today}&listPage=1&dayPage=1`,
     );

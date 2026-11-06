@@ -111,6 +111,7 @@ export function Comic({
                 >
                   <img
                     src={src}
+                    referrerPolicy="no-referrer"
                     loading="lazy"
                     decoding="async"
                     alt={alt}
@@ -245,6 +246,7 @@ export function Comic({
             ) : images[zoomed.assetId] ? (
               <img
                 src={images[zoomed.assetId]}
+                referrerPolicy="no-referrer"
                 alt={zoomed.alt}
                 onError={() => {
                   if (onImageError?.(zoomed.assetId)) return;

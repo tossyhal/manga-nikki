@@ -1,0 +1,71 @@
+.app-main.app-main-startup {
+  display: grid;
+  min-height: 100svh;
+  padding: 0;
+}
+
+.primary-shell .app-main.app-main-startup {
+  min-height: 0;
+}
+
+.startup-screen {
+  display: grid;
+  width: 100%;
+  min-height: 100%;
+  place-items: center;
+  padding: 24px;
+  background: #fff;
+  color: #252525;
+}
+
+.startup-screen__content {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.startup-screen__mark {
+  width: 76px;
+  height: 76px;
+}
+
+.startup-screen__name {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+}
+
+.startup-screen__status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  color: #6f6f6f;
+  font-size: 13px;
+}
+
+.startup-screen__indicator {
+  width: 15px;
+  height: 15px;
+  border: 2px solid #e4e4e4;
+  border-top-color: #252525;
+  border-radius: 50%;
+  animation: startup-screen-spin 900ms linear infinite;
+}
+
+@keyframes startup-screen-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-screen__indicator {
+    animation: none;
+    border-color: #858585;
+    border-top-color: #252525;
+  }
+}

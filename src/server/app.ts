@@ -40,6 +40,13 @@ import {
 } from './auth';
 
 import { ApiError, messages, jsonBody } from './http';
+import {
+  createComicShare,
+  readComicShare,
+  newShareToken,
+  shareTokenSchema,
+  toSharedComic,
+} from './comic-shares';
 
 export function createApp(
   options: {
@@ -52,6 +59,7 @@ export function createApp(
     recoverGeneratedComic?: RecoverGeneratedComic;
   } = {},
 ) {
+  const mockShares = new Map<string, string>();
   let repository = options.repository;
   const getRepository = () => (repository ??= createMockRepository());
   const app = new Hono<{
@@ -151,6 +159,28 @@ export function createApp(
     );
     return c.json({ mock: true, script });
   });
+  app.get('/api/v1/shared/:token', async (c) => {
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    const token = c.req.param('token');
+    if (!shareTokenSchema.safeParse(token).success) throw new ApiError(404, 'NOT_FOUND');
+    const current = mode(c.env);
+    if (current === 'preview-sample') throw new ApiError(404, 'NOT_FOUND');
+    if (current !== 'local-mock')
+      return c.json(await readComicShare(c.env, token, options.supabaseFetch));
+    const generationId = mockShares.get(token);
+    const job = generationId ? getRepository().generations.get(generationId) : undefined;
+    const entry = job ? getRepository().entries.get(job.generation.entryId) : undefined;
+    if (!job || !entry || job.generation.status !== 'succeeded')
+      throw new ApiError(404, 'NOT_FOUND');
+    const comic = job.generation.comic;
+    const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
+    return c.json({
+      comic: toSharedComic(comic),
+      images: Object.fromEntries(ids.map((id) => [id, '/sample-comic.svg'])),
+    });
+  });
+
   app.use('/api/v1/*', async (c, next) => {
     const current = mode(c.env);
     if (current === 'preview-sample') throw new ApiError(503, 'GENERATION_DISABLED');
@@ -292,6 +322,25 @@ export function createApp(
     const { entry } = getMockEntry(getRepository(), c.req.param('id'), c.get('owner'));
     const key = z.uuid().parse(c.req.header('Idempotency-Key'));
     return c.json(reserveMockGeneration(getRepository(), c.get('owner'), entry, key, input), 202);
+  });
+  app.post('/api/v1/generations/:id/share', async (c) => {
+    const generationId = z.uuid().parse(c.req.param('id'));
+    let token: string;
+    if (mode(c.env) === 'local-mock') {
+      const job = getRepository().generations.get(generationId);
+      if (
+        !job ||
+        job.owner !== c.get('owner') ||
+        job.generation.status !== 'succeeded' ||
+        !getRepository().entries.has(job.generation.entryId)
+      )
+        throw new ApiError(404, 'NOT_FOUND');
+      token = [...mockShares].find(([, id]) => id === generationId)?.[0] ?? newShareToken();
+      mockShares.set(token, generationId);
+    } else {
+      token = await createComicShare(liveContext(c), generationId);
+    }
+    return c.json({ path: `/shared/${token}` }, 201);
   });
   app.get('/api/v1/generations/:id', async (c) => {
     const current = mode(c.env);

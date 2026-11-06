@@ -1,0 +1,56 @@
+.comic-actions {
+  margin-block: 24px;
+}
+.comic-actions-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.comic-share-options {
+  margin-top: 20px;
+  padding: 20px;
+  background: var(--surface, #f5f5f5);
+  border-radius: 12px;
+}
+.comic-share-options p {
+  margin-bottom: 16px;
+  line-height: 1.8;
+}
+.comic-share-url {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.comic-share-url input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fff;
+  color: #333;
+}
+.comic-action-message {
+  min-height: 1.5em;
+  margin-top: 12px;
+  color: #555;
+}
+.shared-comic-page {
+  width: min(100% - 32px, 960px);
+  margin: 32px auto;
+}
+.shared-comic-page > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 32px;
+}
+.shared-comic-page h1 {
+  margin-bottom: 24px;
+  overflow-wrap: anywhere;
+}
+.shared-comic-page .comic {
+  max-width: 720px;
+  margin-inline: auto;
+}

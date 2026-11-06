@@ -143,6 +143,111 @@ describe('OpenAI画像Provider', () => {
     }
     expect(result.panels[0].usage).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 });
   });
+  it('image 1成功後はbatch attemptを記録し、2〜4の応答と台帳確定を全件待つ', async () => {
+    const events: string[] = [];
+    const finish = vi.fn(async (_stage: string, callIndex: number, _attemptId: string, outcome) => {
+      events.push(`finish:${callIndex}:${outcome.state}`);
+    });
+    const hooks = {
+      begin: vi.fn(async (_stage: string, callIndex: number) => {
+        events.push(`begin:${callIndex}`);
+        return `attempt-${callIndex}`;
+      }),
+      beginBatch: vi.fn(async (_stage: string, callIndices: readonly number[]) => {
+        events.push(`batch:${callIndices.join(',')}`);
+        return callIndices.map((callIndex) => ({ callIndex, attemptId: `attempt-${callIndex}` }));
+      }),
+      finish,
+    };
+    let active = 0;
+    let maximumActive = 0;
+    const releases: (() => void)[] = [];
+    imageCall.mockReset().mockImplementation(() => {
+      if (imageCall.mock.calls.length === 1) return Promise.resolve(imageResponse());
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      return new Promise((resolve) => {
+        releases.push(() => {
+          active -= 1;
+          resolve(imageResponse());
+        });
+      });
+    });
+    generateCall.mockImplementation(() => events.push('generate'));
+    editCall.mockImplementation((_body: unknown) => events.push('edit'));
+
+    const pending = new OpenAIImageProvider('test-key').render(sample, {
+      ...options(),
+      attemptHooks: hooks,
+    });
+    await vi.waitFor(() => expect(editCall).toHaveBeenCalledTimes(3));
+    expect(imageCall).toHaveBeenCalledTimes(4);
+    expect(maximumActive).toBe(3);
+    expect(finish).toHaveBeenCalledTimes(1);
+    releases.forEach((release) => release());
+
+    const result = await pending;
+    expect(result.panels.map((panel) => panel.index)).toEqual([1, 2, 3, 4]);
+    expect(hooks.beginBatch).toHaveBeenCalledExactlyOnceWith('images', [2, 3, 4]);
+    expect(finish).toHaveBeenCalledTimes(4);
+    expect(events.slice(0, 5)).toEqual([
+      'begin:1',
+      'generate',
+      'finish:1:succeeded',
+      'batch:2,3,4',
+      'edit',
+    ]);
+    const referenceFiles = imageCall.mock.calls.slice(1).map(([body]) => body.image);
+    expect(referenceFiles).toHaveLength(3);
+    expect(referenceFiles[1]).toBe(referenceFiles[0]);
+    expect(referenceFiles[2]).toBe(referenceFiles[0]);
+  });
+  it('並列応答の1件がunknownでも残りを確定してから失敗する', async () => {
+    const hooks = {
+      begin: vi.fn(async (_stage: string, callIndex: number) => `attempt-${callIndex}`),
+      beginBatch: vi.fn(async (_stage: string, callIndices: readonly number[]) =>
+        callIndices.map((callIndex) => ({ callIndex, attemptId: `attempt-${callIndex}` })),
+      ),
+      finish: vi.fn(async () => undefined),
+    };
+    imageCall
+      .mockReset()
+      .mockResolvedValueOnce(imageResponse())
+      .mockRejectedValueOnce({ status: 503 })
+      .mockResolvedValueOnce(imageResponse())
+      .mockResolvedValueOnce(imageResponse());
+
+    await expect(
+      new OpenAIImageProvider('test-key').render(sample, {
+        ...options(),
+        attemptHooks: hooks,
+      }),
+    ).rejects.toMatchObject({
+      code: 'IMAGE_RESULT_UNKNOWN',
+      failedPanel: 2,
+      completedPanels: [expect.objectContaining({ index: 1 })],
+    });
+    expect(imageCall).toHaveBeenCalledTimes(4);
+    expect(hooks.finish).toHaveBeenCalledTimes(4);
+    expect(hooks.finish).toHaveBeenCalledWith(
+      'images',
+      2,
+      'attempt-2',
+      expect.objectContaining({ state: 'unknown' }),
+    );
+    expect(hooks.finish).toHaveBeenCalledWith(
+      'images',
+      3,
+      'attempt-3',
+      expect.objectContaining({ state: 'succeeded' }),
+    );
+    expect(hooks.finish).toHaveBeenCalledWith(
+      'images',
+      4,
+      'attempt-4',
+      expect.objectContaining({ state: 'succeeded' }),
+    );
+  });
   it('途中失敗で完了済みコマを返し、自動再送しない', async () => {
     const hooks = {
       begin: vi.fn(async (_stage: string, callIndex: number) => `attempt-${callIndex}`),
