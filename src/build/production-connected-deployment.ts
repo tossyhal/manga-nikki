@@ -50,11 +50,19 @@ export class ProductionConnectedDeploymentFailure extends Error {
     | 'ARTIFACT_CONFIG_UNSAFE'
     | 'WORKER_BINDINGS_PRESENT'
     | 'SUPABASE_PROBE_FAILED';
+  readonly publicSetting?:
+    | 'VITE_SUPABASE_URL'
+    | 'VITE_SUPABASE_PUBLISHABLE_KEY'
+    | 'VITE_TURNSTILE_SITE_KEY';
 
-  constructor(code: ProductionConnectedDeploymentFailure['code']) {
+  constructor(
+    code: ProductionConnectedDeploymentFailure['code'],
+    publicSetting?: ProductionConnectedDeploymentFailure['publicSetting'],
+  ) {
     super(code);
     this.name = 'ProductionConnectedDeploymentFailure';
     this.code = code;
+    this.publicSetting = publicSetting;
   }
 }
 
@@ -64,8 +72,15 @@ export function validateProductionReleasePublicValues(values: ProductionReleaseP
   try {
     assertNoKnownServerKeyFormats(values as Record<string, string>);
     assertProductionPublicConfiguration(values as Record<string, string>);
-  } catch {
-    throw new ProductionConnectedDeploymentFailure('INPUT_PUBLIC_CONFIGURATION_INVALID');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const publicSetting = (
+      ['VITE_SUPABASE_URL', 'VITE_SUPABASE_PUBLISHABLE_KEY', 'VITE_TURNSTILE_SITE_KEY'] as const
+    ).find((setting) => message.startsWith(setting));
+    throw new ProductionConnectedDeploymentFailure(
+      'INPUT_PUBLIC_CONFIGURATION_INVALID',
+      publicSetting,
+    );
   }
 
   return {

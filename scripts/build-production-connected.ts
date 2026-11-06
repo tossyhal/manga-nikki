@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
+  ProductionConnectedDeploymentFailure,
   removeProductionPublicEnvironmentFile,
   writeProductionPublicEnvironmentFile,
   type ProductionReleasePublicValues,
@@ -38,15 +39,20 @@ async function main(): Promise<void> {
     process.stderr.write(result.stderr);
   } catch (error) {
     exitCode = 1;
-    if (typeof error === 'object' && error !== null && 'stdout' in error) {
-      const stdout = error.stdout;
-      if (typeof stdout === 'string') process.stdout.write(stdout);
+    if (error instanceof ProductionConnectedDeploymentFailure) {
+      const setting = error.publicSetting ? ` ${error.publicSetting}` : '';
+      console.error(`production-connected-build: ${error.code}${setting}`);
+    } else {
+      if (typeof error === 'object' && error !== null && 'stdout' in error) {
+        const stdout = error.stdout;
+        if (typeof stdout === 'string') process.stdout.write(stdout);
+      }
+      if (typeof error === 'object' && error !== null && 'stderr' in error) {
+        const stderr = error.stderr;
+        if (typeof stderr === 'string') process.stderr.write(stderr);
+      }
+      if (!envFilePath) console.error('production-connected-build: INPUT_INVALID');
     }
-    if (typeof error === 'object' && error !== null && 'stderr' in error) {
-      const stderr = error.stderr;
-      if (typeof stderr === 'string') process.stderr.write(stderr);
-    }
-    if (exitCode && !envFilePath) console.error('production-connected-build: INPUT_INVALID');
   } finally {
     if (envFilePath) {
       try {

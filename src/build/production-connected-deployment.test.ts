@@ -117,6 +117,11 @@ describe('production connected public configuration', () => {
     expect(error).toBeInstanceOf(ProductionConnectedDeploymentFailure);
     expect((error as Error).message).toBe('INPUT_PUBLIC_CONFIGURATION_INVALID');
     expect((error as Error).message).not.toContain('private-sentinel');
+    expect([
+      'VITE_SUPABASE_URL',
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+      'VITE_TURNSTILE_SITE_KEY',
+    ]).toContain((error as ProductionConnectedDeploymentFailure).publicSetting);
   });
 
   it('writes only the allowlisted production VITE values into a new mode-0600 file', async () => {
