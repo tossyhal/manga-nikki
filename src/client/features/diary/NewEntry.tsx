@@ -405,7 +405,12 @@ export function NewEntry({
         <h1 className="sr-only">日記を書く</h1>
         <fieldset disabled={operationBusy || saved !== null} className="entry-form-fields">
           <div className="date-row">
-            <DiaryDateField id="date" value={date} onChange={setDate} />
+            <DiaryDateField
+              id="date"
+              value={date}
+              onChange={setDate}
+              disabled={operationBusy || saved !== null}
+            />
             <button
               className="button-text"
               disabled={operationBusy || saved !== null || !online}

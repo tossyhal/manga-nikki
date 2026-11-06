@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { z } from 'zod';
 import { comicSchema } from '../../../shared/schemas';
 import { Comic } from './Comic';
@@ -89,10 +89,6 @@ function SharedComicContent({ token }: { token: string | undefined }) {
   }
   return (
     <main className="shared-comic-page">
-      <header>
-        <Link to="/">漫画日記</Link>
-        <span>共有された漫画</span>
-      </header>
       {error ? (
         <div role="alert">
           <p>{error}</p>

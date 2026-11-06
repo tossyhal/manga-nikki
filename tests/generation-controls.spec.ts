@@ -874,9 +874,9 @@ test('登録CAPTCHAを中断しても入力を保ち、古いtokenを無視し�
 
   await page.goto('/new');
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
-  const date = page.locator('input[type="date"]');
+  const date = page.getByLabel('日付', { exact: true }).locator('time');
   const body = '確認を中断しても保持する架空日記';
-  const originalDate = await date.inputValue();
+  const originalDate = await date.getAttribute('datetime');
   await diary.fill(body);
   await page.getByRole('button', { name: '下書きとして保存' }).click();
   await expect(page.getByRole('region', { name: '匿名登録' })).toBeVisible();
@@ -889,7 +889,7 @@ test('登録CAPTCHAを中断しても入力を保ち、古いtokenを無視し�
   await expect(diary).toBeEnabled();
   await expect(diary).toBeFocused();
   await expect(diary).toHaveValue(body);
-  expect(await date.inputValue()).toBe(originalDate);
+  expect(await date.getAttribute('datetime')).toBe(originalDate);
   expect(await page.evaluate(() => window.__e2eTurnstileRemoveCount)).toBe(1);
 
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();

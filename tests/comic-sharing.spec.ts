@@ -6,6 +6,16 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
   page,
   browser,
 }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          document.documentElement.dataset.copiedUrl = text;
+        },
+      },
+    });
+  });
   await page.goto('/new');
   await page
     .getByLabel('今日はどんな日だった？', { exact: true })
@@ -25,10 +35,36 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
   const { readFile } = await import('node:fs/promises');
   const png = await readFile(downloadPath!);
   expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
-  await page.getByRole('button', { name: 'URLで共有', exact: true }).click();
-  await page.getByRole('button', { name: '共有URLを作る', exact: true }).click();
-  const sharedUrl = page.getByLabel('共有URL', { exact: true });
-  await expect(sharedUrl).toHaveValue(/\/shared\/[a-f0-9]{64}$/);
+
+  let shareRequests = 0;
+  let signalShareStarted!: () => void;
+  let releaseShare!: () => void;
+  const shareStarted = new Promise<void>((resolve) => {
+    signalShareStarted = resolve;
+  });
+  const shareGate = new Promise<void>((resolve) => {
+    releaseShare = resolve;
+  });
+  await page.route('**/api/v1/generations/*/share', async (route) => {
+    expect(route.request().method()).toBe('POST');
+    shareRequests += 1;
+    signalShareStarted();
+    await shareGate;
+    await route.continue();
+  });
+  const shareButton = page.locator('.comic-actions-toolbar button').nth(1);
+  await shareButton.click();
+  await shareStarted;
+  await expect(shareButton).toBeDisabled();
+  await shareButton.evaluate((button) => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  expect(shareRequests).toBe(1);
+  releaseShare();
+  await expect(page.getByText('URLをコピーしました。', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('共有URL', { exact: true })).toHaveCount(0);
+  const sharedUrl = await page.locator('html').getAttribute('data-copied-url');
+  expect(sharedUrl).toMatch(/^https?:\/\/[^/]+\/shared\/[a-f0-9]{64}$/);
   const guest = await browser.newContext();
   const guestPage = await guest.newPage();
   const authRequests: string[] = [];
@@ -36,8 +72,10 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
     if (request.url().includes('supabase.co/auth') || request.url().includes('/api/v1/entries'))
       authRequests.push(request.url());
   });
-  await guestPage.goto(await sharedUrl.inputValue());
+  await guestPage.goto(sharedUrl!);
   await expect(guestPage.getByRole('heading', { name: 'いつもの一日', exact: true })).toBeVisible();
+  await expect(guestPage.getByText('漫画日記', { exact: true })).toHaveCount(0);
+  await expect(guestPage.getByText('共有された漫画', { exact: true })).toHaveCount(0);
   await expect(guestPage.getByText('本文は共有しない架空の日記。')).toHaveCount(0);
   expect(authRequests).toEqual([]);
   await clickEntryMenuItem(page, '日記を削除');
@@ -45,6 +83,47 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
   await guestPage.reload();
   await expect(guestPage.getByRole('alert')).toContainText('共有が終了しています');
   await guest.close();
+});
+
+test('共有URLをコピーできない場合はURL欄と再コピー操作を表示する', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error('CLIPBOARD_DENIED');
+        },
+      },
+    });
+  });
+  await page.goto('/new');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('共有URLのコピー失敗を確認する架空の日記。');
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+  await expect(page).toHaveURL(/\/entries\//);
+
+  await page.route('**/api/v1/generations/*/share', (route) =>
+    route.fulfill({ status: 201, json: { path: `/shared/${'c'.repeat(64)}` } }),
+  );
+  await page.getByRole('button', { name: 'URLで共有', exact: true }).click();
+  await expect(
+    page.getByText('URLをコピーできませんでした。下のURLを選択してコピーしてください。', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const sharedUrl = page.getByLabel('共有URL', { exact: true });
+  await expect(sharedUrl).toHaveValue(/\/shared\/[a-f0-9]{64}$/);
+  await sharedUrl.focus();
+  await expect(sharedUrl).toHaveJSProperty('selectionStart', 0);
+  await expect(sharedUrl).toHaveJSProperty('selectionEnd', (await sharedUrl.inputValue()).length);
+  await page.getByRole('button', { name: 'もう一度コピー', exact: true }).click();
+  await expect(sharedUrl).toBeVisible();
+  await expect(
+    page.getByText('URLをコピーできませんでした。下のURLを選択してコピーしてください。', {
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test('4枚のコマ画像と外付けの文章を1枚のPNGにまとめる', async ({ page }) => {

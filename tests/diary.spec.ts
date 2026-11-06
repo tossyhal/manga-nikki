@@ -435,8 +435,12 @@ test('ライブの新規作成は入力だけでは登録やCAPTCHA、書き込�
   const body = '入力だけの架空の日記\n改行を保持する。';
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill(body);
-  await page.getByLabel('日付', { exact: true }).focus();
+  const dateTrigger = page.getByLabel('日付', { exact: true });
+  await dateTrigger.focus();
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dateTrigger).toBeFocused();
   await expect(diary).toHaveValue(body);
   await expect(page).toHaveURL(/\/new$/);
   await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);

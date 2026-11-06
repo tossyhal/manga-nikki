@@ -21,19 +21,13 @@
   justify-self: start;
   min-width: 140px;
 }
-.comic-share-options {
+.comic-share-fallback {
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #e4e4e4;
-}
-.comic-share-options p {
-  margin-bottom: 12px;
-  line-height: 1.65;
 }
 .comic-share-url {
   display: grid;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 .comic-share-url input {
   width: 100%;
@@ -68,13 +62,6 @@
 .shared-comic-page {
   width: min(100% - 32px, 960px);
   margin: 32px auto;
-}
-.shared-comic-page > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 32px;
 }
 .shared-comic-page h1 {
   margin-bottom: 24px;

@@ -523,12 +523,17 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     const diary = await page.locator('.entry-editor-card').boundingBox();
     const writingColumn = await page.locator('.entry-form-fields').boundingBox();
     const supportColumn = await page.locator('.entry-compose-support').boundingBox();
+    const actionRow = page.locator('.new-entry-form .primary-action-dock > .primary-action-row');
     expect(newEntry?.width).toBe(960);
     expect(diary?.width).toBeGreaterThanOrEqual(500);
+    expect(diary?.height).toBeGreaterThan(600);
     expect((writingColumn?.x ?? 0) + (writingColumn?.width ?? 0)).toBeLessThan(
       supportColumn?.x ?? 0,
     );
     expect(supportColumn?.width).toBeGreaterThanOrEqual(280);
+    await expect(actionRow).toBeVisible();
+    await expect.poll(() => gapAboveBottomNav(actionRow)).toBeGreaterThanOrEqual(16);
+    await expect.poll(() => gapAboveBottomNav(actionRow)).toBeLessThanOrEqual(32);
     expect(await dateTextMetrics(page, '.date-display time')).toEqual(homeDate);
     await expectMainToFit(page);
 
@@ -583,6 +588,7 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.detail-page')).toHaveClass(/has-comic/);
+  await expect(page.locator('.app-main')).toHaveCSS('padding-bottom', '104px');
   const detail = await page.locator('.detail-page').boundingBox();
   const comic = await page.locator('.detail-page > .comic').boundingBox();
   const comicActions = await page.locator('.detail-page > .comic-actions').boundingBox();
@@ -937,16 +943,16 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
     return {
       row: rect('.date-row'),
       control: rect('.date-control'),
-      picker: rect('.date-picker-input'),
+      trigger: rect('.diary-date-trigger'),
       time: rect('.date-display time'),
       icon: rect('.date-display svg'),
-      save: rect('.date-row button'),
+      save: rect('.date-row > .button-text'),
     };
   });
-  expect(layout.picker.left).toBeGreaterThanOrEqual(layout.control.left);
-  expect(layout.picker.right).toBeLessThanOrEqual(layout.control.right + 1);
+  expect(layout.trigger.left).toBeGreaterThanOrEqual(layout.control.left);
+  expect(layout.trigger.right).toBeLessThanOrEqual(layout.control.right + 1);
   expect(layout.control.bottom - layout.control.top).toBeGreaterThanOrEqual(44);
-  expect(layout.picker.right <= layout.save.left || layout.save.right <= layout.picker.left).toBe(
+  expect(layout.trigger.right <= layout.save.left || layout.save.right <= layout.trigger.left).toBe(
     true,
   );
   expect(layout.save.right).toBeCloseTo(layout.row.right, 0);
@@ -956,7 +962,7 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   expect(layout.icon.left).toBeGreaterThanOrEqual(layout.time.right);
   expect(layout.icon.left - layout.time.right).toBeLessThanOrEqual(12);
   expect(
-    Math.abs(layout.icon.top + layout.icon.bottom - layout.picker.top - layout.picker.bottom),
+    Math.abs(layout.icon.top + layout.icon.bottom - layout.trigger.top - layout.trigger.bottom),
   ).toBeLessThanOrEqual(2);
 
   const body = '日付と保存ボタンの表示を確認する架空の日記';
@@ -995,11 +1001,11 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
   await expect(largeSaveButton).toBeEnabled();
   const largeDateRow = await page.evaluate(() => {
     const row = document.querySelector('.date-row');
-    const picker = document.querySelector('.date-picker-input');
-    const save = document.querySelector('.date-row button');
-    if (!row || !picker || !save) throw new Error('日付行の操作要素がありません');
+    const trigger = document.querySelector('.diary-date-trigger');
+    const save = document.querySelector('.date-row > .button-text');
+    if (!row || !trigger || !save) throw new Error('日付行の操作要素がありません');
     const rowBounds = row.getBoundingClientRect();
-    const pickerBounds = picker.getBoundingClientRect();
+    const triggerBounds = trigger.getBoundingClientRect();
     const saveBounds = save.getBoundingClientRect();
     const saveTarget = document.elementFromPoint(
       saveBounds.left + saveBounds.width / 2,
@@ -1009,10 +1015,10 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
       height: rowBounds.height,
       rowLeft: rowBounds.left,
       rowRight: rowBounds.right,
-      pickerLeft: pickerBounds.left,
-      pickerRight: pickerBounds.right,
-      pickerTop: pickerBounds.top,
-      pickerBottom: pickerBounds.bottom,
+      triggerLeft: triggerBounds.left,
+      triggerRight: triggerBounds.right,
+      triggerTop: triggerBounds.top,
+      triggerBottom: triggerBounds.bottom,
       saveLeft: saveBounds.left,
       saveRight: saveBounds.right,
       saveTop: saveBounds.top,
@@ -1021,15 +1027,15 @@ test('日付ピッカーに視覚フォーカスを示し、拡大時も保存�
     };
   });
   expect(largeDateRow.height).toBeGreaterThan(44);
-  expect(largeDateRow.pickerLeft).toBeGreaterThanOrEqual(largeDateRow.rowLeft - 1);
-  expect(largeDateRow.pickerRight).toBeLessThanOrEqual(largeDateRow.rowRight + 1);
+  expect(largeDateRow.triggerLeft).toBeGreaterThanOrEqual(largeDateRow.rowLeft - 1);
+  expect(largeDateRow.triggerRight).toBeLessThanOrEqual(largeDateRow.rowRight + 1);
   expect(largeDateRow.saveLeft).toBeGreaterThanOrEqual(largeDateRow.rowLeft - 1);
   expect(largeDateRow.saveRight).toBeLessThanOrEqual(largeDateRow.rowRight + 1);
   expect(
-    largeDateRow.pickerRight <= largeDateRow.saveLeft ||
-      largeDateRow.saveRight <= largeDateRow.pickerLeft ||
-      largeDateRow.pickerBottom <= largeDateRow.saveTop ||
-      largeDateRow.saveBottom <= largeDateRow.pickerTop,
+    largeDateRow.triggerRight <= largeDateRow.saveLeft ||
+      largeDateRow.saveRight <= largeDateRow.triggerLeft ||
+      largeDateRow.triggerBottom <= largeDateRow.saveTop ||
+      largeDateRow.saveBottom <= largeDateRow.triggerTop,
   ).toBe(true);
   expect(largeDateRow.saveReceivesPointer).toBe(true);
   await largeSaveButton.click();

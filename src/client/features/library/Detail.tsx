@@ -764,7 +764,12 @@ function DetailContent({
                   </output>
                 )}
                 <div className="date-row">
-                  <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
+                  <DiaryDateField
+                    id="edit-date"
+                    value={draftDate}
+                    onChange={setDraftDate}
+                    disabled={busy || pending}
+                  />
                 </div>
                 <DiaryBodyField
                   id="edit-body"

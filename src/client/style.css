@@ -2080,7 +2080,7 @@ output {
   }
 
   .app-main:not(.primary-content) {
-    padding: 24px 40px calc(68px + 54px + 14px + 12px + 24px + env(safe-area-inset-bottom, 0px));
+    padding: 24px 40px calc(68px + 12px + 24px + env(safe-area-inset-bottom, 0px));
   }
 
   .home-page,
@@ -2166,7 +2166,7 @@ output {
 
   .new-entry-form {
     display: grid;
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-height: 0;
     grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
     align-items: stretch;

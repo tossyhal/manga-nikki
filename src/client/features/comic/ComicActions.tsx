@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
 import { api } from '../../lib/api';
 import { exportComic } from './exportComic';
@@ -17,12 +17,14 @@ export function ComicActions({
   ready: boolean;
   getFreshImages?: () => Promise<Record<string, string>>;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [sharing, setSharing] = useState(false);
   const [url, setUrl] = useState('');
+  const [showUrlFallback, setShowUrlFallback] = useState(false);
+  const shareInFlight = useRef(false);
   async function download() {
-    setBusy(true);
+    setSaving(true);
     setMessage('');
     try {
       const blob = await exportComic(comic, getFreshImages ? await getFreshImages() : images);
@@ -38,23 +40,58 @@ export function ComicActions({
     } catch {
       setMessage('画像を保存できませんでした。画像を再読み込みして、もう一度お試しください。');
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
-  async function publish() {
-    setBusy(true);
+  async function writeUrlToClipboard(value: string) {
+    if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
+    await navigator.clipboard.writeText(value);
+  }
+  function showCopyFailure() {
+    setShowUrlFallback(true);
+    setMessage('URLをコピーできませんでした。下のURLを選択してコピーしてください。');
+  }
+  async function share() {
+    if (shareInFlight.current) return;
+    shareInFlight.current = true;
+    setSharing(true);
     setMessage('');
     try {
-      const result = await api<{ path: string }>(`/generations/${generationId}/share`, {
-        method: 'POST',
-      });
-      if (!/^\/shared\/[a-f0-9]{64}$/.test(result.path)) throw new Error('INVALID_SHARE_URL');
-      setUrl(new URL(result.path, location.origin).href);
-      setMessage('共有URLを作りました。');
-    } catch {
-      setMessage('共有URLを作れませんでした。時間をおいて再試行してください。');
+      let shareUrl = url;
+      if (!shareUrl) {
+        try {
+          const result = await api<{ path: string }>(`/generations/${generationId}/share`, {
+            method: 'POST',
+          });
+          if (!/^\/shared\/[a-f0-9]{64}$/.test(result.path)) throw new Error('INVALID_SHARE_URL');
+          shareUrl = new URL(result.path, location.origin).href;
+          setUrl(shareUrl);
+        } catch {
+          setMessage('共有URLを作成できませんでした。時間をおいて再試行してください。');
+          return;
+        }
+      }
+      try {
+        await writeUrlToClipboard(shareUrl);
+        setShowUrlFallback(false);
+        setMessage('URLをコピーしました。');
+      } catch {
+        showCopyFailure();
+      }
     } finally {
-      setBusy(false);
+      shareInFlight.current = false;
+      setSharing(false);
+    }
+  }
+  async function retryCopy() {
+    if (!url) return;
+    setMessage('');
+    try {
+      await writeUrlToClipboard(url);
+      setShowUrlFallback(false);
+      setMessage('URLをコピーしました。');
+    } catch {
+      showCopyFailure();
     }
   }
   return (
@@ -63,74 +100,37 @@ export function ComicActions({
         <button
           type="button"
           className="button button-secondary"
-          disabled={!ready || busy}
+          disabled={!ready || saving || sharing}
           onClick={() => void download()}
         >
-          {busy ? '準備しています…' : '画像を保存'}
+          {saving ? '画像を準備しています…' : '画像を保存'}
         </button>
         {generationId && (
           <button
             type="button"
             className="button button-secondary"
-            disabled={busy}
-            aria-expanded={sharing}
-            onClick={() => setSharing(!sharing)}
+            disabled={saving || sharing}
+            onClick={() => void share()}
           >
-            URLで共有
+            {sharing ? '共有中…' : 'URLで共有'}
           </button>
         )}
       </div>
-      {sharing && (
-        <div className="comic-share-options">
-          <p>
-            この漫画の画像・タイトル・セリフ・説明文を、URLを知っている人がログインなしで見られます。元の日記本文は共有しません。日記の削除や保存期限で共有も終了します。
-          </p>
-          {!url ? (
+      {showUrlFallback && url && (
+        <div className="comic-share-fallback">
+          <label className="comic-share-url">
+            共有URL
+            <input readOnly value={url} onFocus={(event) => event.target.select()} />
+          </label>
+          <div className="comic-actions-buttons">
             <button
               type="button"
               className="button button-secondary"
-              disabled={busy}
-              onClick={() => void publish()}
+              onClick={() => void retryCopy()}
             >
-              共有URLを作る
+              もう一度コピー
             </button>
-          ) : (
-            <>
-              <label className="comic-share-url">
-                共有URL
-                <input readOnly value={url} onFocus={(event) => event.target.select()} />
-              </label>
-              <div className="comic-actions-buttons">
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() => {
-                    void navigator.clipboard
-                      ?.writeText(url)
-                      .then(() => setMessage('URLをコピーしました。'))
-                      .catch(() => setMessage('URLを選択してコピーしてください。'));
-                    if (!navigator.clipboard) setMessage('URLを選択してコピーしてください。');
-                  }}
-                >
-                  URLをコピー
-                </button>
-                {typeof navigator.share === 'function' && (
-                  <button
-                    type="button"
-                    className="button button-secondary"
-                    onClick={() => {
-                      void navigator.share({ title: comic.title, url }).catch((error: unknown) => {
-                        if (!(error instanceof DOMException && error.name === 'AbortError'))
-                          setMessage('共有できませんでした。URLをコピーして送ってください。');
-                      });
-                    }}
-                  >
-                    友達に送る
-                  </button>
-                )}
-              </div>
-            </>
-          )}
+          </div>
         </div>
       )}
       <output className="comic-action-message" aria-live="polite">

@@ -588,7 +588,7 @@ test('Homeは開いたままJST日付が変わると日付表示と今日の記�
   await expect(page.getByRole('heading', { name: '今日に切り替わった架空日記' })).toBeVisible();
 });
 
-test('日付入力中にJST日付が変わっても選択日と本文を保持する', async ({ page }) => {
+test('日付選択中にJST日付が変わると新しい今日を選べて、本文を保持する', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-11-05T14:59:00.000Z') });
   await useMockConfig(page);
   await page.route('**/api/v1/me/quota', (route) =>
@@ -603,15 +603,23 @@ test('日付入力中にJST日付が変わっても選択日と本文を保持�
   );
 
   await page.goto('/new?date=2026-11-05');
-  const dateInput = page.getByLabel('日付');
+  const dateTrigger = page.getByRole('button', { name: '日付', exact: true });
+  const selectedDate = dateTrigger.locator('time');
   const diaryInput = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diaryInput.fill('日付境界をまたいで入力している架空の日記です。');
-  await expect(dateInput).toHaveValue('2026-11-05');
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-05');
+  await dateTrigger.click();
+  const dateDialog = page.getByRole('dialog');
+  const newlyFutureDate = dateDialog.getByRole('button', { name: '2026年11月6日', exact: true });
+  await expect(newlyFutureDate).toBeDisabled();
 
   await page.clock.runFor(60_001);
 
-  await expect(dateInput).toHaveAttribute('max', '2026-11-06');
-  await expect(dateInput).toHaveValue('2026-11-05');
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-05');
+  await expect(newlyFutureDate).toBeEnabled();
+  await expect(newlyFutureDate).toHaveAttribute('aria-current', 'date');
+  await newlyFutureDate.click();
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-06');
   await expect(diaryInput).toHaveValue('日付境界をまたいで入力している架空の日記です。');
 });
 
