@@ -296,7 +296,9 @@ test('詳細メニューは外側操作とTab離脱で閉じ、Escapeと矢印�
   await expect(trigger).toBeFocused();
 });
 
-test('ポインターでメニューを閉じる際にblurが先行しても再度開かない', async ({ page }) => {
+test('null relatedTargetのblur後にtriggerを再タップしてもメニューを再度開かない', async ({
+  page,
+}) => {
   await installMockUiRoutes(page);
   await page.goto(`/entries/${entryId}`);
 
@@ -305,24 +307,82 @@ test('ポインターでメニューを閉じる際にblurが先行しても再�
   await trigger.click();
   await expect(menu).toBeVisible();
 
-  await page.evaluate(() => {
+  const sawNullRelatedTarget = await page.evaluate(() => {
     const triggerButton = document.querySelector<HTMLButtonElement>(
       'button[aria-label="その他の操作"]',
     );
     const menuItem = document.querySelector<HTMLButtonElement>('[role="menuitem"]');
-    if (!triggerButton || !menuItem) throw new Error('詳細メニューがありません');
+    const anchor = document.querySelector<HTMLDivElement>('.detail-menu-anchor');
+    if (!triggerButton || !menuItem || !anchor) throw new Error('詳細メニューがありません');
+    let sawNullRelatedTarget = false;
+    anchor.addEventListener(
+      'focusout',
+      (event) => {
+        if (event.target === menuItem) sawNullRelatedTarget = event.relatedTarget === null;
+      },
+      true,
+    );
     menuItem.focus();
     triggerButton.dispatchEvent(
-      new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }),
+      new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', button: 0 }),
     );
-    menuItem.blur();
     triggerButton.dispatchEvent(
-      new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse', button: 0 }),
+      new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', button: 0 }),
     );
+    menuItem.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
     triggerButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return sawNullRelatedTarget;
   });
+  expect(sawNullRelatedTarget).toBe(true);
   await expect(menu).toHaveCount(0);
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('null relatedTargetのblur後も編集と削除のmenuitemを実行できる', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  const clickItemAfterNullBlur = async (name: string) =>
+    page.evaluate((itemName) => {
+      const anchor = document.querySelector<HTMLDivElement>('.detail-menu-anchor');
+      const item = [
+        ...(anchor?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+      ].find((button) => button.textContent?.includes(itemName));
+      if (!anchor || !item) throw new Error(`menuitem「${itemName}」がありません`);
+      let sawNullRelatedTarget = false;
+      anchor.addEventListener(
+        'focusout',
+        (event) => {
+          if (event.target instanceof HTMLElement)
+            sawNullRelatedTarget = event.relatedTarget === null;
+        },
+        true,
+      );
+      item.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', button: 0 }),
+      );
+      item.dispatchEvent(
+        new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', button: 0 }),
+      );
+      (document.activeElement as HTMLElement | null)?.dispatchEvent(
+        new FocusEvent('focusout', { bubbles: true, relatedTarget: null }),
+      );
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return sawNullRelatedTarget;
+    }, name);
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  expect(await clickItemAfterNullBlur('日記を編集')).toBe(true);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
+
+  await page.reload();
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  expect(await clickItemAfterNullBlur('日記を削除')).toBe(true);
+  await expect(page.getByRole('dialog', { name: 'この日記を削除しますか？' })).toBeVisible();
 });
 
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {

@@ -27,28 +27,3 @@ export function shouldRenewExpiredAsset(
   // expiresAtはserver clock由来なので、client clockだけで期限切れと決めず経過時間も確認する。
   return wallNow >= expiry || elapsed >= 65_000;
 }
-
-export function shouldRefreshExpiredAssetOnVisibility(
-  requestedAt: number | undefined,
-  requestedAtWall: number | undefined,
-  attempted: boolean,
-  expiresAt: string,
-  now = performance.now(),
-  wallNow = Date.now(),
-): boolean {
-  if (
-    attempted ||
-    requestedAt === undefined ||
-    requestedAtWall === undefined ||
-    !Number.isFinite(requestedAt) ||
-    !Number.isFinite(requestedAtWall) ||
-    !Number.isFinite(now) ||
-    !Number.isFinite(wallNow)
-  )
-    return false;
-
-  const elapsed = Math.max(now - requestedAt, wallNow - requestedAtWall);
-  const expiry = Date.parse(expiresAt);
-  // visibilitychangeは一度だけの再取得に限り、端末時計が期限を過ぎた時も再表示を回復する。
-  return (Number.isFinite(expiry) && wallNow >= expiry) || elapsed >= 65_000;
-}

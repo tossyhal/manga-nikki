@@ -25,6 +25,7 @@ declare global {
     __e2eTurnstileExecuteEvents?: Array<{ action: string | null }>;
     __e2eTurnstileRenderCount?: number;
     __e2eTurnstileRemoveCount?: number;
+    __e2eSupabaseFetchCalls?: string[];
     __releaseE2eGenerationCaptcha?: () => void;
     __releaseE2eRegistrationCaptcha?: () => void;
     __failE2eRegistrationCaptcha?: () => void;
@@ -698,6 +699,16 @@ test('登録CAPTCHAのerror後に解除され、古いcallbackは新しい確認
 
 test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れても送信しない', async ({ page }) => {
   await installTurnstileFake(page, { delayFirstRegistrationCallback: true });
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.__e2eSupabaseFetchCalls = [];
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : '';
+      if (url.startsWith('https://manga-nikki-e2e.supabase.co/'))
+        window.__e2eSupabaseFetchCalls?.push(url);
+      return nativeFetch(input, init);
+    };
+  });
   const externalRequests: string[] = [];
   let entryPosts = 0;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
@@ -724,8 +735,23 @@ test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れて�
   await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
   await clickAppDialogButton(page, '処理中です', '移動する');
   await expect(page).toHaveURL(/\/$/);
-  await page.evaluate(() => window.__releaseE2eRegistrationCaptcha?.());
+  await page.evaluate(async () => {
+    window.__releaseE2eRegistrationCaptcha?.();
+    await new Promise<void>((resolve) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        channel.port2.close();
+        resolve();
+      };
+      channel.port2.postMessage(null);
+    });
+  });
   expect(await page.evaluate(() => window.__e2eTurnstileRemoveCount)).toBe(1);
+  expect(await page.evaluate(() => window.__e2eTurnstileEvents)).toEqual([
+    { action: null, token: 'registration-token-e2e' },
+  ]);
+  expect(await page.evaluate(() => window.__e2eSupabaseFetchCalls)).toEqual([]);
   expect(externalRequests).toEqual([]);
   expect(entryPosts).toBe(0);
 });
@@ -760,6 +786,7 @@ test('登録CAPTCHAを中断しても入力を保ち、古いtokenを無視し�
   await page.getByRole('button', { name: '確認をやめる' }).click();
   await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
   await expect(diary).toBeEnabled();
+  await expect(diary).toBeFocused();
   await expect(diary).toHaveValue(body);
   expect(await date.inputValue()).toBe(originalDate);
   expect(await page.evaluate(() => window.__e2eTurnstileRemoveCount)).toBe(1);

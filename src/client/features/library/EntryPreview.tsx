@@ -2,10 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefCall
 import type { Entry, EntryDetail, Generation } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
 import { getAssetUrl, getEntry, getGeneration } from '../../lib/api';
-import {
-  shouldRefreshExpiredAssetOnVisibility,
-  shouldRenewExpiredAsset,
-} from '../comic/signedAssetRefresh';
+import { shouldRenewExpiredAsset } from '../comic/signedAssetRefresh';
 
 export type EntryPreviewOptions = { eager?: boolean };
 
@@ -140,15 +137,16 @@ export function useEntryPreview(
     let activeGenerationId = generationId;
     let latestGeneration: Generation | null = null;
     let comicGeneration: Generation | null = null;
-    let imageLoaded = false;
     let manualRetryPending = false;
-    let currentAsset: {
+    type ComicImageAsset = {
       url: string;
       expiresAt: string;
       requestedAt: number;
       requestedAtWall: number;
       token: number;
-    } | null = null;
+      state: 'loading' | 'loaded' | 'failed';
+    };
+    let currentAsset: ComicImageAsset | null = null;
     let assetRequestId = 0;
     let autoRefreshAttempted = false;
     let imageFailureMessage = '漫画画像を表示できません。';
@@ -181,7 +179,6 @@ export function useEntryPreview(
 
     async function refreshComicImage(
       generation: Extract<Generation, { status: 'succeeded' }>,
-      clearImage: boolean,
       preserveError = false,
     ) {
       if (!active || fetchingAsset || comicGeneration?.id !== generation.id) return;
@@ -189,14 +186,12 @@ export function useEntryPreview(
       const requestId = ++assetRequestId;
       const requestedAt = performance.now();
       const requestedAtWall = Date.now();
-      if (clearImage) {
-        currentAsset = null;
-        imageLoaded = false;
-      }
+      currentAsset = null;
       publish({
-        ...(clearImage ? { imageUrl: null, imageToken: null } : {}),
+        imageUrl: null,
+        imageToken: null,
         isLoading: true,
-        ...(!preserveError && clearImage ? { imageError: undefined } : {}),
+        ...(!preserveError ? { imageError: undefined } : {}),
       });
       const assetId =
         generation.comic.visual.kind === 'page'
@@ -205,13 +200,13 @@ export function useEntryPreview(
       try {
         const asset = await getAssetUrl(assetId);
         if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
-          imageLoaded = false;
           currentAsset = {
             url: asset.url,
             expiresAt: asset.expiresAt,
             requestedAt,
             requestedAtWall,
             token: requestId,
+            state: 'loading',
           };
           publish({
             imageUrl: asset.url,
@@ -223,14 +218,12 @@ export function useEntryPreview(
       } catch {
         if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
           manualRetryPending = false;
-          if (clearImage) {
-            currentAsset = null;
-            imageLoaded = false;
-          }
+          currentAsset = null;
           publish({
-            ...(clearImage ? { imageUrl: null, imageToken: null } : {}),
+            imageUrl: null,
+            imageToken: null,
             isLoading: false,
-            ...(clearImage ? { imageError: imageFailureMessage } : {}),
+            imageError: imageFailureMessage,
           });
         }
       } finally {
@@ -242,7 +235,6 @@ export function useEntryPreview(
       if (!active || !generation || generation.status !== 'succeeded') {
         comicGeneration = null;
         currentAsset = null;
-        imageLoaded = false;
         manualRetryPending = false;
         assetRequestId++;
         fetchingAsset = false;
@@ -260,7 +252,6 @@ export function useEntryPreview(
       if (previousComicId !== generation.id) autoRefreshAttempted = false;
       comicGeneration = generation;
       currentAsset = null;
-      imageLoaded = false;
       manualRetryPending = false;
       assetRequestId++;
       fetchingAsset = false;
@@ -276,7 +267,7 @@ export function useEntryPreview(
         isLoading: true,
         imageError: undefined,
       });
-      await refreshComicImage(generation, true);
+      await refreshComicImage(generation);
     }
 
     const handleComicImageError = (url: string, token: number | null) => {
@@ -288,6 +279,7 @@ export function useEntryPreview(
         !asset ||
         asset.url !== url ||
         asset.token !== token ||
+        asset.state === 'failed' ||
         !comic ||
         comic.status !== 'succeeded' ||
         fetchingAsset
@@ -296,7 +288,7 @@ export function useEntryPreview(
 
       const wasManualRetry = manualRetryPending;
       manualRetryPending = false;
-      imageLoaded = false;
+      asset.state = 'failed';
       const shouldRefresh =
         !wasManualRetry &&
         shouldRenewExpiredAsset(
@@ -307,10 +299,20 @@ export function useEntryPreview(
           Date.now(),
           asset.expiresAt,
         );
+      if (document.hidden) {
+        if (wasManualRetry) autoRefreshAttempted = true;
+        publish({
+          imageUrl: null,
+          imageToken: null,
+          isLoading: false,
+          imageError: imageFailureMessage,
+        });
+        return;
+      }
       currentAsset = null;
       if (shouldRefresh) {
         autoRefreshAttempted = true;
-        void refreshComicImage(comic, true);
+        void refreshComicImage(comic);
         return;
       }
       publish({
@@ -323,8 +325,16 @@ export function useEntryPreview(
 
     const handleComicImageLoad = (url: string, token: number | null) => {
       const asset = currentAsset;
-      if (!active || token === null || !asset || asset.url !== url || asset.token !== token) return;
-      imageLoaded = true;
+      if (
+        !active ||
+        token === null ||
+        !asset ||
+        asset.url !== url ||
+        asset.token !== token ||
+        asset.state === 'failed'
+      )
+        return;
+      asset.state = 'loaded';
       if (manualRetryPending) {
         manualRetryPending = false;
         publish({ isLoading: false, imageError: undefined });
@@ -336,7 +346,7 @@ export function useEntryPreview(
       if (!active || !comic || comic.status !== 'succeeded' || fetchingAsset) return;
       manualRetryPending = true;
       autoRefreshAttempted = false;
-      void refreshComicImage(comic, true, true);
+      void refreshComicImage(comic, true);
     };
 
     imageLoadRef.current = handleComicImageLoad;
@@ -478,23 +488,29 @@ export function useEntryPreview(
       if (
         !active ||
         !visibleRef.current ||
-        imageLoaded ||
+        manualRetryPending ||
         !asset ||
+        asset.state !== 'failed' ||
         !comic ||
         comic.status !== 'succeeded' ||
-        fetchingAsset ||
-        !shouldRefreshExpiredAssetOnVisibility(
+        fetchingAsset
+      )
+        return;
+      if (
+        !shouldRenewExpiredAsset(
           asset.requestedAt,
           asset.requestedAtWall,
           autoRefreshAttempted,
-          asset.expiresAt,
           performance.now(),
           Date.now(),
+          asset.expiresAt,
         )
-      )
+      ) {
+        currentAsset = null;
         return;
+      }
       autoRefreshAttempted = true;
-      void refreshComicImage(comic, false);
+      void refreshComicImage(comic);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {

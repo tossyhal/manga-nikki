@@ -29,6 +29,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
   const registrationPendingRef = useRef(false);
+  const focusBodyAfterCaptchaCancelRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -115,6 +116,12 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView({ block: 'center' });
   }, [error, saveErrorIntent, validationFailureCount]);
+
+  useEffect(() => {
+    if (!focusBodyAfterCaptchaCancelRef.current || pendingSave !== null) return;
+    focusBodyAfterCaptchaCancelRef.current = false;
+    document.getElementById('body')?.focus({ preventScroll: true });
+  }, [pendingSave]);
 
   function showValidationError(message: string) {
     setValidationFailureCount((count) => count + 1);
@@ -319,6 +326,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
 
   function cancelRegistrationCaptcha() {
     if (!activeRef.current || !registrationPendingRef.current) return;
+    focusBodyAfterCaptchaCancelRef.current = true;
     registrationPendingRef.current = false;
     setPendingSave(null);
     setError('');
