@@ -37,18 +37,50 @@ function generationStorageKey(entry: Pick<Entry, 'id' | 'revision'>): string {
   return `manga-nikki.generation:${entry.id}:${entry.revision}`;
 }
 
+function generationStorageUnavailable(): ApiClientError {
+  return new ApiClientError(
+    '生成受付キーをこのタブに保存できません。ブラウザーのストレージ設定を確認してから再操作してください。',
+    null,
+    'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+  );
+}
+
+function getSessionStorage(): Storage {
+  try {
+    return globalThis.sessionStorage;
+  } catch {
+    throw generationStorageUnavailable();
+  }
+}
+
+function readGenerationKey(entry: Entry): string | null {
+  try {
+    return getSessionStorage().getItem(generationStorageKey(entry));
+  } catch (failure) {
+    if (failure instanceof ApiClientError) throw failure;
+    throw generationStorageUnavailable();
+  }
+}
+
 function generationKey(entry: Entry): string {
-  const storageKey = generationStorageKey(entry);
-  let key = sessionStorage.getItem(storageKey);
-  if (!key) {
-    key = crypto.randomUUID();
-    sessionStorage.setItem(storageKey, key);
+  const existing = readGenerationKey(entry);
+  if (existing) return existing;
+  const key = crypto.randomUUID();
+  try {
+    getSessionStorage().setItem(generationStorageKey(entry), key);
+  } catch (failure) {
+    if (failure instanceof ApiClientError) throw failure;
+    throw generationStorageUnavailable();
   }
   return key;
 }
 
 export function hasGenerationRequest(entry: Entry): boolean {
-  return sessionStorage.getItem(generationStorageKey(entry)) !== null;
+  try {
+    return readGenerationKey(entry) !== null;
+  } catch {
+    return false;
+  }
 }
 
 async function postGeneration(entry: Entry, captchaToken: string): Promise<GenerationReceipt> {
@@ -94,12 +126,10 @@ export async function recheckGeneration(entry: Entry): Promise<GenerationReceipt
   if (config.dataMode === 'sample') {
     throw new ApiClientError('サンプル環境では個人データを操作できません。', 503, 'SAMPLE_ONLY');
   }
-  if (!hasGenerationRequest(entry)) {
+  const key = readGenerationKey(entry);
+  if (!key) {
     throw new ApiClientError('確認できる生成受付がありません。', 409, 'NO_GENERATION_REQUEST');
   }
-  const key = sessionStorage.getItem(generationStorageKey(entry));
-  if (!key)
-    throw new ApiClientError('確認できる生成受付がありません。', 409, 'NO_GENERATION_REQUEST');
   return api<GenerationReceipt>(`/entries/${encodeURIComponent(entry.id)}/generations`, {
     method: 'POST',
     headers: { 'Idempotency-Key': key },

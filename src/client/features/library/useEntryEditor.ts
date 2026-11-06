@@ -107,7 +107,6 @@ export function useEntryEditor({
       try {
         const latest = await readLatestEntry();
         if (!activeRef.current) return;
-        setEntry(latest);
         setDraftDate(latest.diaryDate);
         setDraftBody(latest.body);
       } catch {
@@ -137,7 +136,6 @@ export function useEntryEditor({
     try {
       const latest = await readLatestEntry();
       if (!activeRef.current) return;
-      setEntry(latest);
       setDraftDate(latest.diaryDate);
       setDraftBody(latest.body);
       const latestIsPending =
@@ -147,8 +145,10 @@ export function useEntryEditor({
       if (latestIsPending) setError('この記録は生成中のため編集できません。');
       setEditErrorStatus(null);
     } catch (failure) {
-      if (activeRef.current)
+      if (activeRef.current) {
+        setOperationFailed(true);
         setError(failure instanceof Error ? failure.message : '最新の記録を読み込めませんでした。');
+      }
     } finally {
       if (activeRef.current) {
         actionInFlightRef.current = false;
