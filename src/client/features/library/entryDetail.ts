@@ -15,12 +15,17 @@ export function isCurrentEntryGeneration(
 export async function completeEntryDetail(
   entry: EntryDetail,
   loadGeneration: (id: string) => Promise<Generation>,
+  mode: 'initial' | 'foreground',
 ): Promise<EntryDetail> {
   let latestGeneration = isCurrentEntryGeneration(entry, entry.latestGeneration)
     ? entry.latestGeneration
     : null;
-  if (!latestGeneration && entry.latestGenerationId)
-    latestGeneration = await loadGeneration(entry.latestGenerationId).catch(() => null);
+  if (!latestGeneration && entry.latestGenerationId) {
+    latestGeneration =
+      mode === 'initial'
+        ? await loadGeneration(entry.latestGenerationId).catch(() => null)
+        : await loadGeneration(entry.latestGenerationId);
+  }
 
   const validLatestGeneration = isCurrentEntryGeneration(entry, latestGeneration)
     ? latestGeneration
