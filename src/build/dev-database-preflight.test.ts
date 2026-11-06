@@ -74,6 +74,45 @@ const noPublicTables = {
   entriesPresent: false,
   generationsPresent: false,
 } as const;
+const validCatalogResult = {
+  identityOk: true,
+  sessionOk: true,
+  platformOk: true,
+  historyExists: true,
+  publicTablesPresent: true,
+  entriesPresent: true,
+  generationsPresent: true,
+} as const;
+
+function expectReadOnlyTransaction(sql: string): void {
+  const begin = sql.indexOf('BEGIN READ ONLY;');
+  const localSettings = [
+    'SET LOCAL default_transaction_read_only=on;',
+    "SET LOCAL statement_timeout='15s';",
+    "SET LOCAL lock_timeout='5s';",
+    'SET LOCAL search_path=pg_catalog;',
+  ];
+  let previousStatement = begin;
+
+  expect(begin).toBeGreaterThanOrEqual(0);
+  for (const statement of localSettings) {
+    const position = sql.indexOf(statement);
+    expect(position).toBeGreaterThan(previousStatement);
+    previousStatement = position;
+  }
+
+  for (const [setting, value] of [
+    ['transaction_read_only', 'on'],
+    ['default_transaction_read_only', 'on'],
+    ['statement_timeout', '15s'],
+    ['lock_timeout', '5s'],
+    ['search_path', 'pg_catalog'],
+  ]) {
+    expect(sql).toContain(`pg_catalog.current_setting('${setting}') = '${value}'`);
+  }
+
+  expect(sql.indexOf('ROLLBACK;')).toBeGreaterThan(previousStatement);
+}
 
 async function migrationDirectory(files: Record<string, string>): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'manga-nikki-migrations-'));
@@ -353,16 +392,10 @@ describe('読み取り専用DB preflight', () => {
     });
     const runPsql = vi
       .fn<(sql: string, secret: string) => Promise<string>>()
+      .mockResolvedValueOnce(`${JSON.stringify(validCatalogResult)}\n`)
       .mockResolvedValueOnce(
-        `${JSON.stringify({
-          connectionOk: true,
-          historyExists: true,
-          publicTablesPresent: true,
-          entriesPresent: true,
-          generationsPresent: true,
-        })}\n`,
-      )
-      .mockResolvedValueOnce('20260101000000\n');
+        `${JSON.stringify({ sessionOk: true, versions: ['20260101000000'] })}\n`,
+      );
 
     const result = await runDevDatabasePreflight(context(), {
       fetcher: githubHead(),
@@ -372,31 +405,12 @@ describe('読み取り専用DB preflight', () => {
     const summary = renderDevDatabasePreflightSummary(result);
 
     expect(runPsql).toHaveBeenCalledTimes(2);
-    expect(runPsql.mock.calls[0]?.[0]).toContain('BEGIN READ ONLY;');
-    expect(runPsql.mock.calls[0]?.[0]).toContain('ROLLBACK;');
-    expect(runPsql.mock.calls[0]?.[0]).toContain(
-      "pg_catalog.current_setting('transaction_read_only') = 'on'",
-    );
-    expect(runPsql.mock.calls[0]?.[0]).toContain(
-      "pg_catalog.current_setting('default_transaction_read_only') = 'on'",
-    );
-    expect(runPsql.mock.calls[0]?.[0]).toContain(
-      "pg_catalog.current_setting('statement_timeout') = '15s'",
-    );
-    expect(runPsql.mock.calls[0]?.[0]).toContain(
-      "pg_catalog.current_setting('lock_timeout') = '5s'",
-    );
-    expect(runPsql.mock.calls[0]?.[0]).toContain(
-      "pg_catalog.current_setting('search_path') = 'pg_catalog'",
-    );
+    for (const [sql] of runPsql.mock.calls) expectReadOnlyTransaction(sql);
     expect(runPsql.mock.calls[0]?.[0]).toContain('FROM pg_catalog.pg_class AS relation');
     expect(runPsql.mock.calls[0]?.[0]).toContain('JOIN pg_catalog.pg_namespace AS namespace');
     expect(runPsql.mock.calls[0]?.[1]).toBe(password);
-    expect(runPsql.mock.calls[1]?.[0]).toContain(
-      'SELECT version FROM supabase_migrations.schema_migrations',
-    );
+    expect(runPsql.mock.calls[1]?.[0]).toContain('FROM supabase_migrations.schema_migrations');
     expect(runPsql.mock.calls[1]?.[0]).not.toContain('statements');
-    expect(runPsql.mock.calls[1]?.[0]).toContain('BEGIN READ ONLY;');
     expect(result.remoteVersions).toEqual(['20260101000000']);
     expect(result.pendingMigrations.map(({ filename }) => filename)).toEqual([
       '20260102000000_second.sql',
@@ -416,11 +430,69 @@ describe('読み取り専用DB preflight', () => {
     expect(DEV_DATABASE_APP_NAME).toBe('manga-nikki-dev-db-preflight');
   });
 
+  it.each([
+    ['identityOk', 'DATABASE_IDENTITY_INVALID'],
+    ['sessionOk', 'DATABASE_SESSION_INVALID'],
+    ['platformOk', 'DATABASE_PLATFORM_INVALID'],
+  ] as const)('%sがfalseなら固定codeで停止する', async (field, expectedCode) => {
+    const runPsql = vi.fn(async () => JSON.stringify({ ...validCatalogResult, [field]: false }));
+
+    const code = await failureCode(
+      runDevDatabasePreflight(context(), { fetcher: githubHead(), runPsql }),
+    );
+
+    expect(code).toBe(expectedCode);
+    expect(runPsql).toHaveBeenCalledTimes(1);
+  });
+
+  it('catalog JSON shapeが不正ならDATABASE_CATALOG_INVALIDで停止する', async () => {
+    const runPsql = vi.fn(async () =>
+      JSON.stringify({ ...validCatalogResult, identityOk: 'true' }),
+    );
+
+    const code = await failureCode(
+      runDevDatabasePreflight(context(), { fetcher: githubHead(), runPsql }),
+    );
+
+    expect(code).toBe('DATABASE_CATALOG_INVALID');
+    expect(runPsql).toHaveBeenCalledTimes(1);
+  });
+
+  it('history queryのsession settings不一致は固定codeで停止する', async () => {
+    const runPsql = vi
+      .fn<(sql: string, secret: string) => Promise<string>>()
+      .mockResolvedValueOnce(JSON.stringify(validCatalogResult))
+      .mockResolvedValueOnce(JSON.stringify({ sessionOk: false, versions: [] }));
+
+    const code = await failureCode(
+      runDevDatabasePreflight(context(), { fetcher: githubHead(), runPsql }),
+    );
+
+    expect(code).toBe('DATABASE_SESSION_INVALID');
+    expect(runPsql).toHaveBeenCalledTimes(2);
+  });
+
+  it('history JSON shapeが不正ならMIGRATION_HISTORY_INVALIDで停止する', async () => {
+    const runPsql = vi
+      .fn<(sql: string, secret: string) => Promise<string>>()
+      .mockResolvedValueOnce(JSON.stringify(validCatalogResult))
+      .mockResolvedValueOnce(JSON.stringify({ sessionOk: true, versions: 'invalid' }));
+
+    const code = await failureCode(
+      runDevDatabasePreflight(context(), { fetcher: githubHead(), runPsql }),
+    );
+
+    expect(code).toBe('MIGRATION_HISTORY_INVALID');
+    expect(runPsql).toHaveBeenCalledTimes(2);
+  });
+
   it('historyが未作成ならversion queryをせず成功する', async () => {
     const runPsql = vi.fn(
       async () =>
         `${JSON.stringify({
-          connectionOk: true,
+          identityOk: true,
+          sessionOk: true,
+          platformOk: true,
           historyExists: false,
           publicTablesPresent: false,
           entriesPresent: false,

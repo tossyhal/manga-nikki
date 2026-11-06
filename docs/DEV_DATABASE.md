@@ -23,7 +23,7 @@ runの`authorize`、`checks`、`preflight`が成功したら、ActionsのSummary
 
 ## 接続先とTLS
 
-接続先は固定値で、host `aws-0-ap-northeast-1.pooler.supabase.com`、port `5432`、database `postgres`、user `postgres.leihsygtsamxffyybskh`です。passwordはworkflow入力へ貼らず、Bitwardenから一度だけActions Secretに渡します。アプリ用Supabase URL、publishable key、secret key、OpenAI / Turnstile secretは取得しません。
+接続先は固定値で、host `aws-0-ap-northeast-1.pooler.supabase.com`、port `5432`、database `postgres`、user `postgres.leihsygtsamxffyybskh`です。passwordはworkflow入力へ貼らず、Bitwarden Actionで取得してjob内の一時環境変数としてCLIへ渡します。GitHubの永続Secretには登録しません。アプリ用Supabase URL、publishable key、secret key、OpenAI / Turnstile secretは取得しません。
 
 [Supabaseの開発project](https://supabase.com/dashboard/project/leihsygtsamxffyybskh)を開き、**Connect**画面でSession Poolerの接続情報が上記host・port・database・userと一致することを確認してください。別projectや別regionが表示されたらActionsを実行せずownerへ伝えます。
 
@@ -39,8 +39,9 @@ CLIは接続前に通常ファイルであること、SHA-256、DER fingerprint�
 
 ## 読み取り範囲と限界
 
-- SQLは`BEGIN READ ONLY` / `ROLLBACK`で囲み、sessionも`default_transaction_read_only=on`に固定します。catalogではdatabase / current role、public schemaのCREATE権限、`auth.users`・`storage.objects`、必要roleの存在、public schemaのtable (`relkind=r/p`)とSupabase migration history tableの有無だけを確認します。
-- 実Supabase poolerでの認証と、startup `PGOPTIONS`の反映は未検証です。初回Actions成功時は接続先の`current_setting`値もSQLで照合し、`transaction_read_only=on`、`default_transaction_read_only=on`、`statement_timeout=15s`、`lock_timeout=5s`、`search_path=pg_catalog`が揃った場合だけ成功します。
+- catalog queryとmigration history queryはそれぞれ`BEGIN READ ONLY`の直後に`SET LOCAL default_transaction_read_only=on`、`statement_timeout='15s'`、`lock_timeout='5s'`、`search_path=pg_catalog`を設定し、同じtransaction内で5つの`current_setting`値を検証してから`ROLLBACK`します。これらの設定は各transaction内に限り有効で、session全体へ固定するものではありません。runnerの`PGOPTIONS`も残しますが、その反映をread-onlyの根拠にはしません。Supavisorのstartup optionsの処理には関連課題があり、実tenantのversionと反映状況は未確認です（[SupavisorのPGOPTIONS関連PR](https://github.com/supabase/supavisor/pull/768)）。
+- 2026-11-06の初回run `42197768018`では、owner/ref確認、Bitwarden取得、psql SQL実行まで成功しましたが、保護条件をまとめて判定していたため`DATABASE_CATALOG_INVALID`で停止しました。どの条件が不一致だったかは記録されておらず、原因は特定できていません。今回の明示的なtransaction内設定と分類コードは、実Supabaseへの再接続前です。
+- catalogではdatabase / current role / public schemaのCREATE権限、`auth.users`・`storage.objects`、必要roleの存在、public schemaのtable (`relkind=r/p`)とSupabase migration history tableの有無だけを確認します。
 - migration historyがあれば別のread-only queryで`version`列だけを取得します。日記本文、Auth user、Storage object、migration名、SQL本文は読みません。remote version列がこの実行commit内のlocal version列の順序付きprefixでなければ停止します。
 - historyが未作成または空でpublic tableもない場合はmigration未適用として成功し、local migrationをfilenameとSHA-256付きでpending表示します。history未作成または空なのにpublic table（unknownを含む）がある場合、remote versionがあるのに`entries` / `generations`のいずれかがない場合、unknown version・gapがある場合は停止します。履歴適用済みの状態で追加された未知のpublic tableは、この確認では検出しません。
 - PostgreSQL subprocessへ渡す環境は必要なlocaleと固定PG接続項目だけです。GitHub token、Bitwarden token、他のPG設定、password file / service設定は渡しません。passwordはargv、workflow log、Summaryへ出しません。
