@@ -1,7 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { Entry } from '../src/shared/schemas';
 import { jstToday } from '../src/shared/schemas';
-import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+import {
+  draftEntryDetailFixture,
+  liveClientConfigFixture,
+  mockClientConfigFixture,
+} from './fixtures/client-config';
 
 function makeEntry(index: number, diaryDate: string, body: string): Entry {
   return {
@@ -532,6 +536,83 @@ test('記録全体が空なら新規作成への導線を表示する', async ({
   const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
   await expect(listPanel.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
   await expect(listPanel.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
+});
+
+test('liveの初回表示は未登録でも空状態とカレンダー操作を表示する', async ({ page }) => {
+  const today = jstToday();
+  const previousMonth = shiftMonth(monthKey(today), -1);
+  const emptyDate = `${previousMonth}-10`;
+  const personalApiRequests: string[] = [];
+  const externalAuthRequests: string[] = [];
+
+  await page.addInitScript(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname.startsWith('/api/v1/entries') ||
+      (request.method() === 'POST' && url.pathname.startsWith('/api/v1/generations'))
+    ) {
+      personalApiRequests.push(`${request.method()} ${url.pathname}`);
+    }
+    if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url())) {
+      externalAuthRequests.push(request.url());
+    }
+  });
+
+  await page.goto('/library');
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  await expect(calendarPanel.getByRole('table')).toBeVisible();
+  await expect(
+    calendarPanel.getByRole('heading', {
+      name: `${parts(today).year}年${parts(today).month}月`,
+    }),
+  ).toBeVisible();
+  await expect(calendarPanel.locator('.library-day-empty')).toContainText(
+    'この日の記録はありません',
+  );
+  await expect(calendarPanel.getByRole('link', { name: 'この日の日記を書く' })).toHaveAttribute(
+    'href',
+    `/new?date=${today}`,
+  );
+  await expect(page.getByRole('heading', { name: '記録を表示できません' })).toHaveCount(0);
+
+  await calendarPanel.getByRole('button', { name: '前の月' }).click();
+  await expect(
+    calendarPanel.getByRole('heading', {
+      name: `${parts(`${previousMonth}-01`).year}年${parts(`${previousMonth}-01`).month}月`,
+    }),
+  ).toBeVisible();
+  const emptyDateButton = calendarPanel.getByRole('button', {
+    name: dateLabel(emptyDate),
+    exact: true,
+  });
+  await expect(emptyDateButton).toBeEnabled();
+  await emptyDateButton.click();
+  await expect(calendarPanel.locator('.library-day-empty')).toContainText(
+    'この日の記録はありません',
+  );
+  await expect(calendarPanel.getByRole('link', { name: 'この日の日記を書く' })).toHaveAttribute(
+    'href',
+    `/new?date=${emptyDate}`,
+  );
+
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+  await expect(listPanel.getByRole('heading', { name: 'まだ記録がありません' })).toBeVisible();
+  await expect(listPanel.getByRole('link', { name: '日記を書く' })).toHaveAttribute('href', '/new');
+
+  await page.getByRole('tab', { name: 'カレンダー' }).click();
+  await calendarPanel.getByRole('link', { name: 'この日の日記を書く' }).click();
+  await expect(page).toHaveURL(`/new?date=${emptyDate}`);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeEnabled();
+  await page.waitForLoadState('networkidle');
+
+  expect(personalApiRequests).toEqual([]);
+  expect(externalAuthRequests).toEqual([]);
 });
 
 test('セッションを失った記録一覧は以前の記録にアクセスできない状態を説明する', async ({ page }) => {
