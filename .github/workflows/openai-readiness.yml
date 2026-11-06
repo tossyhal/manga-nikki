@@ -1,0 +1,49 @@
+name: OpenAI model readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model-readiness:
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '92223710' &&
+      github.triggering_actor == 'tossyhal'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: production
+    concurrency:
+      group: manga-nikki-deploy-production
+      queue: max
+      cancel-in-progress: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_ACTOR_ID: ${{ github.actor_id }}
+      GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      BWS_OPENAI_API_KEY_SECRET_ID: ${{ vars.BWS_OPENAI_API_KEY_SECRET_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: 固定Node.jsを設定
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: 秘密取得前にownerと最新mainを検査
+        run: node --experimental-strip-types scripts/check-openai-readiness.ts gate
+      - name: OpenAI project keyを1件だけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_OPENAI_API_KEY_SECRET_ID }} > OPENAI_API_KEY
+      - name: 最新mainを再確認してモデル情報だけをGET
+        run: node --experimental-strip-types scripts/check-openai-readiness.ts models

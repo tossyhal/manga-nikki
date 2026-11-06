@@ -4,6 +4,7 @@ export const environmentSchema = z.object({
   DATA_MODE: z.enum(['mock', 'live', 'sample']),
   AI_MODE: z.enum(['mock', 'live']),
   GENERATION_ENABLED: z.enum(['true', 'false']).default('false'),
+  GENERATION_ALLOWED_OWNER_ID: z.string().optional(),
   SUPABASE_URL: z.string().optional(),
   SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SECRET_KEY: z.string().optional(),

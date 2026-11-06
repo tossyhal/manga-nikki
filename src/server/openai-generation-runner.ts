@@ -15,6 +15,7 @@ import type { ImageProvider } from './ai/image-provider';
 import type { ScriptProvider } from './ai/script-provider';
 import { scriptSchema } from './ai/script-schema';
 import { resolveMode, type Environment } from './mode';
+import { generationOwnerAllowed } from './generation-owner';
 import { callGenerationRpc, getGenerationQueue, LiveGenerationError } from './live-generations';
 import {
   GenerationSavePendingError,
@@ -109,6 +110,7 @@ export async function runOpenAIGeneration(
 ): Promise<'handed-off'> {
   if (
     resolveMode(environment, false) !== 'live-demo' ||
+    !generationOwnerAllowed(environment, claim.owner_id) ||
     !openAIGenerationConsumerReady(environment, runtime)
   )
     throw new Error('OPENAI_GENERATION_DISABLED');

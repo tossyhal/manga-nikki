@@ -75,6 +75,7 @@ export type ProductionSupabaseProbeInput = Readonly<{
   supabaseUrl: string;
   publishableKey: string;
   secretKey: string;
+  generationEnabled?: boolean;
 }>;
 
 export async function runProductionSupabaseConnectionProbe(
@@ -115,7 +116,9 @@ export async function runProductionSupabaseConnectionProbe(
     if (
       typeof quota.remaining_today !== 'number' ||
       !Number.isInteger(quota.remaining_today) ||
-      quota.generation_available !== false ||
+      (input.generationEnabled
+        ? typeof quota.generation_available !== 'boolean' || quota.profile_is_mock !== false
+        : quota.generation_available !== false) ||
       typeof quota.profile_is_mock !== 'boolean' ||
       typeof quota.reset_at !== 'string' ||
       !(quota.active_generation_id === null || typeof quota.active_generation_id === 'string')

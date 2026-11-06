@@ -148,6 +148,7 @@ try {
     SUPABASE_SECRET_KEY: 'process-env-server-secret-sentinel',
     TURNSTILE_SECRET_KEY: 'process-env-turnstile-secret-sentinel',
     OPENAI_API_KEY: 'process-env-ai-secret-sentinel',
+    PRODUCTION_GENERATION_ALLOWED_OWNER_ID: 'd79f8517-94ed-4b6f-8a37-41d3d67cce29',
   };
 
   const devSecretJwt = jwtWithRole('service_role', 'dev-jwt-payload-sentinel');
@@ -373,6 +374,40 @@ try {
       productionClientText.includes(sentinel),
       `production公開設定がclient成果物にありません: ${sentinel}`,
     );
+  }
+
+  for (const enabled of ['false', 'true']) {
+    await execFileAsync(
+      process.execPath,
+      ['--experimental-strip-types', 'scripts/build-production-connected.ts'],
+      {
+        cwd: fixtureRoot,
+        env: {
+          ...workflowBuildEnvironment,
+          PRODUCTION_GENERATION_INFRA_ENABLED: 'true',
+          PRODUCTION_GENERATION_ENABLED: enabled,
+        },
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    assert.equal(await exists(path.join(fixtureRoot, '.env.production.local')), false);
+    const config = JSON.parse(await readFile(productionWorkerConfigPath, 'utf8'));
+    assert.equal(config.vars.GENERATION_ENABLED, enabled);
+    assert.deepEqual(config.secrets.required, [
+      'SUPABASE_SECRET_KEY',
+      'TURNSTILE_SECRET_KEY',
+      'OPENAI_API_KEY',
+      'GENERATION_ALLOWED_OWNER_ID',
+    ]);
+    assert.deepEqual(config.triggers.crons, ['* * * * *', '0 15 * * *']);
+    assert.equal(config.queues.producers[0].queue, 'manga-nikki-generations-production');
+    assert.equal(config.queues.consumers[0].queue, 'manga-nikki-generations-production');
+    const artifactFiles = await collectFiles(path.join(fixtureRoot, 'dist'));
+    const artifactText = Buffer.concat(
+      await Promise.all(artifactFiles.map((file) => readFile(file))),
+    ).toString('utf8');
+    assert.ok(!artifactText.includes('process-env-ai-secret-sentinel'));
+    assert.ok(!artifactText.includes('d79f8517-94ed-4b6f-8a37-41d3d67cce29'));
   }
 
   await rm(path.join(fixtureRoot, 'dist'), { recursive: true, force: true });
