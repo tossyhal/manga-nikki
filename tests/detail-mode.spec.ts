@@ -60,6 +60,7 @@ test('mock設定では生成API経由で固定漫画を表示する', async ({ p
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
+  await expect(page.locator('.policy-note')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
   await page.getByRole('button', { name: '4コマにする' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'いつもの一日' })).toBeVisible();

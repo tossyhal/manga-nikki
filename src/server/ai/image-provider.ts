@@ -1,6 +1,6 @@
 import type { CallOptions, ScriptResult } from './script-provider';
 import { z } from 'zod';
-import { validateImageBytes } from './image-data';
+import { inspectImageBytes } from './image-data';
 
 export type RenderedPanel = {
   index: 1 | 2 | 3 | 4;
@@ -46,12 +46,15 @@ export function validateRenderedComic(value: unknown, expectedModelId: string): 
   if (!parsed.success || parsed.data.modelId !== expectedModelId)
     throw new Error('RENDERED_COMIC_INVALID');
   let totalBytes = 0;
+  let totalPixels = 0;
   parsed.data.panels.forEach((panel, index) => {
     if (panel.index !== index + 1) throw new Error('RENDERED_COMIC_INVALID');
-    validateImageBytes(panel.data, panel.mediaType);
+    const dimensions = inspectImageBytes(panel.data, panel.mediaType);
     totalBytes += panel.data.byteLength;
+    totalPixels += dimensions.width * dimensions.height;
   });
-  if (totalBytes > 16 * 1024 * 1024) throw new Error('RENDERED_COMIC_INVALID');
+  if (totalBytes > 16 * 1024 * 1024 || totalPixels > 16_777_216)
+    throw new Error('RENDERED_COMIC_INVALID');
   return {
     ...parsed.data,
     panels: parsed.data.panels as RenderedComic['panels'],

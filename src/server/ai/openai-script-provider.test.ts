@@ -110,6 +110,8 @@ describe('OpenAI脚本Provider', () => {
   });
   it.each([
     [{ status: 429, code: 'insufficient_quota' }, 'OPENAI_QUOTA_EXCEEDED'],
+    [{ status: 429, type: 'billing_hard_limit_reached' }, 'OPENAI_QUOTA_EXCEEDED'],
+    [{ status: 429, code: 'project_usage_limit_exceeded' }, 'OPENAI_QUOTA_EXCEEDED'],
     [{ status: 429, code: 'rate_limit_exceeded' }, 'OPENAI_RATE_LIMIT'],
     [{ status: 401 }, 'OPENAI_REQUEST_REJECTED'],
     [{ status: 408 }, 'OPENAI_RESULT_UNKNOWN'],

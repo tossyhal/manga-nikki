@@ -1,10 +1,12 @@
-# local-connected環境用。値を設定したうえで .dev.vars.local-connected へコピーする。
+# local-connected環境用。先に .dev.vars.local-connected へコピーし、コピー先だけ編集する。
+# この見本ファイルには秘密情報を書かない。
+# 起動: pnpm dev:connected
 # Cloudflare Vite pluginではCLOUDFLARE_ENV=local-connectedを指定する。
 APP_ENV="staging"
 DATA_MODE="live"
 AI_MODE="mock"
 GENERATION_ENABLED="false"
-SUPABASE_URL="https://project-ref.supabase.co"
+SUPABASE_URL=""
 SUPABASE_PUBLISHABLE_KEY=""
 SUPABASE_SECRET_KEY=""
 TURNSTILE_SECRET_KEY=""

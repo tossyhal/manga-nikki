@@ -70,4 +70,8 @@ export type Generation = GenerationBase &
     | { status: 'failed' | 'unknown'; stage: null; comic?: never; error: GenerationError }
     | { status: 'cancelled'; stage: null; comic?: never }
   );
-export type EntryDetail = Entry & { latestGeneration: Generation | null };
+export type EntryDetail = Entry & {
+  latestGeneration: Generation | null;
+  /** Most recent saved success, independent of the latest job state. */
+  lastSuccessfulGeneration?: Generation | null;
+};

@@ -7,6 +7,7 @@ import {
   providerResponseMetadata,
   safeProviderRequestId,
 } from './openai-attempt-result';
+import { isOpenAIQuotaErrorCode } from './openai-quota-error';
 
 export const openaiImageModelProfile = {
   provider: 'openai',
@@ -96,18 +97,7 @@ export class OpenAIImageProvider implements ImageProvider {
             detail?.error?.code,
             detail?.error?.type,
           ];
-          const quotaCodes = [
-            'insufficient_quota',
-            'credit_balance_exhausted',
-            'billing_hard_limit_reached',
-            'organization_usage_limit_exceeded',
-            'organization_spend_limit_exceeded',
-            'project_spend_limit_exceeded',
-            'project_usage_limit_exceeded',
-          ];
-          const quotaExceeded = identifiers.some(
-            (value) => typeof value === 'string' && quotaCodes.includes(value),
-          );
+          const quotaExceeded = identifiers.some(isOpenAIQuotaErrorCode);
           const code = quotaExceeded
             ? 'IMAGE_QUOTA_EXCEEDED'
             : providerStatus === 429

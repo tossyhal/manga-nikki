@@ -560,3 +560,172 @@ test('セッションを失った記録一覧は以前の記録にアクセス�
     '/new',
   );
 });
+
+test('Homeは開いたままJST日付が変わると日付表示と今日の記録を更新する', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-05T14:59:00.000Z') });
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          makeEntry(110, '2026-11-05', '前日の架空日記'),
+          makeEntry(111, '2026-11-06', '今日に切り替わった架空日記'),
+        ],
+        nextCursor: null,
+      },
+    }),
+  );
+
+  await page.goto('/');
+
+  const homeDate = page.locator('.home-date');
+  await expect(homeDate).toHaveAttribute('datetime', '2026-11-05');
+  await expect(page.getByRole('heading', { name: '前日の架空日記' })).toBeVisible();
+
+  await page.clock.runFor(60_001);
+
+  await expect(homeDate).toHaveAttribute('datetime', '2026-11-06');
+  await expect(page.getByRole('heading', { name: '今日に切り替わった架空日記' })).toBeVisible();
+});
+
+test('日付入力中にJST日付が変わっても選択日と本文を保持する', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-05T14:59:00.000Z') });
+  await useMockConfig(page);
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: '2026-11-06T15:00:00.000Z',
+        generationAvailable: true,
+      },
+    }),
+  );
+
+  await page.goto('/new?date=2026-11-05');
+  const dateInput = page.getByLabel('日付');
+  const diaryInput = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diaryInput.fill('日付境界をまたいで入力している架空の日記です。');
+  await expect(dateInput).toHaveValue('2026-11-05');
+
+  await page.clock.runFor(60_001);
+
+  await expect(dateInput).toHaveAttribute('max', '2026-11-06');
+  await expect(dateInput).toHaveValue('2026-11-05');
+  await expect(diaryInput).toHaveValue('日付境界をまたいで入力している架空の日記です。');
+});
+
+test('Libraryはタブ復帰時に今日の判定を更新し、選択日を保つ', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-05T14:59:00.000Z') });
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({ json: { items: [], nextCursor: null } }),
+  );
+  const libraryUrl = '/library?view=calendar&month=2026-11&day=2026-11-06&listPage=1&dayPage=1';
+
+  await page.goto(libraryUrl);
+
+  const selectedDay = page.getByRole('button', { name: '2026年11月6日、未来の日付' });
+  await expect(selectedDay).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('link', { name: 'この日の日記を書く' })).toHaveCount(0);
+
+  await page.clock.setFixedTime(new Date('2026-11-05T15:01:00.000Z'));
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+
+  const todayButton = page.getByRole('button', { name: '2026年11月6日' });
+  await expect(todayButton).toHaveAttribute('aria-current', 'date');
+  await expect(todayButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('link', { name: 'この日の日記を書く' })).toHaveAttribute(
+    'href',
+    '/new?date=2026-11-06',
+  );
+  await expect(page).toHaveURL(libraryUrl);
+});
+
+test('一覧の再読み込みは選択状態を保って先頭から取り直し、遅延応答を混ぜない', async ({ page }) => {
+  const today = jstToday();
+  const previousMonth = shiftMonth(monthKey(today), -1);
+  const firstPage = Array.from({ length: 20 }, (_, index) =>
+    makeEntry(
+      300 - index,
+      index === 19 ? `${previousMonth}-01` : today,
+      `読み込み前の架空日記${index + 1}`,
+    ),
+  );
+  const refreshedPage = Array.from({ length: 20 }, (_, index) =>
+    makeEntry(
+      600 - index,
+      index === 19 ? `${previousMonth}-01` : today,
+      `再読み込み後の架空日記${index + 1}`,
+    ),
+  );
+  let firstPageRequests = 0;
+  let notifyStaleRequest!: () => void;
+  let releaseStaleResponse!: () => void;
+  let notifyStaleSettled!: () => void;
+  const staleRequested = new Promise<void>((resolve) => {
+    notifyStaleRequest = resolve;
+  });
+  const staleGate = new Promise<void>((resolve) => {
+    releaseStaleResponse = resolve;
+  });
+  const staleSettled = new Promise<void>((resolve) => {
+    notifyStaleSettled = resolve;
+  });
+
+  await useMockConfig(page);
+  await page.route('**/api/v1/entries**', async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    if (!cursor) {
+      firstPageRequests += 1;
+      const refreshed = firstPageRequests > 1;
+      return route.fulfill({
+        json: {
+          items: refreshed ? refreshedPage : firstPage,
+          nextCursor: refreshed ? 'cursor-after-refresh' : 'cursor-before-refresh',
+        },
+      });
+    }
+    if (cursor === 'cursor-before-refresh') {
+      notifyStaleRequest();
+      await staleGate;
+      try {
+        await route.fulfill({
+          json: {
+            items: [makeEntry(990, today, '遅れて届いた古い架空日記')],
+            nextCursor: null,
+          },
+        });
+      } catch {
+        // Refresh aborts this request; the browser may have already closed its route.
+      } finally {
+        notifyStaleSettled();
+      }
+      return;
+    }
+    return route.fulfill({ json: { items: [], nextCursor: null } });
+  });
+
+  const libraryUrl = `/library?view=list&month=${monthKey(today)}&day=${today}&listPage=8&dayPage=4`;
+  await page.goto(libraryUrl);
+  await staleRequested;
+
+  try {
+    await page.getByRole('button', { name: '記録を再読み込み' }).click();
+    await expect(page).toHaveURL(
+      `/library?view=list&month=${monthKey(today)}&day=${today}&listPage=1&dayPage=1`,
+    );
+    const listPanel = page.getByRole('tabpanel', { name: 'リスト' });
+    await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
+    await expect(listPanel).toContainText('再読み込み後の架空日記1');
+    await expect(listPanel).not.toContainText('読み込み前の架空日記');
+
+    releaseStaleResponse();
+    await staleSettled;
+    await expect(listPanel.locator('.entry-history-card')).toHaveCount(3);
+    await expect(listPanel).not.toContainText('遅れて届いた古い架空日記');
+    await expect(listPanel).toContainText('再読み込み後の架空日記1');
+  } finally {
+    releaseStaleResponse();
+  }
+});
