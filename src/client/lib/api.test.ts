@@ -8,7 +8,7 @@ import {
   recheckGeneration,
 } from './api';
 import { getLiveAccessToken } from './auth';
-import { invalidateClientConfig } from './config';
+import { getClientConfig, invalidateClientConfig, refreshClientConfig } from './config';
 
 vi.mock('./auth', () => ({
   ClientAuthError: class ClientAuthError extends Error {},
@@ -27,6 +27,16 @@ function mockFetch(request: (input: RequestInfo | URL, init?: RequestInit) => Pr
     if (String(input) === '/api/v1/config') return Response.json(mockConfig);
     return request(input, init);
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function denySessionStorageGetter() {
@@ -64,6 +74,63 @@ afterEach(() => {
 });
 
 describe('API error guidance', () => {
+  it('waits for an active config refresh and uses its data mode for the request scope', async () => {
+    const refreshResponse = deferred<Response>();
+    let configRequests = 0;
+    const personalRequest = vi.fn().mockResolvedValue(Response.json({ items: [] }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/config') {
+        configRequests++;
+        return configRequests === 1
+          ? Promise.resolve(Response.json(mockConfig))
+          : refreshResponse.promise;
+      }
+      return personalRequest(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(getLiveAccessToken).mockResolvedValue('refreshed-live-token');
+
+    await expect(getClientConfig()).resolves.toEqual(mockConfig);
+    const refresh = refreshClientConfig();
+    const apiRequest = api('/entries');
+    await Promise.resolve();
+    expect(personalRequest).not.toHaveBeenCalled();
+    expect(getLiveAccessToken).not.toHaveBeenCalled();
+
+    refreshResponse.resolve(Response.json({ ...mockConfig, dataMode: 'live' }));
+    await expect(refresh).resolves.toMatchObject({ dataMode: 'live' });
+    await expect(apiRequest).resolves.toEqual({ items: [] });
+    expect(getLiveAccessToken).toHaveBeenCalledOnce();
+    const [, init] = personalRequest.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer refreshed-live-token');
+  });
+
+  it('does not send an old-mode request when the active config refresh fails', async () => {
+    const refreshResponse = deferred<Response>();
+    let configRequests = 0;
+    const personalRequest = vi.fn().mockResolvedValue(Response.json({ items: [] }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/config') {
+        configRequests++;
+        return configRequests === 1
+          ? Promise.resolve(Response.json(mockConfig))
+          : refreshResponse.promise;
+      }
+      return personalRequest(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getClientConfig()).resolves.toEqual(mockConfig);
+    const refresh = refreshClientConfig();
+    const apiRequest = api('/entries');
+    refreshResponse.reject(new TypeError('Failed to fetch'));
+
+    await expect(refresh).rejects.toThrow('Failed to fetch');
+    await expect(apiRequest).rejects.toMatchObject({ code: 'CONFIG_UNAVAILABLE' });
+    expect(personalRequest).not.toHaveBeenCalled();
+    await expect(getClientConfig()).resolves.toEqual(mockConfig);
+  });
+
   it('refuses to send an asset request when its authorization scope changed', async () => {
     vi.mocked(getLiveAccessToken).mockResolvedValueOnce('new-owner-token');
     const request = vi

@@ -73,6 +73,7 @@ export function NewEntry({
   const { quota, activeGeneration, quotaState, refreshing, setQuotaState, refreshQuota } =
     useGenerationQuota({
       dataMode: config.dataMode,
+      generationAvailable: config.generationAvailable,
       activeRef,
       markLoading: true,
     });

@@ -26,11 +26,13 @@ export function quotaAllowsGeneration(quota: GenerationQuota | null): boolean {
 
 export function useGenerationQuota({
   dataMode,
+  generationAvailable,
   activeRef,
   markLoading,
   onActiveGeneration,
 }: {
   dataMode: ClientConfig['dataMode'];
+  generationAvailable: ClientConfig['generationAvailable'];
   activeRef: RefObject<boolean>;
   markLoading: boolean;
   onActiveGeneration?: (generation: Generation) => void;
@@ -46,6 +48,7 @@ export function useGenerationQuota({
   >(() => Promise.resolve(null));
   const activeGenerationRef = useRef<Generation | null>(null);
   const lastAutomaticRefreshAtRef = useRef(0);
+  const previousConfigRef = useRef({ dataMode, generationAvailable });
   const onActiveRef = useRef(onActiveGeneration);
   useLayoutEffect(() => {
     onActiveRef.current = onActiveGeneration;
@@ -145,6 +148,16 @@ export function useGenerationQuota({
   useLayoutEffect(() => {
     refreshQuotaRef.current = refreshQuota;
   }, [refreshQuota]);
+
+  useEffect(() => {
+    const previousConfig = previousConfigRef.current;
+    previousConfigRef.current = { dataMode, generationAvailable };
+    if (
+      previousConfig.dataMode === dataMode &&
+      previousConfig.generationAvailable !== generationAvailable
+    )
+      void refreshQuota({ fresh: true });
+  }, [dataMode, generationAvailable, refreshQuota]);
 
   useEffect(() => {
     const resetAt = Date.parse(quota?.resetAt ?? '');
