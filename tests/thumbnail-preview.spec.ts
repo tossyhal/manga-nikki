@@ -103,7 +103,7 @@ test('期限相当のHomeサムネイル失敗は1回だけ自動取得し、同
   });
   await page.route('**/thumbnail-fresh.svg', (route) => {
     freshImageRequests++;
-    return freshImageRequests === 1
+    return freshImageRequests <= 2
       ? route.abort('failed')
       : route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg });
   });
@@ -129,16 +129,188 @@ test('期限相当のHomeサムネイル失敗は1回だけ自動取得し、同
   expect(assetUrlReads).toBe(2);
   expect(await frame.boundingBox()).toEqual(beforeFailure);
 
-  await retry.click();
+  await retry.focus();
+  await page.keyboard.press('Enter');
   await expect.poll(() => assetUrlReads).toBe(3);
   await expect.poll(() => freshImageRequests).toBe(2);
+  await expect(retry).toBeFocused();
+  await expect(retry).toHaveAttribute('aria-disabled', 'false');
+
+  await page.keyboard.press('Enter');
+  await expect.poll(() => assetUrlReads).toBe(4);
+  await expect.poll(() => freshImageRequests).toBe(3);
   await expect
     .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
     .toBe(4);
   await expect(retry).toHaveCount(0);
+  await expect(page.locator('.home-today-image-link')).toBeFocused();
   expect(await frame.boundingBox()).toEqual(beforeFailure);
-  expect(assetUrlReads).toBe(3);
-  expect(freshImageRequests).toBe(2);
+  expect(assetUrlReads).toBe(4);
+  expect(freshImageRequests).toBe(3);
+});
+
+test('表示済みのHomeサムネイルは可視復帰時に再取得せず表示を保つ', async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  const todayEntry = entry(todayEntryId, today, '期限後も表示を保つ架空日記', todayGenerationId);
+  const todayGeneration = generationWithAsset(todayGenerationId, todayEntryId, todayAssetId);
+  const detail: EntryDetail = {
+    ...todayEntry,
+    latestGeneration: todayGeneration,
+    lastSuccessfulGeneration: todayGeneration,
+  };
+  await installEntries(page, [todayEntry], [detail]);
+
+  let assetUrlReads = 0;
+  let thumbnailRequests = 0;
+  await page.route('**/api/v1/assets/*/url', (route) => {
+    assetUrlReads++;
+    return assetUrlReads === 1
+      ? route.fulfill({
+          json: {
+            url: '/visible-thumbnail.svg',
+            expiresAt: new Date(clockStart.valueOf() + 60_000).toISOString(),
+          },
+        })
+      : route.fulfill({ status: 503, body: '' });
+  });
+  await page.route('**/visible-thumbnail.svg', (route) => {
+    thumbnailRequests++;
+    return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg });
+  });
+
+  await page.goto('/');
+  const image = page.locator('.home-today-image-link img.entry-thumbnail-image');
+  await expect(image).toHaveAttribute('src', '/visible-thumbnail.svg');
+  await expect
+    .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+    .toBe(4);
+  await expect.poll(() => assetUrlReads).toBe(1);
+  await expect.poll(() => thumbnailRequests).toBe(1);
+
+  await page.clock.fastForward(65_000);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(250);
+
+  expect(assetUrlReads).toBe(1);
+  expect(thumbnailRequests).toBe(1);
+  await expect(image).toHaveAttribute('src', '/visible-thumbnail.svg');
+  await expect(image).toBeVisible();
+  await expect(page.getByRole('button', { name: '漫画画像を再読み込み' })).toHaveCount(0);
+});
+
+test('非選択tabにある未読込Libraryサムネイルは期限後も署名URLを取得しない', async ({ page }) => {
+  await page.clock.install({ time: clockStart });
+  const dateAtOffset = (days: number) => {
+    const date = new Date(`${today}T12:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() - days);
+    return date.toISOString().slice(0, 10);
+  };
+  const records = [
+    {
+      entry: entry(todayEntryId, today, '今日の架空日記', todayGenerationId),
+      assetId: todayAssetId,
+    },
+    {
+      entry: entry(previousEntryId, dateAtOffset(1), '昨日の架空日記', previousGenerationId),
+      assetId: previousAssetId,
+    },
+    {
+      entry: entry(
+        previousFailureId,
+        dateAtOffset(2),
+        '一昨日の架空日記',
+        '11111111-1111-4111-8111-111111111111',
+      ),
+      assetId: 'third-thumbnail-asset',
+    },
+    {
+      entry: entry(
+        '99999999-9999-4999-8999-999999999999',
+        dateAtOffset(3),
+        '非選択tabに残る日記',
+        '22222222-2222-4222-8222-222222222222',
+      ),
+      assetId: 'hidden-thumbnail-asset',
+    },
+  ];
+  const details: EntryDetail[] = records.map(({ entry: current, assetId }) => {
+    const generation = generationWithAsset(current.latestGenerationId!, current.id, assetId);
+    return {
+      ...current,
+      latestGeneration: generation,
+      lastSuccessfulGeneration: generation,
+    };
+  });
+  await installEntries(
+    page,
+    records.map(({ entry: current }) => current),
+    details,
+  );
+
+  let targetAssetReads = 0;
+  let targetImageRequests = 0;
+  let releaseTargetImage!: () => void;
+  let notifyTargetImage!: () => void;
+  const targetImageGate = new Promise<void>((resolve) => {
+    releaseTargetImage = resolve;
+  });
+  const targetImageRequested = new Promise<void>((resolve) => {
+    notifyTargetImage = resolve;
+  });
+  await page.route('**/api/v1/assets/*/url', (route) => {
+    const assetId = new URL(route.request().url()).pathname.split('/').at(-2);
+    if (assetId !== 'hidden-thumbnail-asset')
+      return route.fulfill({
+        json: { url: '/other-thumbnail.svg', expiresAt: '2099-01-01T00:00:00.000Z' },
+      });
+    targetAssetReads++;
+    return route.fulfill({
+      json: {
+        url: '/hidden-thumbnail-' + targetAssetReads + '.svg',
+        expiresAt: new Date(clockStart.valueOf() + 60_000).toISOString(),
+      },
+    });
+  });
+  await page.route('**/hidden-thumbnail-*.svg', async (route) => {
+    targetImageRequests++;
+    if (targetImageRequests === 1) {
+      notifyTargetImage();
+      await targetImageGate;
+    }
+    return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg });
+  });
+  await page.route('**/other-thumbnail.svg', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg }),
+  );
+
+  await page.goto('/library?day=' + dateAtOffset(3));
+  const calendarPanel = page.getByRole('tabpanel', { name: 'カレンダー' });
+  const targetCard = calendarPanel
+    .locator('.entry-history-card')
+    .filter({ hasText: '非選択tabに残る日記' });
+  await expect(targetCard).toBeVisible();
+  await targetCard.scrollIntoViewIfNeeded();
+  const image = targetCard.locator('img.entry-thumbnail-image');
+  await expect(image).toHaveAttribute('src', '/hidden-thumbnail-1.svg');
+  await targetImageRequested;
+  expect(targetAssetReads).toBe(1);
+  expect(targetImageRequests).toBe(1);
+
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  await expect(calendarPanel).toBeHidden();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await page.clock.fastForward(65_000);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(250);
+
+  expect(targetAssetReads).toBe(1);
+  expect(targetImageRequests).toBe(1);
+  releaseTargetImage();
 });
 
 test('EntryHistoryのpermission失敗はpollせず、HomeとLibraryのretryを画像領域内に置く', async ({

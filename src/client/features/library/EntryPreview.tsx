@@ -19,13 +19,15 @@ export type EntryPreview = {
   error?: string;
   imageError?: string;
   observeRef: RefCallback<HTMLElement>;
+  handleImageLoad: (url: string, token: number | null) => void;
   handleImageError: (url: string, token: number | null) => void;
   retryImage: () => void;
 };
 
-type PreviewResult = Omit<EntryPreview, 'observeRef' | 'handleImageError' | 'retryImage'> & {
-  key: string | null;
-};
+type PreviewResult = Omit<
+  EntryPreview,
+  'observeRef' | 'handleImageLoad' | 'handleImageError' | 'retryImage'
+> & { key: string | null };
 
 function validGeneration(
   generation: Generation | null | undefined,
@@ -65,6 +67,7 @@ export function useEntryPreview(
   const visible = eager || observedVisible;
   const visibleRef = useRef(visible);
   const refreshRef = useRef<(() => void) | null>(null);
+  const imageLoadRef = useRef<((url: string, token: number | null) => void) | null>(null);
   const imageErrorRef = useRef<((url: string, token: number | null) => void) | null>(null);
   const retryImageRef = useRef<(() => void) | null>(null);
   const [result, setResult] = useState<PreviewResult>({
@@ -87,6 +90,10 @@ export function useEntryPreview(
   );
   const handleImageError = useCallback(
     (url: string, token: number | null) => imageErrorRef.current?.(url, token),
+    [],
+  );
+  const handleImageLoad = useCallback(
+    (url: string, token: number | null) => imageLoadRef.current?.(url, token),
     [],
   );
   const retryImage = useCallback(() => retryImageRef.current?.(), []);
@@ -133,6 +140,8 @@ export function useEntryPreview(
     let activeGenerationId = generationId;
     let latestGeneration: Generation | null = null;
     let comicGeneration: Generation | null = null;
+    let imageLoaded = false;
+    let manualRetryPending = false;
     let currentAsset: {
       url: string;
       expiresAt: string;
@@ -173,17 +182,21 @@ export function useEntryPreview(
     async function refreshComicImage(
       generation: Extract<Generation, { status: 'succeeded' }>,
       clearImage: boolean,
+      preserveError = false,
     ) {
       if (!active || fetchingAsset || comicGeneration?.id !== generation.id) return;
       fetchingAsset = true;
       const requestId = ++assetRequestId;
       const requestedAt = performance.now();
       const requestedAtWall = Date.now();
-      if (clearImage) currentAsset = null;
+      if (clearImage) {
+        currentAsset = null;
+        imageLoaded = false;
+      }
       publish({
         ...(clearImage ? { imageUrl: null, imageToken: null } : {}),
         isLoading: true,
-        imageError: undefined,
+        ...(!preserveError && clearImage ? { imageError: undefined } : {}),
       });
       const assetId =
         generation.comic.visual.kind === 'page'
@@ -192,6 +205,7 @@ export function useEntryPreview(
       try {
         const asset = await getAssetUrl(assetId);
         if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
+          imageLoaded = false;
           currentAsset = {
             url: asset.url,
             expiresAt: asset.expiresAt,
@@ -202,17 +216,21 @@ export function useEntryPreview(
           publish({
             imageUrl: asset.url,
             imageToken: requestId,
-            isLoading: false,
-            imageError: undefined,
+            isLoading: preserveError,
+            ...(!preserveError ? { imageError: undefined } : {}),
           });
         }
       } catch {
         if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
-          if (clearImage) currentAsset = null;
+          manualRetryPending = false;
+          if (clearImage) {
+            currentAsset = null;
+            imageLoaded = false;
+          }
           publish({
             ...(clearImage ? { imageUrl: null, imageToken: null } : {}),
             isLoading: false,
-            imageError: imageFailureMessage,
+            ...(clearImage ? { imageError: imageFailureMessage } : {}),
           });
         }
       } finally {
@@ -224,6 +242,8 @@ export function useEntryPreview(
       if (!active || !generation || generation.status !== 'succeeded') {
         comicGeneration = null;
         currentAsset = null;
+        imageLoaded = false;
+        manualRetryPending = false;
         assetRequestId++;
         fetchingAsset = false;
         publish({
@@ -240,6 +260,8 @@ export function useEntryPreview(
       if (previousComicId !== generation.id) autoRefreshAttempted = false;
       comicGeneration = generation;
       currentAsset = null;
+      imageLoaded = false;
+      manualRetryPending = false;
       assetRequestId++;
       fetchingAsset = false;
       imageFailureMessage =
@@ -272,14 +294,19 @@ export function useEntryPreview(
       )
         return;
 
-      const shouldRefresh = shouldRenewExpiredAsset(
-        asset.requestedAt,
-        asset.requestedAtWall,
-        autoRefreshAttempted,
-        performance.now(),
-        Date.now(),
-        asset.expiresAt,
-      );
+      const wasManualRetry = manualRetryPending;
+      manualRetryPending = false;
+      imageLoaded = false;
+      const shouldRefresh =
+        !wasManualRetry &&
+        shouldRenewExpiredAsset(
+          asset.requestedAt,
+          asset.requestedAtWall,
+          autoRefreshAttempted,
+          performance.now(),
+          Date.now(),
+          asset.expiresAt,
+        );
       currentAsset = null;
       if (shouldRefresh) {
         autoRefreshAttempted = true;
@@ -294,13 +321,25 @@ export function useEntryPreview(
       });
     };
 
+    const handleComicImageLoad = (url: string, token: number | null) => {
+      const asset = currentAsset;
+      if (!active || token === null || !asset || asset.url !== url || asset.token !== token) return;
+      imageLoaded = true;
+      if (manualRetryPending) {
+        manualRetryPending = false;
+        publish({ isLoading: false, imageError: undefined });
+      }
+    };
+
     const retryComicImage = () => {
       const comic = comicGeneration;
       if (!active || !comic || comic.status !== 'succeeded' || fetchingAsset) return;
+      manualRetryPending = true;
       autoRefreshAttempted = false;
-      void refreshComicImage(comic, true);
+      void refreshComicImage(comic, true, true);
     };
 
+    imageLoadRef.current = handleComicImageLoad;
     imageErrorRef.current = handleComicImageError;
     retryImageRef.current = retryComicImage;
 
@@ -438,6 +477,8 @@ export function useEntryPreview(
       const comic = comicGeneration;
       if (
         !active ||
+        !visibleRef.current ||
+        imageLoaded ||
         !asset ||
         !comic ||
         comic.status !== 'succeeded' ||
@@ -461,6 +502,7 @@ export function useEntryPreview(
       if (pollTimer !== null) clearInterval(pollTimer);
       document.removeEventListener('visibilitychange', onVisible);
       if (refreshRef.current) refreshRef.current = null;
+      if (imageLoadRef.current === handleComicImageLoad) imageLoadRef.current = null;
       if (imageErrorRef.current === handleComicImageError) imageErrorRef.current = null;
       if (retryImageRef.current === retryComicImage) retryImageRef.current = null;
     };
@@ -478,7 +520,7 @@ export function useEntryPreview(
           isStale: false,
           isLoading: Boolean(eager && entryId && generationId),
         };
-  return { ...current, observeRef, handleImageError, retryImage };
+  return { ...current, observeRef, handleImageLoad, handleImageError, retryImage };
 }
 
 export function EntryThumbnail({
@@ -514,6 +556,19 @@ export function EntryThumbnail({
           src={imageUrl}
           alt={alt}
           decoding="async"
+          onLoad={(event) => {
+            const activeElement = document.activeElement;
+            const imageItem = event.currentTarget.closest('.entry-history-item, .home-today-image');
+            if (
+              imageItem &&
+              activeElement instanceof HTMLButtonElement &&
+              activeElement.getAttribute('aria-label') === '漫画画像を再読み込み' &&
+              activeElement.getAttribute('aria-disabled') === 'true' &&
+              activeElement.closest('.entry-history-item, .home-today-image') === imageItem
+            )
+              event.currentTarget.closest('a')?.focus();
+            preview.handleImageLoad(imageUrl, imageToken);
+          }}
           onError={() => preview.handleImageError(imageUrl, imageToken)}
         />
       ) : (

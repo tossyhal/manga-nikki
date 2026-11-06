@@ -636,7 +636,8 @@
   outline-offset: 2px;
 }
 
-.entry-history-image-retry:disabled {
+.entry-history-image-retry:disabled,
+.entry-history-image-retry[aria-disabled='true'] {
   color: #858585;
   cursor: default;
 }

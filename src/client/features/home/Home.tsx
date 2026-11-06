@@ -122,8 +122,10 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
             className="thumbnail-retry-button"
             type="button"
             aria-label="漫画画像を再読み込み"
-            disabled={preview.isLoading}
-            onClick={preview.retryImage}
+            aria-disabled={preview.isLoading}
+            onClick={() => {
+              if (!preview.isLoading) preview.retryImage();
+            }}
           >
             <Icon name="refresh" size={18} />
           </button>

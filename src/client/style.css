@@ -479,7 +479,8 @@ p {
   outline-offset: 2px;
 }
 
-.thumbnail-retry-button:disabled {
+.thumbnail-retry-button:disabled,
+.thumbnail-retry-button[aria-disabled='true'] {
   color: #858585;
   cursor: default;
 }
