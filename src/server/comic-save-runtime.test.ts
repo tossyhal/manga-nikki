@@ -408,7 +408,7 @@ describe('private comic save runtime', () => {
       `https://save-runtime-test.supabase.co/storage/v1/object/comics/${objectPath}`,
     );
     expect(request?.headers.get('apikey')).toBe('sb_secret_test');
-    expect(request?.headers.get('authorization')).toBe('Bearer sb_secret_test');
+    expect(request?.headers.get('authorization')).toBeNull();
     expect(request?.headers.get('x-upsert')).toBe('true');
     expect(request?.headers.get('content-type')).toBe('image/png');
     expect(request?.headers.get('cache-control')).toBe('max-age=0');

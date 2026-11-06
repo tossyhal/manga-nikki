@@ -307,7 +307,7 @@ describe('live diary HTTP API', () => {
     expect(rpc.body.p_actor_id).toBe(owner);
     expect(rpc.body.p_body).toBe('架空の作成テスト');
     expect(rpc.apiKey).toBe(environment.SUPABASE_SECRET_KEY);
-    expect(rpc.authorization).toBe(`Bearer ${environment.SUPABASE_SECRET_KEY}`);
+    expect(rpc.authorization).toBe('');
     expect(boundary.readCalls).toHaveLength(0);
 
     const spoofed = await apiRequest(app, environment, token, '/entries', 'POST', {
