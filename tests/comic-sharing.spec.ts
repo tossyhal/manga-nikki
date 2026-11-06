@@ -7,11 +7,26 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
   browser,
 }) => {
   await page.addInitScript(() => {
+    Object.defineProperty(window, 'ClipboardItem', {
+      configurable: true,
+      value: class ClipboardItemMock {
+        constructor(readonly data: Record<string, string | Blob | PromiseLike<string | Blob>>) {}
+      },
+    });
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
-        writeText: async (text: string) => {
-          document.documentElement.dataset.copiedUrl = text;
+        write: async (
+          items: Array<{
+            data: Record<string, string | Blob | PromiseLike<string | Blob>>;
+          }>,
+        ) => {
+          document.documentElement.dataset.clipboardWriteStarted = 'true';
+          const clipboardValue = items[0]?.data['text/plain'];
+          if (clipboardValue === undefined) throw new Error('CLIPBOARD_ITEM_MISSING');
+          const text = await clipboardValue;
+          document.documentElement.dataset.copiedUrl =
+            typeof text === 'string' ? text : await text.text();
         },
       },
     });
@@ -55,6 +70,8 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
   const shareButton = page.locator('.comic-actions-toolbar button').nth(1);
   await shareButton.click();
   await shareStarted;
+  await expect(page.locator('html')).toHaveAttribute('data-clipboard-write-started', 'true');
+  await expect(page.locator('html')).not.toHaveAttribute('data-copied-url');
   await expect(shareButton).toBeDisabled();
   await shareButton.evaluate((button) => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -124,6 +141,51 @@ test('共有URLをコピーできない場合はURL欄と再コピー操作を�
       exact: true,
     }),
   ).toBeVisible();
+});
+
+test('共有URLの作成に失敗した場合はコピー失敗として案内しない', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'ClipboardItem', {
+      configurable: true,
+      value: class ClipboardItemMock {
+        constructor(readonly data: Record<string, string | Blob | PromiseLike<string | Blob>>) {}
+      },
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        write: async (
+          items: Array<{
+            data: Record<string, string | Blob | PromiseLike<string | Blob>>;
+          }>,
+        ) => {
+          const clipboardValue = items[0]?.data['text/plain'];
+          if (clipboardValue === undefined) throw new Error('CLIPBOARD_ITEM_MISSING');
+          await clipboardValue;
+        },
+      },
+    });
+  });
+  await page.goto('/new');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('共有URL作成の失敗を確認する架空の日記。');
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+  await expect(page).toHaveURL(/\/entries\//);
+  await page.route('**/api/v1/generations/*/share', (route) =>
+    route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE' } } }),
+  );
+
+  await page.getByRole('button', { name: 'URLで共有', exact: true }).click();
+  await expect(
+    page.getByText('共有URLを作成できませんでした。時間をおいて再試行してください。', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('URLをコピーできませんでした。下のURLを選択してコピーしてください。'),
+  ).toHaveCount(0);
+  await expect(page.getByLabel('共有URL', { exact: true })).toHaveCount(0);
 });
 
 test('4枚のコマ画像と外付けの文章を1枚のPNGにまとめる', async ({ page }) => {

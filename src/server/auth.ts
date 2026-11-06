@@ -36,6 +36,47 @@ function isRetryableAuthError(error: { name?: string; status?: number }): boolea
   );
 }
 
+function createRequestScopedAuthUserFetch(
+  fetcher: typeof fetch,
+  userUrl: string,
+  token: string,
+): typeof fetch {
+  let successfulResponse: Response | undefined;
+  return async (input, init) => {
+    let url: string;
+    let method: string;
+    let headers: Headers;
+    try {
+      if (typeof input === 'string') url = new URL(input).href;
+      else if (input instanceof URL) url = input.href;
+      else url = input.url;
+      method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+      headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+    } catch {
+      return fetcher(input, init);
+    }
+    const signal =
+      init?.signal !== undefined
+        ? init.signal
+        : input instanceof Request
+          ? input.signal
+          : undefined;
+    if (
+      method.toUpperCase() !== 'GET' ||
+      url !== userUrl ||
+      headers.get('authorization') !== `Bearer ${token}`
+    )
+      return fetcher(input, init);
+
+    if (successfulResponse && !signal?.aborted) return successfulResponse.clone();
+    const response = await fetcher(input, init);
+    if (response.status === 200 && !signal?.aborted) successfulResponse = response.clone();
+    return response;
+  };
+}
+
 export async function verifySupabaseAccessToken(
   environment: Environment,
   token: string,
@@ -45,7 +86,13 @@ export async function verifySupabaseAccessToken(
   let client: ReturnType<typeof createUserSupabaseClient>;
   try {
     issuer = expectedSupabaseIssuer(environment);
-    client = createUserSupabaseClient(environment, token, fetcher);
+    // HS256のgetClaimsが同じtokenでGET /userするため、このverify呼び出し内の成功応答だけを再利用する。
+    const scopedFetcher = createRequestScopedAuthUserFetch(
+      fetcher ?? fetch,
+      `${issuer}/user`,
+      token,
+    );
+    client = createUserSupabaseClient(environment, token, scopedFetcher);
   } catch {
     throw new SupabaseAuthUnavailableError();
   }

@@ -398,6 +398,7 @@ test('非選択tabにある未読込Libraryサムネイルは期限後も署名U
 test('EntryHistoryのpermission失敗はpollせず、HomeとLibraryのretryを画像領域内に置く', async ({
   page,
 }) => {
+  await page.clock.install({ time: clockStart });
   const todayEntry = entry(todayEntryId, today, '今日の架空記録', todayGenerationId);
   const previousEntry = entry(
     previousEntryId,
@@ -509,6 +510,15 @@ test('EntryHistoryのpermission失敗はpollせず、HomeとLibraryのretryを�
   await homeRetry.click();
   await expect.poll(() => previousAssetReads).toBe(2);
   await expect(homeRetry).toHaveCount(0);
+  await expect
+    .poll(() =>
+      homeItem
+        .locator('img.entry-thumbnail-image')
+        .evaluate((node) => (node as HTMLImageElement).naturalWidth),
+    )
+    .toBe(4);
+  await page.clock.fastForward(16_000);
+  expect(previousAssetReads).toBe(2);
 
   await page.getByRole('link', { name: '記録', exact: true }).click();
   await page.getByRole('tab', { name: 'リスト' }).click();

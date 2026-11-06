@@ -55,7 +55,7 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`はQueue/OpenAI構
 DB policyとの両方が有効な場合だけ生成できます。設定変更後は手動CIなどの配信が必要です。
 変数の許容組合せとSecret IDの必要条件は[preflight](../src/build/production-connected-preflight.ts)を正本とします。
 
-配信後はActionsのsmoke結果、公開先の`/api/v1/health`・`/api/v1/config`・`/__deployment.json`、Cloudflareの稼働versionとbindingを確認します。
+配信後はActionsのsmoke結果、公開先の`/api/v1/health`・`/api/v1/config`・`/__deployment.json`、Cloudflareの稼働versionとbindingを確認します。本番smokeではUUIDv4由来では発行されない64文字のゼロ共有tokenへのGETで`404 NOT_FOUND`も確認し、共有routeやmigrationの未適用を検知します。
 これらのread-only確認では実AIを呼びません。生成試験が必要なら追加承認と費用範囲を先に確認します。
 画面で認証・保存・再読込・削除を確認する場合も実日記を使わず、他owner拒否やCAPTCHA等の確認と区別して記録します。
 `pnpm build:staging`・`build:production`・`build:demo`はローカル成果物だけで、配信操作ではありません。

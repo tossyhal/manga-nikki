@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from './app';
-import { getBearerToken, verifySupabaseAccessToken } from './auth';
+import { getBearerToken, InvalidAccessTokenError, verifySupabaseAccessToken } from './auth';
 import { mockEnvironment, type Environment } from './mode';
 import { createServerRpcClient, createUserSupabaseClient } from './supabase-clients';
 
@@ -64,6 +64,19 @@ async function signToken(claims: Record<string, unknown>): Promise<string> {
   return `${input}.${Buffer.from(signature).toString('base64url')}`;
 }
 
+async function signHs256Token(claims: Record<string, unknown>): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode('test-only-supabase-hs256-key'),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const input = `${encodePart({ alg: 'HS256', typ: 'JWT' })}.${encodePart(claims)}`;
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input));
+  return `${input}.${Buffer.from(signature).toString('base64url')}`;
+}
+
 function jwksFetch(environment: Environment, status = 200, userStatus = 200): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
@@ -123,6 +136,74 @@ describe('Supabase access token boundary', () => {
       vi.useRealTimers();
     }
   }, 15000);
+
+  it('reuses one successful Auth user GET for HS256 within each verification call', async () => {
+    const environment = liveEnvironment();
+    const claims = baseClaims(environment);
+    const token = await signHs256Token(claims);
+    let userReads = 0;
+    const userAuthorizations: string[] = [];
+    const baseFetcher = jwksFetch(environment);
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url === `${environment.SUPABASE_URL}/auth/v1/user`) {
+        userReads += 1;
+        userAuthorizations.push(request.headers.get('Authorization') ?? '');
+      }
+      return baseFetcher(input, init);
+    };
+
+    await expect(verifySupabaseAccessToken(environment, token, fetcher)).resolves.toBe(claims.sub);
+    expect(userReads).toBe(1);
+    expect(userAuthorizations).toEqual([`Bearer ${token}`]);
+    await expect(verifySupabaseAccessToken(environment, token, fetcher)).resolves.toBe(claims.sub);
+    expect(userReads).toBe(2);
+  });
+
+  it('rejects claims when the Auth user does not match the signed subject', async () => {
+    const environment = liveEnvironment();
+    const token = await signToken(baseClaims(environment));
+    const baseFetcher = jwksFetch(environment);
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url === `${environment.SUPABASE_URL}/auth/v1/user`)
+        return Response.json({
+          id: '99999999-9999-4999-8999-999999999999',
+          aud: 'authenticated',
+          role: 'authenticated',
+          app_metadata: {},
+          user_metadata: {},
+          created_at: '2026-01-01T00:00:00.000Z',
+        });
+      return baseFetcher(input, init);
+    };
+
+    await expect(verifySupabaseAccessToken(environment, token, fetcher)).rejects.toBeInstanceOf(
+      InvalidAccessTokenError,
+    );
+  });
+
+  it('does not cache a retryable Auth user response', async () => {
+    const environment = liveEnvironment();
+    const claims = baseClaims(environment);
+    const token = await signHs256Token(claims);
+    let userReads = 0;
+    const baseFetcher = jwksFetch(environment, 200, 503);
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url === `${environment.SUPABASE_URL}/auth/v1/user`) userReads += 1;
+      return baseFetcher(input, init);
+    };
+
+    await expect(verifySupabaseAccessToken(environment, token, fetcher)).rejects.toMatchObject({
+      message: 'DEPENDENCY_UNAVAILABLE',
+    });
+    expect(userReads).toBe(1);
+    await expect(verifySupabaseAccessToken(environment, token, fetcher)).rejects.toMatchObject({
+      message: 'DEPENDENCY_UNAVAILABLE',
+    });
+    expect(userReads).toBe(2);
+  });
 
   it('rejects a token when the Auth server no longer returns its user', async () => {
     const environment = liveEnvironment();
