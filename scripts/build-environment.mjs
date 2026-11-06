@@ -79,6 +79,10 @@ const environmentKeys = new Set([
   'CLOUDFLARE_INCLUDE_PROCESS_ENV',
   'MANGA_NIKKI_RELEASE_TARGET',
 ]);
+if (target !== 'production') {
+  environmentKeys.add('PRODUCTION_GENERATION_INFRA_ENABLED');
+  environmentKeys.add('PRODUCTION_GENERATION_ENABLED');
+}
 const previousEnvironment = saveEnvironment(environmentKeys);
 let buildAttempted = false;
 

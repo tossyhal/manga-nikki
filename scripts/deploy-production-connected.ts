@@ -1,6 +1,7 @@
 import { appendFile } from 'node:fs/promises';
 import {
   PRODUCTION_CONNECTED_PROFILE,
+  selectProductionConnectedProfile,
   ProductionConnectedDeploymentFailure,
   validateProductionWorkerSecrets,
   type ProductionReleasePublicValues,
@@ -37,10 +38,23 @@ async function main(): Promise<void> {
   let exitCode = 0;
 
   try {
-    const workerSecrets = validateProductionWorkerSecrets({
-      SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
-      TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
-    });
+    const profile = selectProductionConnectedProfile(
+      process.env.PRODUCTION_GENERATION_INFRA_ENABLED,
+      process.env.PRODUCTION_GENERATION_ENABLED,
+    );
+    const workerSecrets = validateProductionWorkerSecrets(
+      {
+        ...(profile.queueName
+          ? {
+              OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+              GENERATION_ALLOWED_OWNER_ID: process.env.PRODUCTION_GENERATION_ALLOWED_OWNER_ID,
+            }
+          : {}),
+        SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+        TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
+      },
+      profile,
+    );
     await runProductionConnectedDeployment(
       {
         githubActions: process.env.GITHUB_ACTIONS,
@@ -54,6 +68,8 @@ async function main(): Promise<void> {
         cloudflareApiToken: process.env.CLOUDFLARE_API_TOKEN,
         workerUrl: process.env.PRODUCTION_WORKER_URL,
         releasePublicValues,
+        infrastructureEnabled: process.env.PRODUCTION_GENERATION_INFRA_ENABLED,
+        generationEnabled: process.env.PRODUCTION_GENERATION_ENABLED,
       },
       {
         prepareArtifact: (commit, workerPublicVars, publicValues) =>
@@ -61,18 +77,23 @@ async function main(): Promise<void> {
             commit,
             workerPublicVars ?? {},
             (publicValues ?? {}) as ProductionReleasePublicValues,
+            undefined,
+            profile,
           ),
         beforeDeploy: () =>
           runProductionSupabaseConnectionProbe({
             supabaseUrl: 'https://leihsygtsamxffyybskh.supabase.co',
             publishableKey: releasePublicValues.VITE_SUPABASE_PUBLISHABLE_KEY ?? '',
             secretKey: workerSecrets.SUPABASE_SECRET_KEY,
+            generationEnabled: profile.generationEnabled,
           }),
         deploy: (configPath) =>
           runWranglerProductionConnectedDeploy(
             configPath,
             process.env.CLOUDFLARE_API_TOKEN,
             workerSecrets,
+            {},
+            profile,
           ),
         onProgress(nextProgress) {
           Object.assign(progress, nextProgress);

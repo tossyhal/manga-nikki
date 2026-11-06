@@ -7,6 +7,10 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const distDir = path.join(projectRoot, 'dist');
 const clientDir = path.join(distDir, 'client');
 const target = process.env.MANGA_NIKKI_RELEASE_TARGET;
+const generationInfrastructure =
+  target === 'production' && process.env.PRODUCTION_GENERATION_INFRA_ENABLED === 'true';
+const generationEnabled =
+  generationInfrastructure && process.env.PRODUCTION_GENERATION_ENABLED === 'true';
 const expectedAppEnvironment = target === 'production' ? 'production' : 'staging';
 
 async function collectFiles(directory) {
@@ -68,7 +72,7 @@ const expectedVars =
           APP_ENV: 'production',
           DATA_MODE: 'live',
           AI_MODE: 'live',
-          GENERATION_ENABLED: 'false',
+          GENERATION_ENABLED: String(generationEnabled),
           SUPABASE_URL: 'https://leihsygtsamxffyybskh.supabase.co',
           SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           TURNSTILE_ALLOWED_HOSTNAMES: 'manga-nikki.tossyhal.workers.dev',
@@ -77,17 +81,21 @@ const expectedVars =
           APP_ENV: expectedAppEnvironment,
           DATA_MODE: 'sample',
           AI_MODE: 'mock',
-          GENERATION_ENABLED: 'false',
+          GENERATION_ENABLED: String(generationEnabled),
         };
 assert.deepEqual(workerConfig.config.vars, expectedVars);
 
 if (target === 'production') {
   assert.equal(workerConfig.config.workers_dev, true);
   assert.equal(workerConfig.config.preview_urls, false);
-  assert.deepEqual(workerConfig.config.triggers?.crons, ['0 15 * * *']);
+  assert.deepEqual(
+    workerConfig.config.triggers?.crons,
+    generationInfrastructure ? ['* * * * *', '0 15 * * *'] : ['0 15 * * *'],
+  );
   assert.deepEqual(workerConfig.config.secrets?.required, [
     'SUPABASE_SECRET_KEY',
     'TURNSTILE_SECRET_KEY',
+    ...(generationInfrastructure ? ['OPENAI_API_KEY', 'GENERATION_ALLOWED_OWNER_ID'] : []),
   ]);
   for (const [variable, value] of Object.entries({
     VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
@@ -100,7 +108,20 @@ if (target === 'production') {
       `${variable}がclient成果物にありません。`,
     );
   }
-  if (workerConfig.config.queues !== undefined) {
+  if (generationInfrastructure) {
+    assert.deepEqual(workerConfig.config.queues, {
+      producers: [{ binding: 'GENERATION_QUEUE', queue: 'manga-nikki-generations-production' }],
+      consumers: [
+        {
+          queue: 'manga-nikki-generations-production',
+          max_batch_size: 1,
+          max_batch_timeout: 0,
+          max_retries: 3,
+          max_concurrency: 2,
+        },
+      ],
+    });
+  } else if (workerConfig.config.queues !== undefined) {
     assert.deepEqual(workerConfig.config.queues, { producers: [], consumers: [] });
   }
   assert.equal(workerConfig.config.route, undefined);

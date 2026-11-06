@@ -48,6 +48,38 @@ describe('production connected preflight', () => {
     expect(githubFetcher).not.toHaveBeenCalled();
   });
 
+  it('requires an OpenAI Secret ID before any network call only for the generation profile', () => {
+    const githubFetcher = vi.fn();
+    expect(() =>
+      checkProductionConnectedPreflight(
+        { ...context, productionConnectedCdEnabled: 'true', infrastructureEnabled: 'true' },
+        { githubFetcher },
+      ),
+    ).toThrow(ProductionConnectedPreflightFailure);
+    expect(githubFetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['all', '11111111-1111-4111-8111-111111111111'])(
+    'accepts an explicit generation owner gate (%s)',
+    async (owner) => {
+      const githubFetcher = vi.fn(
+        async () => new Response(JSON.stringify({ object: { sha: commit } }), { status: 200 }),
+      );
+      await expect(
+        checkProductionConnectedPreflight(
+          {
+            ...context,
+            productionConnectedCdEnabled: 'true',
+            infrastructureEnabled: 'true',
+            allowedOwnerId: owner,
+            bwsOpenaiApiKeySecretId: '66666666-6666-4666-8666-666666666666',
+          },
+          { githubFetcher },
+        ),
+      ).resolves.toMatchObject({ deployment: 'ready' });
+    },
+  );
+
   it('checks the latest main SHA only after validating the fixed production target', async () => {
     const githubFetcher = vi.fn(
       async () => new Response(JSON.stringify({ object: { sha: commit } }), { status: 200 }),

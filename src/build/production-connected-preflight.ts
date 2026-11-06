@@ -1,3 +1,4 @@
+import { selectProductionConnectedProfile } from './production-connected-deployment.ts';
 import {
   checkProductionSamplePreflight,
   ProductionSamplePreflightFailure,
@@ -11,6 +12,10 @@ export type ProductionConnectedPreflightContext = Omit<
   'productionSampleCdEnabled' | 'bwsCloudflareSecretId'
 > & {
   productionConnectedCdEnabled?: string;
+  infrastructureEnabled?: string;
+  generationEnabled?: string;
+  bwsOpenaiApiKeySecretId?: string;
+  allowedOwnerId?: string;
   bwsCloudflareSecretId?: string;
   bwsSupabasePublishableKeySecretId?: string;
   bwsSupabaseSecretKeySecretId?: string;
@@ -28,7 +33,21 @@ export function checkProductionConnectedPreflight(
 ): Promise<ProductionSamplePreflightResult> {
   const enabled = context.productionConnectedCdEnabled === 'true';
   if (enabled) {
+    const profile = selectProductionConnectedProfile(
+      context.infrastructureEnabled,
+      context.generationEnabled,
+    );
+    if (
+      profile.queueName &&
+      context.allowedOwnerId !== 'all' &&
+      (!context.allowedOwnerId ||
+        context.allowedOwnerId.trim() !== context.allowedOwnerId ||
+        !uuidPattern.test(context.allowedOwnerId))
+    ) {
+      throw new ProductionSamplePreflightFailure('INPUT_SECRET_ID_INVALID');
+    }
     const secretIds = [
+      ...(profile.queueName ? [context.bwsOpenaiApiKeySecretId] : []),
       context.bwsCloudflareSecretId,
       context.bwsSupabasePublishableKeySecretId,
       context.bwsSupabaseSecretKeySecretId,

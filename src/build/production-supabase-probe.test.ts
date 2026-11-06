@@ -54,6 +54,30 @@ describe('read-only production Supabase connection probe', () => {
     });
   });
 
+  it.each([true, false])(
+    'allows the live DB emergency stop with the generation profile (available=%s)',
+    async (available) => {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              remaining_today: 0,
+              generation_available: available,
+              profile_is_mock: false,
+              reset_at: '2030-01-01T00:00:00Z',
+              active_generation_id: null,
+            }),
+            { status: 200 },
+          ),
+        );
+      await expect(
+        runProductionSupabaseConnectionProbe({ ...probeInput, generationEnabled: true }, fetcher),
+      ).resolves.toBeUndefined();
+    },
+  );
+
   it('adds a bearer header only for a legacy service_role JWT', async () => {
     const legacyKey = `header.${Buffer.from(JSON.stringify({ role: 'service_role' })).toString('base64url')}.signature`;
     const calls: RequestInit[] = [];

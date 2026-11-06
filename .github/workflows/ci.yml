@@ -131,6 +131,8 @@ jobs:
     env:
       CI: 'true'
       WRANGLER_SEND_METRICS: 'false'
+      PRODUCTION_GENERATION_INFRA_ENABLED: ${{ vars.PRODUCTION_GENERATION_INFRA_ENABLED }}
+      PRODUCTION_GENERATION_ENABLED: ${{ vars.PRODUCTION_GENERATION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -157,6 +159,8 @@ jobs:
           BWS_SUPABASE_SECRET_KEY_SECRET_ID: ${{ vars.BWS_SUPABASE_SECRET_KEY_SECRET_ID }}
           BWS_TURNSTILE_SITE_KEY_SECRET_ID: ${{ vars.BWS_TURNSTILE_SITE_KEY_SECRET_ID }}
           BWS_TURNSTILE_SECRET_KEY_SECRET_ID: ${{ vars.BWS_TURNSTILE_SECRET_KEY_SECRET_ID }}
+          BWS_OPENAI_API_KEY_SECRET_ID: ${{ vars.BWS_OPENAI_API_KEY_SECRET_ID }}
+          PRODUCTION_GENERATION_ALLOWED_OWNER_ID: ${{ vars.PRODUCTION_GENERATION_ALLOWED_OWNER_ID }}
         run: node --experimental-strip-types scripts/check-production-connected-preflight.ts
       - run: pnpm install --frozen-lockfile
         if: steps.main_gate.outputs.deploy == 'true'
@@ -189,6 +193,8 @@ jobs:
           BWS_SUPABASE_SECRET_KEY_SECRET_ID: ${{ vars.BWS_SUPABASE_SECRET_KEY_SECRET_ID }}
           BWS_TURNSTILE_SITE_KEY_SECRET_ID: ${{ vars.BWS_TURNSTILE_SITE_KEY_SECRET_ID }}
           BWS_TURNSTILE_SECRET_KEY_SECRET_ID: ${{ vars.BWS_TURNSTILE_SECRET_KEY_SECRET_ID }}
+          BWS_OPENAI_API_KEY_SECRET_ID: ${{ vars.BWS_OPENAI_API_KEY_SECRET_ID }}
+          PRODUCTION_GENERATION_ALLOWED_OWNER_ID: ${{ vars.PRODUCTION_GENERATION_ALLOWED_OWNER_ID }}
         run: node --experimental-strip-types scripts/check-production-connected-preflight.ts
       - name: Bitwardenからproduction Worker credentialsを3件取得
         if: steps.private_gate.outputs.deploy == 'true'
@@ -200,9 +206,18 @@ jobs:
             ${{ vars.BWS_CLOUDFLARE_SECRET_ID }} > CLOUDFLARE_API_TOKEN
             ${{ vars.BWS_SUPABASE_SECRET_KEY_SECRET_ID }} > SUPABASE_SECRET_KEY
             ${{ vars.BWS_TURNSTILE_SECRET_KEY_SECRET_ID }} > TURNSTILE_SECRET_KEY
+      - name: generation構成のOpenAI secretを取得
+        if: steps.private_gate.outputs.deploy == 'true' && vars.PRODUCTION_GENERATION_INFRA_ENABLED == 'true'
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_OPENAI_API_KEY_SECRET_ID }} > OPENAI_API_KEY
       - name: production connected Workerを配信して確認
         if: steps.private_gate.outputs.deploy == 'true'
         env:
+          PRODUCTION_GENERATION_ALLOWED_OWNER_ID: ${{ vars.PRODUCTION_GENERATION_ALLOWED_OWNER_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PRODUCTION_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
           GITHUB_ACTOR_ID: ${{ github.actor_id }}
