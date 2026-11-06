@@ -623,7 +623,7 @@ test('短いデスクトップ画面の記録ビューは本文領域に収ま�
   expect(Math.abs(toolbarMetrics.tabsCenter - toolbarMetrics.toolbarCenter)).toBeLessThanOrEqual(
     0.5,
   );
-  expect(toolbarMetrics.widthRatio).toBeCloseTo(0.8, 1);
+  expect(toolbarMetrics.widthRatio).toBeCloseTo(1, 1);
   await expect(page.locator('.library-refresh-button')).toHaveCount(0);
 
   const expectLibraryToFit = async (viewSelector: string) => {

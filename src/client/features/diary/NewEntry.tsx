@@ -91,10 +91,6 @@ export function NewEntry({
           !quota.generationAvailable ||
           quota.activeGenerationId !== null))),
   );
-  const showQuotaStatus = Boolean(
-    quota &&
-    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
-  );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
   const operationBusy = busy || pendingSave !== null;
 
@@ -215,7 +211,7 @@ export function NewEntry({
             ? '別の漫画を作成しています。先に進行中の記録を確認してください。'
             : currentQuota?.remainingToday === 0
               ? '本日の生成上限に達しています。日記は保存しました。'
-              : '利用枠を確認できないため、漫画の受付を停止しています。日記は保存しました。',
+              : '漫画の受付状態を取得できないため、受付を停止しています。日記は保存しました。',
         );
         setGenerationFailureEntry(entry);
         reportActivity({ dirty: false, busy: false, failed: true });
@@ -434,40 +430,27 @@ export function NewEntry({
           />
         </fieldset>
         <div className="entry-compose-support">
-          {online &&
-            quota &&
-            (showQuotaStatus ? (
-              <div className="quota-limit-card">
-                <GenerationQuotaStatus
-                  quota={quota}
-                  activeGeneration={activeGeneration}
-                  currentGenerationId={null}
-                  onRefresh={() => void refreshQuota()}
-                  refreshing={refreshing}
-                />
-              </div>
-            ) : (
-              <div className="sr-only">
-                <GenerationQuotaStatus
-                  quota={quota}
-                  activeGeneration={activeGeneration}
-                  currentGenerationId={null}
-                />
-              </div>
-            ))}
+          {online && quota && (
+            <GenerationQuotaStatus
+              quota={quota}
+              activeGeneration={activeGeneration}
+              currentGenerationId={null}
+              generationAvailable={config.generationAvailable}
+            />
+          )}
           {online &&
             !config.generationAvailable &&
             config.dataMode !== 'sample' &&
             quotaState !== 'unavailable' &&
-            quota?.generationAvailable !== false && (
-              <section className="quota-limit-card" aria-label="漫画の利用状況">
-                <p>現在、漫画の受付を停止しています。日記は保存できます。</p>
-              </section>
+            !quota && (
+              <output className="generation-status-note">
+                現在、漫画の受付を停止しています。日記は保存できます。
+              </output>
             )}
           {quotaState === 'unavailable' && online && (
-            <section className="quota-limit-card" aria-label="漫画の利用状況">
+            <section className="quota-error-card" aria-label="漫画の受付状態">
               <p role="alert">
-                利用枠を確認できないため、漫画の受付を停止しています。日記の保存は引き続きできます。
+                漫画の受付状態を取得できないため、受付を停止しています。日記の保存は引き続きできます。
               </p>
               <button
                 className="button-text"
@@ -478,7 +461,7 @@ export function NewEntry({
                   void refreshQuota();
                 }}
               >
-                {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+                再試行
               </button>
             </section>
           )}
@@ -587,7 +570,7 @@ export function NewEntry({
                           : canGenerate
                             ? '4コマにする'
                             : quotaState === 'loading' && configAllowsGeneration
-                              ? '利用枠を確認しています…'
+                              ? '準備しています…'
                               : '下書きとして保存'}
                   </button>
                 </div>

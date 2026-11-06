@@ -113,6 +113,7 @@ export function SavedComic({
         onRetryImages={retryImages}
         onImageError={handleImageError}
         hideTitle={hideTitle}
+        hideTranscriptDisclosure
       />
       <ComicActions
         comic={comic}

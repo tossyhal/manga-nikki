@@ -28,7 +28,7 @@
 
 .library-view-tabs {
   display: grid;
-  width: 80%;
+  width: 100%;
   min-height: 50px;
   grid-template-columns: 1fr 1fr;
   gap: 2px;

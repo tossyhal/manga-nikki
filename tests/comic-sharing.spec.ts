@@ -12,6 +12,9 @@ test('漫画をPNG保存し、別のブラウザへURLだけで共有して削�
     .fill('本文は共有しない架空の日記。');
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();
   await expect(page).toHaveURL(/\/entries\//);
+  await expect(page.locator('.comic-script')).toHaveCount(0);
+  await expect(page.locator('.comic-transcript > ol.sr-only')).toHaveCount(1);
+  await expect(page.locator('#original-diary summary')).toHaveText('元の日記を読む');
   await expect(page.getByRole('button', { name: '画像を保存', exact: true })).toBeEnabled();
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '画像を保存', exact: true }).click();

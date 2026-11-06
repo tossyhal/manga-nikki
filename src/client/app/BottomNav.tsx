@@ -30,13 +30,13 @@ export function BottomNav() {
         </span>
       </Link>
       <Link
-        className={`bottom-nav-item bottom-nav-item--write${active === 'write' ? ' is-active' : ''}`}
+        className={`bottom-nav-item${active === 'write' ? ' is-active' : ''}`}
         to="/new"
         aria-label="日記を書く"
         aria-current={active === 'write' ? 'page' : undefined}
       >
         <span className="bottom-nav-icon" aria-hidden="true">
-          <Icon name="plus" size={28} />
+          <Icon name="plus" />
         </span>
         <span className="bottom-nav-label" aria-hidden={active !== 'write'}>
           書く

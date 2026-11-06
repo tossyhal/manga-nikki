@@ -1109,19 +1109,6 @@ p {
   flex: 1;
 }
 
-.quota-refresh-action {
-  min-height: 44px;
-  padding-inline: 8px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.detail-action-dock > .quota-refresh-action {
-  display: block;
-  width: 100%;
-  margin: 0 0 4px;
-}
-
 .inline-alert,
 .error {
   margin: 12px 0;
@@ -1133,8 +1120,24 @@ p {
   line-height: 1.6;
 }
 
-.quota-limit-card {
-  margin: 0 0 10px;
+.generation-status-note {
+  display: block;
+  margin: 0;
+  color: #505050;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.entry-compose-support > .generation-status-note {
+  margin-top: 24px;
+}
+
+.detail-page > .generation-status-note {
+  margin: 12px 0;
+}
+
+.quota-error-card {
+  margin: 24px 0 0;
   padding: 10px 12px;
   border-radius: 12px;
   background: #f6f6f6;
@@ -1143,11 +1146,11 @@ p {
   line-height: 1.55;
 }
 
-.quota-limit-card p {
+.quota-error-card p {
   margin: 0;
 }
 
-.quota-limit-card .button-text {
+.quota-error-card .button-text {
   min-height: 44px;
   margin-left: -8px;
   padding-inline: 8px;
@@ -1597,22 +1600,6 @@ p {
   font-size: 11px;
 }
 
-.detail-quota-card {
-  margin: 12px 0;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: #f6f6f6;
-}
-
-.detail-quota-card section,
-.detail-quota-card p {
-  margin: 0;
-}
-
-.detail-quota-card p + p {
-  margin-top: 6px;
-}
-
 .detail-revision-note {
   margin: 12px 0;
   padding: 12px 14px;
@@ -1983,42 +1970,6 @@ p {
   color: #252525;
 }
 
-.bottom-nav-item--write {
-  position: relative;
-  isolation: isolate;
-}
-
-.bottom-nav-item--write::before {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: -1;
-  width: 48px;
-  height: 48px;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: #3f3f3f;
-  content: '';
-}
-
-.bottom-nav-item--write.is-active::before {
-  top: calc(50% - 9.5px);
-  width: 36px;
-  height: 36px;
-}
-
-.bottom-nav-item--write .bottom-nav-icon {
-  color: #ffffff;
-}
-
-.bottom-nav-item--write .bottom-nav-label {
-  color: #ffffff;
-}
-
-.bottom-nav-item--write.is-active .bottom-nav-label {
-  color: #252525;
-}
-
 .bottom-nav-icon {
   display: grid;
   width: 28px;
@@ -2287,7 +2238,7 @@ output {
   .detail-page.has-comic > .comic-actions,
   .detail-page.has-comic > .generation-card,
   .detail-page.has-comic > .original-diary,
-  .detail-page.has-comic > .detail-quota-card,
+  .detail-page.has-comic > .generation-status-note,
   .detail-page.has-comic > .inline-alert,
   .detail-page.has-comic > .captcha-card,
   .detail-page.has-comic > .hint,

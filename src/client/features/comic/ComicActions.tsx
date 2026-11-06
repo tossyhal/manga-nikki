@@ -59,7 +59,7 @@ export function ComicActions({
   }
   return (
     <div className="comic-actions">
-      <div className="comic-actions-buttons">
+      <div className="comic-actions-buttons comic-actions-toolbar">
         <button
           type="button"
           className="button button-secondary"
@@ -133,7 +133,9 @@ export function ComicActions({
           )}
         </div>
       )}
-      <output className="comic-action-message">{message}</output>
+      <output className="comic-action-message" aria-live="polite">
+        {message}
+      </output>
     </div>
   );
 }
