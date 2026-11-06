@@ -1,0 +1,188 @@
+name: Supabase DB migration
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: '実行する操作'
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - apply
+      expected_manifest:
+        description: 'apply時はplan結果に表示されたmanifest SHA-256を入力'
+        type: string
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  authorize:
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: owner、main ref、commit、manifest入力をcheckout前に確認
+        env:
+          CHECK_REPOSITORY: ${{ github.repository }}
+          CHECK_REF: ${{ github.ref }}
+          CHECK_EVENT: ${{ github.event_name }}
+          CHECK_SHA: ${{ github.sha }}
+          CHECK_ACTOR_ID: ${{ github.actor_id }}
+          CHECK_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CHECK_OPERATION: ${{ inputs.operation }}
+          CHECK_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
+        run: |
+          node --input-type=module <<'NODE'
+          const operation = process.env.CHECK_OPERATION ?? '';
+          const manifest = process.env.CHECK_EXPECTED_MANIFEST ?? '';
+          const validManifest = manifest === '' || /^[0-9a-f]{64}$/i.test(manifest);
+          const allowed =
+            process.env.CHECK_REPOSITORY === 'tossyhal/manga-nikki' &&
+            process.env.CHECK_REF === 'refs/heads/main' &&
+            process.env.CHECK_EVENT === 'workflow_dispatch' &&
+            /^[0-9a-f]{40}$/i.test(process.env.CHECK_SHA ?? '') &&
+            process.env.CHECK_ACTOR_ID === '92223710' &&
+            process.env.CHECK_TRIGGERING_ACTOR === 'tossyhal' &&
+            (operation === 'plan' || operation === 'apply') &&
+            validManifest &&
+            (operation !== 'apply' || (manifest !== '' && process.env.CHECK_RUN_ATTEMPT === '1'));
+          if (!allowed) {
+            console.error('OWNER_GATE_OR_INPUT_REJECTED');
+            process.exitCode = 1;
+          }
+          NODE
+
+  checks:
+    needs: authorize
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main' &&
+      needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+      PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y postgresql-16
+      - run: pnpm install --frozen-lockfile
+      - run: node -e "require('node:fs').copyFileSync('.dev.vars.example', '.dev.vars')"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:db
+      - run: pnpm build
+
+  migrate:
+    needs: [authorize, checks]
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      github.ref == 'refs/heads/main' &&
+      needs.authorize.result == 'success' &&
+      needs.checks.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: dev-database-setup
+    concurrency:
+      group: manga-nikki-dev-database-setup
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: ownerと最新main、operation、manifestを秘密取得前に再確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+          DATABASE_MIGRATION_OPERATION: ${{ inputs.operation }}
+          DATABASE_MIGRATION_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
+        run: node --experimental-strip-types scripts/migrate-database.ts --gate-only
+      - name: PostgreSQL 16 clientを導入
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+      - name: 固定Supabase CLIとsidecarを検証して配置
+        if: inputs.operation == 'apply'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cli_directory="$RUNNER_TEMP/manga-nikki-supabase-cli-v2.122.0"
+          archive="$RUNNER_TEMP/supabase_2.122.0_linux_amd64.tar.gz"
+          mkdir -m 700 "$cli_directory"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-redirs 3 \
+            'https://github.com/supabase/cli/releases/download/v2.122.0/supabase_2.122.0_linux_amd64.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' \
+            '59ed066847b98d7461c60e9109d40cab6b9756177ce06ebb05b51338519f5136' \
+            "$archive" | sha256sum --check --strict
+          entries="$(tar -tzf "$archive" | LC_ALL=C sort)"
+          if [[ "$entries" != $'supabase\nsupabase-go' ]]; then
+            echo 'SUPABASE_CLI_ARCHIVE_CONTENT_INVALID'
+            exit 1
+          fi
+          tar -xzf "$archive" -C "$cli_directory" --no-same-owner --no-same-permissions supabase supabase-go
+          chmod 700 "$cli_directory/supabase" "$cli_directory/supabase-go"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { appendFileSync, lstatSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const directory = join(process.env.RUNNER_TEMP ?? '', 'manga-nikki-supabase-cli-v2.122.0');
+          const values = [
+            ['SUPABASE_CLI_PATH', join(directory, 'supabase')],
+            ['SUPABASE_CLI_SHA256', join(directory, 'supabase')],
+            ['SUPABASE_GO_PATH', join(directory, 'supabase-go')],
+            ['SUPABASE_GO_SHA256', join(directory, 'supabase-go')],
+          ];
+          for (const [key, path] of values) {
+            const info = lstatSync(path);
+            if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o111) === 0) {
+              console.error('SUPABASE_CLI_FILE_INVALID');
+              process.exit(1);
+            }
+            const value = key.endsWith('SHA256')
+              ? createHash('sha256').update(readFileSync(path)).digest('hex')
+              : path;
+            appendFileSync(process.env.GITHUB_ENV ?? '', `${key}=${value}\n`, { mode: 0o600 });
+          }
+          NODE
+          rm -f "$archive"
+      - name: Bitwardenから対象DB passwordだけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }} > SUPABASE_DB_PASSWORD
+      - name: reviewed manifestを照合し、必要な場合だけmigrationを適用
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+          DATABASE_MIGRATION_OPERATION: ${{ inputs.operation }}
+          DATABASE_MIGRATION_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
+          SUPABASE_CLI_PATH: ${{ runner.temp }}/manga-nikki-supabase-cli-v2.122.0/supabase
+          SUPABASE_GO_PATH: ${{ runner.temp }}/manga-nikki-supabase-cli-v2.122.0/supabase-go
+        run: exec node --experimental-strip-types scripts/migrate-database.ts

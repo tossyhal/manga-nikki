@@ -4,10 +4,15 @@ import { cloudflare } from '@cloudflare/vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { publicConfigGuard } from './src/build/public-config-guard';
+import {
+  PRODUCTION_CONNECTED_PROFILE,
+  validateProductionReleasePublicValues,
+} from './src/build/production-connected-deployment';
 
 const isReleaseBuild = ['staging', 'production', 'demo'].includes(
   process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
 );
+const isConnectedProductionBuild = process.env.MANGA_NIKKI_RELEASE_TARGET === 'production';
 const isPlaywrightE2e = process.env.MANGA_NIKKI_E2E === '1';
 
 export default defineConfig({
@@ -43,7 +48,30 @@ export default defineConfig({
         clientsClaim: false,
       },
     }),
-    cloudflare(isReleaseBuild ? { config: { secrets: { required: [] } } } : undefined),
+    cloudflare(
+      isReleaseBuild
+        ? {
+            config: (workerConfig) => {
+              const secrets = {
+                required: isConnectedProductionBuild
+                  ? [...(PRODUCTION_CONNECTED_PROFILE.requiredSecretBindings ?? [])]
+                  : [],
+              };
+              if (!isConnectedProductionBuild) return { secrets };
+
+              const { workerPublicVars } = validateProductionReleasePublicValues({
+                VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+                VITE_SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+                VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY,
+              });
+              return {
+                vars: { ...(workerConfig.vars ?? {}), ...workerPublicVars },
+                secrets,
+              };
+            },
+          }
+        : undefined,
+    ),
   ],
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
   preview: { host: '127.0.0.1', port: 4173, strictPort: true },

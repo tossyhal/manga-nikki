@@ -350,11 +350,12 @@ describe('server Storage client', () => {
 
     expect(requests).toHaveLength(2);
     expect(requests[0]?.url).toBe('https://retention-test.supabase.co/storage/v1/object/comics');
-    expect(requests[0]?.headers.get('Authorization')).toBe('Bearer sb_secret_test_only');
+    expect(requests[0]?.headers.get('Authorization')).toBeNull();
     expect(requests[0]?.headers.get('apikey')).toBe('sb_secret_test_only');
     expect(await requests[0]?.clone().json()).toEqual({ prefixes: [path] });
     expect(requests[1]?.url).toContain('/storage/v1/object/list/comics');
-    expect(requests[1]?.headers.get('Authorization')).toBe('Bearer sb_secret_test_only');
+    expect(requests[1]?.headers.get('Authorization')).toBeNull();
+    expect(requests[1]?.headers.get('apikey')).toBe('sb_secret_test_only');
   });
 
   it('returns Storage failures to the cleanup service without exposing them as messages', async () => {
@@ -415,10 +416,9 @@ describe('server Storage client', () => {
       '/storage/v1/object/comics',
       '/storage/v1/object/list/comics',
     ]);
+    expect(requests.every((request) => request.headers.get('Authorization') === null)).toBe(true);
     expect(
-      requests.every(
-        (request) => request.headers.get('Authorization') === 'Bearer sb_secret_test_only',
-      ),
+      requests.every((request) => request.headers.get('apikey') === 'sb_secret_test_only'),
     ).toBe(true);
   });
 });

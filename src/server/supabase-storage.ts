@@ -1,12 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Environment } from './mode';
 import { supabaseUrl, requiredKey, authOptions } from './supabase-config';
+import { createSupabaseApiKeyFetch } from '../shared/supabase-fetch';
 
 function createServerComicsBucket(environment: Environment, fetcher?: typeof fetch) {
   const secretKey = requiredKey(environment.SUPABASE_SECRET_KEY);
   const client = createClient(supabaseUrl(environment), secretKey, {
     auth: authOptions,
-    ...(fetcher ? { global: { fetch: fetcher } } : {}),
+    global: { fetch: createSupabaseApiKeyFetch(secretKey, fetcher) },
   });
   return client.storage.from('comics');
 }

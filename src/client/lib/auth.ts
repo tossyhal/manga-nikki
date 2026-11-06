@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createSupabaseApiKeyFetch } from '../../shared/supabase-fetch';
 import { getClientConfig } from './config';
 
 export class ClientAuthError extends Error {
@@ -29,6 +30,7 @@ async function getSupabaseClient(): Promise<SupabaseClient> {
             persistSession: true,
             detectSessionInUrl: false,
           },
+          global: { fetch: createSupabaseApiKeyFetch(publishableKey) },
         }),
       )
       .catch(() => {

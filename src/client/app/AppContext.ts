@@ -7,5 +7,6 @@ export type AppContext = {
   personalDataAvailable: boolean;
   onActivityChange: (activity: DiaryActivity) => void;
   hasBlockedNavigation: () => boolean;
+  hasConfirmedExit: () => boolean;
   retryConfig: () => void;
 };

@@ -51,7 +51,10 @@ const workerConfig = workerConfigs.find(({ config }) => config.targetEnvironment
 assert.ok(workerConfig, `${target}用Worker設定がありません。`);
 assert.equal(workerConfig.config.vars?.APP_ENV, expectedAppEnvironment);
 assert.equal(workerConfig.config.targetEnvironment, target);
-assert.equal(workerConfig.config.name, `manga-nikki-${target}`);
+assert.equal(
+  workerConfig.config.name,
+  target === 'production' ? 'manga-nikki' : `manga-nikki-${target}`,
+);
 const expectedVars =
   target === 'demo'
     ? {
@@ -60,13 +63,49 @@ const expectedVars =
         AI_MODE: 'live',
         GENERATION_ENABLED: 'false',
       }
-    : {
-        APP_ENV: expectedAppEnvironment,
-        DATA_MODE: 'sample',
-        AI_MODE: 'mock',
-        GENERATION_ENABLED: 'false',
-      };
+    : target === 'production'
+      ? {
+          APP_ENV: 'production',
+          DATA_MODE: 'live',
+          AI_MODE: 'live',
+          GENERATION_ENABLED: 'false',
+          SUPABASE_URL: 'https://leihsygtsamxffyybskh.supabase.co',
+          SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          TURNSTILE_ALLOWED_HOSTNAMES: 'manga-nikki.tossyhal.workers.dev',
+        }
+      : {
+          APP_ENV: expectedAppEnvironment,
+          DATA_MODE: 'sample',
+          AI_MODE: 'mock',
+          GENERATION_ENABLED: 'false',
+        };
 assert.deepEqual(workerConfig.config.vars, expectedVars);
+
+if (target === 'production') {
+  assert.equal(workerConfig.config.workers_dev, true);
+  assert.equal(workerConfig.config.preview_urls, false);
+  assert.deepEqual(workerConfig.config.triggers?.crons, ['0 15 * * *']);
+  assert.deepEqual(workerConfig.config.secrets?.required, [
+    'SUPABASE_SECRET_KEY',
+    'TURNSTILE_SECRET_KEY',
+  ]);
+  for (const [variable, value] of Object.entries({
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+    VITE_SUPABASE_PUBLISHABLE_KEY: process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY,
+  })) {
+    assert.ok(typeof value === 'string' && value.length > 0, `${variable}がありません。`);
+    assert.ok(
+      clientContents.some((contents) => contents.includes(Buffer.from(value))),
+      `${variable}がclient成果物にありません。`,
+    );
+  }
+  if (workerConfig.config.queues !== undefined) {
+    assert.deepEqual(workerConfig.config.queues, { producers: [], consumers: [] });
+  }
+  assert.equal(workerConfig.config.route, undefined);
+  assert.equal(workerConfig.config.routes, undefined);
+}
 
 if (target === 'demo') {
   assert.equal(workerConfig.config.workers_dev, false);

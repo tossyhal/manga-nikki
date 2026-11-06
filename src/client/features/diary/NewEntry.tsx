@@ -20,9 +20,15 @@ type NewEntryProps = {
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
   hasBlockedNavigation: () => boolean;
+  hasConfirmedExit: () => boolean;
 };
 
-export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: NewEntryProps) {
+export function NewEntry({
+  config,
+  onActivityChange,
+  hasBlockedNavigation,
+  hasConfirmedExit,
+}: NewEntryProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
@@ -53,6 +59,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   const [validationFailureCount, setValidationFailureCount] = useState(0);
   const [saveErrorIntent, setSaveErrorIntent] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  const [entrySaveStarted, setEntrySaveStarted] = useState(false);
   const [pendingSave, setPendingSave] = useState<boolean | null>(null);
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
   const [generationCheckEntry, setGenerationCheckEntry] = useState<Entry | null>(null);
@@ -87,18 +94,28 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
 
   useLayoutEffect(() => {
     if (activeRef.current)
-      onActivityChange({ dirty, busy: busy || pendingSave !== null, failed: Boolean(error) });
-  }, [busy, dirty, error, onActivityChange, pendingSave]);
+      onActivityChange({
+        dirty,
+        busy: busy || pendingSave !== null,
+        failed: Boolean(error),
+        entrySaveStarted,
+      });
+  }, [busy, dirty, entrySaveStarted, error, onActivityChange, pendingSave]);
+
+  useLayoutEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
-    activeRef.current = true;
     const refreshTimer = window.setTimeout(() => {
       if (navigator.onLine) void refreshQuota();
     }, 0);
     return () => {
       window.clearTimeout(refreshTimer);
-      activeRef.current = false;
-      onActivityChange({ dirty: false, busy: false, failed: false });
+      onActivityChange({ dirty: false, busy: false, failed: false, entrySaveStarted: false });
     };
   }, [onActivityChange, refreshQuota]);
 
@@ -151,7 +168,14 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     let entry = saved;
     if (!entry) {
       try {
-        entry = await createEntry(parsed.data);
+        entry = await createEntry(parsed.data, {
+          onRequestStart: () => {
+            if (!activeRef.current || hasConfirmedExit())
+              throw new DOMException('Entry save cancelled', 'AbortError');
+            setEntrySaveStarted(true);
+            onActivityChange({ dirty, busy: true, failed: false, entrySaveStarted: true });
+          },
+        });
       } catch (failure) {
         if (activeRef.current) setSaveErrorIntent(makeComic);
         throw failure;
@@ -234,6 +258,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     }
     setSaveErrorIntent(null);
     setError('');
+    setEntrySaveStarted(false);
     actionInFlightRef.current = true;
     setBusy(true);
     try {
@@ -260,6 +285,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
       if (activeRef.current) {
         actionInFlightRef.current = false;
         setBusy(false);
+        setEntrySaveStarted(false);
       }
     }
   }
@@ -269,6 +295,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     const makeComic = pendingSave;
     registrationPendingRef.current = false;
     setPendingSave(null);
+    setEntrySaveStarted(false);
     if (makeComic === null) return;
     if (!navigator.onLine) {
       refreshOnlineStatus();
@@ -291,6 +318,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
       if (activeRef.current) {
         actionInFlightRef.current = false;
         setBusy(false);
+        setEntrySaveStarted(false);
       }
     }
   }
@@ -321,6 +349,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     if (!activeRef.current || !registrationPendingRef.current) return;
     registrationPendingRef.current = false;
     setPendingSave(null);
+    setEntrySaveStarted(false);
     setError('確認に失敗しました。本文は残っています。新しい確認を取得して再操作してください。');
   }
 
@@ -329,6 +358,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     focusBodyAfterCaptchaCancelRef.current = true;
     registrationPendingRef.current = false;
     setPendingSave(null);
+    setEntrySaveStarted(false);
     setError('');
   }
 

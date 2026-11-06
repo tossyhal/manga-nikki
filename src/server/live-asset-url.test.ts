@@ -202,7 +202,7 @@ describe('private comic asset URL', () => {
     expect(bound.signCalls).toHaveLength(1);
     expect(bound.signCalls[0]!.body).toEqual({ expiresIn: 60 });
     expect(bound.signCalls[0]!.apiKey).toBe('sb_secret_test');
-    expect(bound.signCalls[0]!.authorization).toBe('Bearer sb_secret_test');
+    expect(bound.signCalls[0]!.authorization).toBe('');
     expect(bound.signCalls[0]!.url.pathname).toBe(
       `/storage/v1/object/sign/comics/${ownerId}/${generationId}/${assetIds[0]}.png`,
     );
