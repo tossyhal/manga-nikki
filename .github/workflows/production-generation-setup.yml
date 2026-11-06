@@ -3,13 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: checkは読取のみ、setupは専用Queue/private bucketの不足分だけ作成、probe-storageは一時fixtureで拒否検査
+        description: checkは読取、setupはQueue/bucket作成、probe-storageは拒否試験、setup-storage-policiesは不足deny policyだけ作成
         type: choice
         default: check
         required: true
-        options: [check, setup, probe-storage]
+        options: [check, setup, probe-storage, setup-storage-policies]
       confirmation:
-        description: setup/probe-storageはmanga-nikki-generations-productionと入力（中断時は状態を調査し再実行しない）
+        description: 書込操作はmanga-nikki-generations-productionと入力（中断時は状態を調査し再実行しない）
         type: string
         default: ''
         required: false
@@ -30,7 +30,7 @@ jobs:
           const operation = process.env.OPERATION;
           if (process.env.GITHUB_ACTOR_ID !== '92223710' || process.env.GITHUB_TRIGGERING_ACTOR !== 'tossyhal' ||
               !/^[0-9a-f]{40}$/i.test(process.env.GITHUB_SHA ?? '') ||
-              !['check', 'setup', 'probe-storage'].includes(operation ?? '') ||
+              !['check', 'setup', 'probe-storage', 'setup-storage-policies'].includes(operation ?? '') ||
               (operation !== 'check' && (process.env.CONFIRMATION !== 'manga-nikki-generations-production' || process.env.GITHUB_RUN_ATTEMPT !== '1'))) {
             console.error('OWNER_GATE_OR_INPUT_REJECTED');
             process.exitCode = 1;
@@ -59,6 +59,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
   resources:
+    if: inputs.operation != 'setup-storage-policies'
     needs: [authorize, checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -105,6 +106,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: dev-database-setup
+    env:
+      PRODUCTION_PLATFORM_OPERATION: ${{ inputs.operation }}
+      PRODUCTION_PLATFORM_CONFIRMATION: ${{ inputs.confirmation }}
     concurrency:
       group: manga-nikki-dev-database-setup
       queue: max
@@ -132,7 +136,7 @@ jobs:
           cloud_region: us
           secrets: |
             ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }} > SUPABASE_DB_PASSWORD
-      - name: Storage RLSとrestrictive policyをread-only確認
+      - name: Storage RLSを検査し、明示操作時だけ不足deny policyを作成
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}

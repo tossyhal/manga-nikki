@@ -25,6 +25,13 @@ SELECT pg_catalog.json_build_object(
   'storageRlsOk',(SELECT count(*)=2 AND bool_and(relrowsecurity AND NOT relforcerowsecurity) FROM relations),
   'storageOwnerPrivilege',(SELECT count(*)=2 AND bool_and(pg_catalog.pg_has_role(current_user,relowner,'USAGE')) FROM relations),
   'storageOwnerSetPrivilege',(SELECT count(*)=2 AND bool_and(pg_catalog.pg_has_role(current_user,relowner,'SET')) FROM relations),
+  'sameStorageOwner',(SELECT count(*)=2 AND count(DISTINCT relowner)=1 FROM relations),
+  'missingPolicyCount',(SELECT count(*) FROM expected e LEFT JOIN policies p ON p.relname=e.table_name AND p.polname=e.policy_name WHERE p.oid IS NULL),
+  'mismatchedPolicyCount',(
+    SELECT count(*) FROM expected e JOIN policies p ON p.relname=e.table_name AND p.polname=e.policy_name
+    WHERE NOT COALESCE(NOT p.polpermissive AND p.polcmd='*' AND p.qual=e.expression AND p.check_expr=e.expression
+      AND p.polroles @> ARRAY[(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='anon'),(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='authenticated')]::oid[],false)
+  ),
   'restrictivePoliciesOk',(
     SELECT count(*)=2 AND bool_and(COALESCE(
       NOT p.polpermissive AND p.polcmd='*' AND p.qual=e.expression AND p.check_expr=e.expression
