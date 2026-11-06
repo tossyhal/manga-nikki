@@ -79,4 +79,6 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GEN
 
 生成基盤の配信前にQueue・Storage拒否試験を完了し、生成ON前にDBの全体枠1、総予算1,000,000 micro USD以下、使用済みcounter、固定profileと最大費用を確認します。予約上限はOpenAI側の請求を強制停止する機能ではありません。最大費用の根拠が確認できるまで課金試験は行いません。
 
+試験枠の操作はmainのowner限定`production-generation-trial-policy.yml`で行います。`check`は読取のみ、`prepare`は`PREPARE_ONE_COMIC_1USD_TRIAL`を確認文字列に指定し、生成停止を維持して日次・全期間1漫画、総予算・予約額各1USDの固定profileを設定します。既存counter行または生成履歴があれば停止し、削除やresetはしません。`enable`は`ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST`と`provider_cost_verified=true`が必要で、費用の根拠確認前に実行しません。`stop`は`STOP_GENERATION`を指定し、policyのenabledだけをfalseにします。既存予約やunknownの枠は維持します。
+
 基盤を追加した後の生成停止はDB policyをfalseにし、必要なら`PRODUCTION_GENERATION_ENABLED=false`で再配信します。Queue/Secretsが残るため`PRODUCTION_GENERATION_INFRA_ENABLED`はtrueを維持します。基盤なし版への切替は通常停止とは別の削除計画が必要です。
