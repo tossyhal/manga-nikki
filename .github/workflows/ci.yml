@@ -128,6 +128,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: 固定Node.jsとpnpmを設定
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
       - name: Bitwarden取得前にmain・actor・対象・Secret IDを検証
         id: main_gate
         env:
@@ -141,11 +146,6 @@ jobs:
           PRODUCTION_WORKER_URL: ${{ vars.PRODUCTION_WORKER_URL }}
           BWS_CLOUDFLARE_SECRET_ID: ${{ vars.BWS_CLOUDFLARE_SECRET_ID }}
         run: node --experimental-strip-types scripts/check-production-sample-preflight.ts
-      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
-        if: steps.main_gate.outputs.deploy == 'true'
-        with:
-          version: '2026.10.19'
-          install_args: '--locked'
       - run: pnpm install --frozen-lockfile
         if: steps.main_gate.outputs.deploy == 'true'
       - name: production公開設定ファイルがないことを確認
