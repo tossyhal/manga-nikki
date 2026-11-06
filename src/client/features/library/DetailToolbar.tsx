@@ -25,23 +25,15 @@ export function DetailToolbar({
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuAnchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const pointerInsideRef = useRef(false);
   useEffect(() => {
     if (!menuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node) || !menuAnchorRef.current?.contains(target)) setMenuOpen(false);
     };
-    const clearPointerInside = () => {
-      pointerInsideRef.current = false;
-    };
     document.addEventListener('pointerdown', closeOnOutsidePointer);
-    document.addEventListener('pointerup', clearPointerInside, true);
-    document.addEventListener('pointercancel', clearPointerInside, true);
     return () => {
       document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      document.removeEventListener('pointerup', clearPointerInside, true);
-      document.removeEventListener('pointercancel', clearPointerInside, true);
     };
   }, [menuOpen]);
   useEffect(() => {
@@ -61,16 +53,9 @@ export function DetailToolbar({
       <div
         ref={menuAnchorRef}
         className="detail-menu-anchor"
-        onPointerDownCapture={() => {
-          pointerInsideRef.current = true;
-        }}
-        onClickCapture={() => {
-          pointerInsideRef.current = false;
-        }}
         onBlurCapture={(event) => {
-          if (pointerInsideRef.current) return;
           const nextTarget = event.relatedTarget;
-          if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget))
+          if (nextTarget instanceof Node && !event.currentTarget.contains(nextTarget))
             setMenuOpen(false);
         }}
       >
