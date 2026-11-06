@@ -122,7 +122,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | `pnpm test` | Vitestの非watch実行 | 実装済み |
 | `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
 | `pnpm build` | ビルド検証。公開しない | 実装済み |
-| `pnpm build:staging` / `pnpm build:production` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
+| `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
 | `pnpm test:release-environment` | 隔離fixtureで環境変数の混入を検査 | 実装済み |
 | `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
 | `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
@@ -131,17 +131,21 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
+`pnpm test:e2e`は通常開発サーバー（5173）と分けた4176で専用サーバーを起動します。既存のサーバーは再利用しないため、4176を別のプロセスが使用中ならE2Eは起動に失敗します。専用ポートを変える場合は`PLAYWRIGHT_PORT`を設定してください。E2E専用サーバーは通常dev serverと別のViteキャッシュを使います。
+
 ### 環境別ビルド
 
-staging / productionのビルドは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+staging / productionのsample buildと隔離demo buildは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
 
 ```sh
 pnpm build:staging
 pnpm build:production
-pnpm preview
+pnpm build:demo
 ```
 
-Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
+staging / productionは引き続き`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
+
+staging / productionの公開値は`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして設定します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
 
 `pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けず、本番環境には接続しません。必要なGitHub/Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 

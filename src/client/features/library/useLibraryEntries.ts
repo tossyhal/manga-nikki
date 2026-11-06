@@ -11,6 +11,8 @@ function isSessionUnavailable(error: unknown) {
   );
 }
 
+type ActiveRequest = { epoch: number; controller: AbortController };
+
 export function useLibraryEntries(initialMonth: string) {
   const initialMonthRef = useRef(initialMonth);
   const [entries, setEntries] = useState<Entry[] | null>(null);
@@ -22,38 +24,93 @@ export function useLibraryEntries(initialMonth: string) {
   const cursorRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
   const mountedRef = useRef(true);
-  const syncEntries = useCallback((items: Entry[], cursor: string | null) => {
+  const requestEpochRef = useRef(0);
+  const activeRequestRef = useRef<ActiveRequest | null>(null);
+
+  const syncEntries = useCallback((items: Entry[] | null, cursor: string | null) => {
     entriesRef.current = items;
     cursorRef.current = cursor;
     setEntries(items);
     setNextCursor(cursor);
   }, []);
 
+  const beginRequest = useCallback(() => {
+    activeRequestRef.current?.controller.abort();
+    const request = {
+      epoch: ++requestEpochRef.current,
+      controller: new AbortController(),
+    };
+    activeRequestRef.current = request;
+    loadingRef.current = true;
+    setBusy(true);
+    return request;
+  }, []);
+
+  const requestIsActive = useCallback(
+    (request: ActiveRequest) =>
+      mountedRef.current && activeRequestRef.current?.epoch === request.epoch,
+    [],
+  );
+
+  const finishRequest = useCallback((request: ActiveRequest) => {
+    if (activeRequestRef.current?.epoch !== request.epoch) return;
+    activeRequestRef.current = null;
+    loadingRef.current = false;
+    if (mountedRef.current) setBusy(false);
+  }, []);
+
+  const refreshEntries = useCallback(
+    async (targetMonth: string) => {
+      const request = beginRequest();
+      syncEntries(null, null);
+      setError('');
+      setSessionUnavailable(false);
+
+      try {
+        const result = await fetchMonthCoverage(
+          null,
+          null,
+          targetMonth,
+          () => requestIsActive(request),
+          request.controller.signal,
+        );
+        if (!result || !requestIsActive(request)) return;
+        syncEntries(result.entries, result.cursor);
+      } catch (failure) {
+        if (!requestIsActive(request)) return;
+        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
+        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
+      } finally {
+        finishRequest(request);
+      }
+    },
+    [beginRequest, finishRequest, requestIsActive, syncEntries],
+  );
+
   const loadThroughMonth = useCallback(
     async (targetMonth: string) => {
       if (loadingRef.current) return;
-      loadingRef.current = true;
-      setBusy(true);
+      const request = beginRequest();
 
       try {
         const result = await fetchMonthCoverage(
           entriesRef.current,
           cursorRef.current,
           targetMonth,
-          () => mountedRef.current,
+          () => requestIsActive(request),
+          request.controller.signal,
         );
-        if (!result || !mountedRef.current) return;
+        if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
       } catch (failure) {
-        if (!mountedRef.current) return;
+        if (!requestIsActive(request)) return;
         if (isSessionUnavailable(failure)) setSessionUnavailable(true);
         setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
       } finally {
-        loadingRef.current = false;
-        if (mountedRef.current) setBusy(false);
+        finishRequest(request);
       }
     },
-    [syncEntries],
+    [beginRequest, finishRequest, requestIsActive, syncEntries],
   );
 
   const loadThroughListPage = useCallback(
@@ -70,8 +127,7 @@ export function useLibraryEntries(initialMonth: string) {
       }
       if (loadingRef.current) return null;
 
-      loadingRef.current = true;
-      setBusy(true);
+      const request = beginRequest();
       setError('');
       setSessionUnavailable(false);
       try {
@@ -79,51 +135,37 @@ export function useLibraryEntries(initialMonth: string) {
           current,
           cursor,
           targetPage,
-          () => mountedRef.current,
+          () => requestIsActive(request),
           requestLimit,
+          request.controller.signal,
         );
-        if (!result || !mountedRef.current) return null;
+        if (!result || !requestIsActive(request)) return null;
         syncEntries(result.entries, result.cursor);
         return result;
       } catch (failure) {
-        if (!mountedRef.current) return null;
+        if (!requestIsActive(request)) return null;
         if (isSessionUnavailable(failure)) setSessionUnavailable(true);
         setError(failure instanceof Error ? failure.message : '記録の続きを取得できませんでした。');
         return null;
       } finally {
-        loadingRef.current = false;
-        if (mountedRef.current) setBusy(false);
+        finishRequest(request);
       }
     },
-    [syncEntries],
+    [beginRequest, finishRequest, requestIsActive, syncEntries],
   );
 
   useEffect(() => {
-    let active = true;
     mountedRef.current = true;
-    loadingRef.current = true;
+    void refreshEntries(initialMonthRef.current);
 
-    async function loadInitialEntries() {
-      try {
-        const result = await fetchMonthCoverage(null, null, initialMonthRef.current, () => active);
-        if (!active || !result) return;
-        syncEntries(result.entries, result.cursor);
-      } catch (failure) {
-        if (!active) return;
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
-        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
-      } finally {
-        loadingRef.current = false;
-        if (active) setBusy(false);
-      }
-    }
-
-    void loadInitialEntries();
     return () => {
-      active = false;
       mountedRef.current = false;
+      const activeRequest = activeRequestRef.current;
+      activeRequestRef.current = null;
+      loadingRef.current = false;
+      activeRequest?.controller.abort();
     };
-  }, [syncEntries]);
+  }, [refreshEntries]);
 
   return {
     entries,
@@ -135,6 +177,7 @@ export function useLibraryEntries(initialMonth: string) {
     setSessionUnavailable,
     loadThroughMonth,
     loadThroughListPage,
+    refreshEntries,
     mountedRef,
   };
 }

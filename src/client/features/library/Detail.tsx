@@ -36,6 +36,7 @@ import { RegistrationCaptcha } from '../diary/RegistrationCaptcha';
 import { ConfirmDialog } from '../../app/ConfirmDialog';
 import { Icon } from '../../app/Icon';
 import { mergeEntryGenerationProgress } from './generationProgress';
+import { completeEntryDetail, isCurrentEntryGeneration } from './entryDetail';
 
 function generationActionErrorMessage(failure: unknown, fallback: string): string {
   if (failure instanceof ApiClientError && failure.code === 'DEPENDENCY_UNAVAILABLE') {
@@ -74,46 +75,52 @@ function DetailContent({
   const entryRef = useRef<EntryDetail | null>(null);
   const detailReadVersionRef = useRef(0);
   const setEntrySafely: Dispatch<SetStateAction<EntryDetail | null>> = useCallback((update) => {
+    const current = entryRef.current;
+    const incoming = typeof update === 'function' ? update(current) : update;
     detailReadVersionRef.current++;
-    setEntry((current) => {
-      const incoming = typeof update === 'function' ? update(current) : update;
-      if (!incoming) return null;
-      const safeLatestGeneration =
-        incoming.latestGeneration?.id === incoming.latestGenerationId &&
-        incoming.latestGeneration.entryId === incoming.id &&
-        incoming.latestGeneration.entryRevision <= incoming.revision
-          ? incoming.latestGeneration
-          : null;
-      const safeLastSuccessfulGeneration =
-        incoming.lastSuccessfulGeneration?.status === 'succeeded' &&
-        incoming.lastSuccessfulGeneration.entryId === incoming.id &&
-        incoming.lastSuccessfulGeneration.entryRevision <= incoming.revision
-          ? incoming.lastSuccessfulGeneration
-          : null;
-      const safeIncoming = {
-        ...incoming,
-        latestGeneration: safeLatestGeneration,
-        lastSuccessfulGeneration: safeLastSuccessfulGeneration,
-      };
-      if (!current || current.id !== safeIncoming.id) return safeIncoming;
-      if (safeIncoming.revision < current.revision) return current;
+    if (!incoming) {
+      entryRef.current = null;
+      setEntry(null);
+      return;
+    }
 
-      const merged = mergeEntryGenerationProgress(current, safeIncoming);
-      const latestSuccess =
-        merged.latestGeneration?.id === merged.latestGenerationId &&
-        merged.latestGeneration.status === 'succeeded'
-          ? merged.latestGeneration
-          : null;
-      const lastSuccessfulGeneration =
-        latestSuccess ??
-        safeLastSuccessfulGeneration ??
-        (current.lastSuccessfulGeneration?.status === 'succeeded' &&
-        current.lastSuccessfulGeneration.entryId === merged.id &&
-        current.lastSuccessfulGeneration.entryRevision <= merged.revision
-          ? current.lastSuccessfulGeneration
-          : null);
-      return { ...merged, lastSuccessfulGeneration };
-    });
+    const safeLatestGeneration = isCurrentEntryGeneration(incoming, incoming.latestGeneration)
+      ? incoming.latestGeneration
+      : null;
+    const safeLastSuccessfulGeneration =
+      incoming.lastSuccessfulGeneration?.status === 'succeeded' &&
+      incoming.lastSuccessfulGeneration.entryId === incoming.id &&
+      incoming.lastSuccessfulGeneration.entryRevision <= incoming.revision
+        ? incoming.lastSuccessfulGeneration
+        : null;
+    const safeIncoming = {
+      ...incoming,
+      latestGeneration: safeLatestGeneration,
+      lastSuccessfulGeneration: safeLastSuccessfulGeneration,
+    };
+    let next: EntryDetail = safeIncoming;
+    if (current?.id === safeIncoming.id) {
+      if (safeIncoming.revision < current.revision) next = current;
+      else {
+        const merged = mergeEntryGenerationProgress(current, safeIncoming);
+        const latestSuccess =
+          merged.latestGeneration?.id === merged.latestGenerationId &&
+          merged.latestGeneration.status === 'succeeded'
+            ? merged.latestGeneration
+            : null;
+        const lastSuccessfulGeneration =
+          latestSuccess ??
+          safeLastSuccessfulGeneration ??
+          (current.lastSuccessfulGeneration?.status === 'succeeded' &&
+          current.lastSuccessfulGeneration.entryId === merged.id &&
+          current.lastSuccessfulGeneration.entryRevision <= merged.revision
+            ? current.lastSuccessfulGeneration
+            : null);
+        next = { ...merged, lastSuccessfulGeneration };
+      }
+    }
+    entryRef.current = next;
+    setEntry(next);
   }, []);
   const [error, setError] = useState('');
   const [pollingError, setPollingError] = useState('');
@@ -133,9 +140,6 @@ function DetailContent({
   const generationFlowRef = useRef(false);
   const generationCaptchaAttemptRef = useRef(0);
   const generationRequestRef = useRef(false);
-  useLayoutEffect(() => {
-    entryRef.current = entry;
-  }, [entry]);
   const autoGenerationRequestedRef = useRef(
     Boolean(
       location.state &&
@@ -266,53 +270,13 @@ function DetailContent({
   useEffect(() => {
     let active = true;
     const readVersion = ++detailReadVersionRef.current;
-    const startingEntry = entryRef.current;
-    const isReadCurrent = () => {
-      const current = entryRef.current;
-      return (
-        active &&
-        readVersion === detailReadVersionRef.current &&
-        (!startingEntry ||
-          !current ||
-          (current.id === startingEntry.id &&
-            current.revision === startingEntry.revision &&
-            current.latestGenerationId === startingEntry.latestGenerationId))
-      );
-    };
-    getEntry(id)
-      .then(async (result) => {
-        if (!isReadCurrent() || result.id !== id) return;
-        if (!result.latestGenerationId) {
-          setEntrySafely(result);
-          return;
-        }
-        let latestGeneration =
-          result.latestGeneration?.id === result.latestGenerationId &&
-          result.latestGeneration.entryId === result.id &&
-          result.latestGeneration.entryRevision <= result.revision
-            ? result.latestGeneration
-            : null;
-        if (!latestGeneration)
-          latestGeneration = await getGeneration(result.latestGenerationId).catch(() => null);
-        if (!isReadCurrent()) return;
-        const validLatestGeneration =
-          latestGeneration?.id === result.latestGenerationId &&
-          latestGeneration.entryId === result.id &&
-          latestGeneration.entryRevision <= result.revision
-            ? latestGeneration
-            : null;
-        const updated = {
-          ...result,
-          latestGeneration: validLatestGeneration,
-          lastSuccessfulGeneration:
-            validLatestGeneration?.status === 'succeeded'
-              ? validLatestGeneration
-              : result.lastSuccessfulGeneration,
-        };
-        setEntrySafely(updated);
+    const guard = createDetailReadGuard(readVersion);
+    loadLatestEntry(id, guard.isCurrent, 'initial')
+      .then((result) => {
+        if (active && result && guard.isCurrent()) setEntrySafely(result);
       })
       .catch((e: Error) => {
-        if (active) setError(e.message);
+        if (active && guard.isCurrent()) setError(e.message);
       });
     return () => {
       active = false;
@@ -372,6 +336,11 @@ function DetailContent({
     !generationForCurrentRevision &&
     !hasUnresolvedRequest,
   );
+  const showExternalAiPolicy =
+    config.dataMode === 'live' &&
+    ((showGenerationAction && canStartGeneration) ||
+      generationCaptchaOpen ||
+      generationCaptchaRetry);
   const draftSavedConfirmation = Boolean(
     entry && draftSavedEntryId === id && !generation && !generationReferenceUnavailable && !editing,
   );
@@ -435,12 +404,12 @@ function DetailContent({
     alert?.scrollIntoView({ block: 'center' });
   }, [displayError, editFormVisible, validationFailureCount]);
 
-  async function readLatestEntry(): Promise<EntryDetail> {
-    const readVersion = detailReadVersionRef.current;
+  function createDetailReadGuard(readVersion = detailReadVersionRef.current) {
     const startingEntry = entryRef.current;
     const isReadCurrent = () => {
       const current = entryRef.current;
       return (
+        activeRef.current &&
         readVersion === detailReadVersionRef.current &&
         (!startingEntry ||
           !current ||
@@ -454,42 +423,39 @@ function DetailContent({
       if (current) return current;
       throw new Error('記録の状態が更新されています。最新の状態を読み直してください。');
     };
-    let latest = await getEntry(id);
-    if (!isReadCurrent() || latest.id !== id) return currentEntryAfterStaleRead();
-    if (latest.latestGenerationId) {
-      let currentGeneration =
-        latest.latestGeneration?.id === latest.latestGenerationId &&
-        latest.latestGeneration.entryId === latest.id &&
-        latest.latestGeneration.entryRevision <= latest.revision
-          ? latest.latestGeneration
-          : null;
-      if (!currentGeneration)
-        currentGeneration = await getGeneration(latest.latestGenerationId).catch(() => null);
-      if (!isReadCurrent()) return currentEntryAfterStaleRead();
-      const validLatestGeneration =
-        currentGeneration?.id === latest.latestGenerationId &&
-        currentGeneration.entryId === latest.id &&
-        currentGeneration.entryRevision <= latest.revision
-          ? currentGeneration
-          : null;
-      latest = {
-        ...latest,
-        latestGeneration: validLatestGeneration,
-        lastSuccessfulGeneration:
-          validLatestGeneration?.status === 'succeeded'
-            ? validLatestGeneration
-            : latest.lastSuccessfulGeneration,
-      };
-      if (
-        validLatestGeneration &&
-        validLatestGeneration.status !== 'queued' &&
-        validLatestGeneration.status !== 'running'
-      )
-        setPollingError('');
-    }
-    entryRef.current = latest;
-    detailReadVersionRef.current++;
+    return { isCurrent: isReadCurrent, currentEntryAfterStaleRead };
+  }
+
+  async function loadLatestEntry(
+    entryId: string,
+    isReadCurrent: () => boolean,
+    mode: 'initial' | 'foreground',
+  ): Promise<EntryDetail | null> {
+    const result = await getEntry(entryId);
+    if (!isReadCurrent() || result.id !== entryId) return null;
+    const latest = await completeEntryDetail(result, getGeneration, mode);
+    if (!isReadCurrent()) return null;
+    if (
+      latest.latestGeneration &&
+      latest.latestGeneration.status !== 'queued' &&
+      latest.latestGeneration.status !== 'running'
+    )
+      setPollingError('');
     return latest;
+  }
+
+  async function readLatestEntry(): Promise<EntryDetail> {
+    const guard = createDetailReadGuard();
+    let latest: EntryDetail | null;
+    try {
+      latest = await loadLatestEntry(id, guard.isCurrent, 'foreground');
+    } catch (failure) {
+      if (!guard.isCurrent()) return guard.currentEntryAfterStaleRead();
+      throw failure;
+    }
+    if (!latest || !guard.isCurrent()) return guard.currentEntryAfterStaleRead();
+    setEntrySafely(latest);
+    return entryRef.current ?? latest;
   }
 
   function applyGeneration(currentGeneration: Generation) {
@@ -510,7 +476,6 @@ function DetailContent({
           ? currentGeneration
           : current.lastSuccessfulGeneration,
     };
-    entryRef.current = updated;
     setActiveGeneration(currentGeneration);
     setEntrySafely(updated);
   }
@@ -523,7 +488,6 @@ function DetailContent({
       if (!activeRef.current) return;
       if (latest.latestGenerationId === receipt.generationId && latest.latestGeneration)
         applyGeneration(latest.latestGeneration);
-      else setEntrySafely(latest);
       setReceiptUncertain(false);
       setGenerationCaptchaRetry(false);
       setForegroundActionFailed(false);
@@ -532,6 +496,7 @@ function DetailContent({
     } catch {
       if (!activeRef.current) return;
       setReceiptUncertain(true);
+      setForegroundActionFailed(true);
       setError('受付結果を受け取りましたが、状態を読み込めません。受付結果を再確認してください。');
     }
   }
@@ -574,13 +539,23 @@ function DetailContent({
     if (
       apiFailure?.code === 'ENTRY_BUSY' ||
       apiFailure?.code === 'IDEMPOTENCY_CONFLICT' ||
-      apiFailure?.code === 'REVISION_CONFLICT'
+      apiFailure?.code === 'REVISION_CONFLICT' ||
+      apiFailure?.code === 'REVISION_ALREADY_GENERATED'
     ) {
       const latest = await readLatestEntry().catch(() => null);
       if (activeRef.current && latest) {
-        setEntrySafely(latest);
         const status = latest.latestGeneration?.status;
-        if (status === 'queued' || status === 'running') {
+        if (
+          apiFailure.code === 'REVISION_ALREADY_GENERATED' &&
+          status === 'succeeded' &&
+          latest.latestGeneration?.entryRevision === latest.revision
+        ) {
+          setReceiptUncertain(false);
+          setGenerationCaptchaRetry(false);
+          setError('');
+          setForegroundActionFailed(false);
+          await refreshQuota({ fresh: true });
+        } else if (status === 'queued' || status === 'running') {
           setReceiptUncertain(false);
           setGenerationCaptchaRetry(false);
           setError('');
@@ -657,14 +632,15 @@ function DetailContent({
     try {
       const latest = await readLatestEntry();
       if (!activeRef.current) return;
-      setEntrySafely(latest);
       setDraftDate(latest.diaryDate);
       setDraftBody(latest.body);
       setReceiptUncertain(false);
       await refreshQuota({ fresh: true });
     } catch (failure) {
-      if (activeRef.current)
+      if (activeRef.current) {
+        setForegroundActionFailed(true);
         setError(failure instanceof Error ? failure.message : '最新の状態を読み込めませんでした。');
+      }
     } finally {
       if (activeRef.current) {
         actionInFlightRef.current = false;
@@ -1015,6 +991,9 @@ function DetailContent({
       )}
       {entry && !editing && (
         <div className="primary-action-dock detail-action-dock">
+          {showExternalAiPolicy && (
+            <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
+          )}
           {quota && !showQuotaStatus && !pending && !unknownGeneration && (
             <button
               className="button-text quota-refresh-action"

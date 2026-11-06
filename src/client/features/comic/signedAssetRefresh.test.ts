@@ -39,6 +39,44 @@ describe('expired signed asset refresh', () => {
     ).toBe(true);
   });
 
+  it('uses expiresAt with elapsed time when a request takes time to return', () => {
+    const expiresAt = new Date(requestedAtWall + 70_000).toISOString();
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 60_000,
+        requestedAtWall + 60_000,
+        expiresAt,
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 70_000,
+        requestedAtWall + 70_000,
+        expiresAt,
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to elapsed clocks when the client wall clock is behind expiresAt', () => {
+    const expiresAt = new Date(requestedAtWall + 3_600_000 + 60_000).toISOString();
+    expect(
+      shouldRenewExpiredAsset(
+        requestedAt,
+        requestedAtWall,
+        false,
+        requestedAt + 65_000,
+        requestedAtWall + 65_000,
+        expiresAt,
+      ),
+    ).toBe(true);
+  });
+
   it('uses elapsed wall time when the monotonic clock pauses during device sleep', () => {
     expect(
       shouldRenewExpiredAsset(

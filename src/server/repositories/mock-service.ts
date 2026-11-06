@@ -20,11 +20,16 @@ export function createMockEntry(
   owner: string,
   input: z.infer<typeof createEntrySchema>,
 ) {
+  const requestKey = `${owner}:${input.createRequestId}`;
+  if (repository.entryTombstones.has(requestKey)) throw new ApiError(404, 'NOT_FOUND');
   const existing = [...repository.entries.values()].find(
     (x) => x.owner === owner && x.requestId === input.createRequestId,
   );
   if (existing) {
-    if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
+    if (
+      existing.createFingerprint !==
+      JSON.stringify([input.diaryDate, input.body, input.consentVersion])
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     return existing.entry;
   }
@@ -43,7 +48,12 @@ export function createMockEntry(
     createdAt: now,
     updatedAt: now,
   };
-  repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
+  repository.entries.set(entry.id, {
+    owner,
+    requestId: input.createRequestId,
+    createFingerprint: JSON.stringify([input.diaryDate, input.body, input.consentVersion]),
+    entry,
+  });
   return entry;
 }
 
@@ -121,6 +131,16 @@ export function reserveMockGeneration(
     statusUrl: `/api/v1/generations/${id}`,
   });
   if (old) return receipt(old.generation.id);
+  if (
+    [...repository.generations.values()].some(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === entry.id &&
+        stored.generation.entryRevision === input.expectedRevision &&
+        stored.generation.status === 'succeeded',
+    )
+  )
+    throw new ApiError(409, 'REVISION_ALREADY_GENERATED');
   const counter = `${owner}:${jstToday()}`;
   const count = repository.counts.get(counter) ?? 0;
   if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');

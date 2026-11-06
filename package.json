@@ -16,6 +16,7 @@
     "build": "vite build && node scripts/check-pwa-build.mjs",
     "build:staging": "node scripts/build-environment.mjs staging",
     "build:production": "node scripts/build-environment.mjs production",
+    "build:demo": "node scripts/build-environment.mjs demo",
     "test:release-environment": "node scripts/test-release-environment.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "format:check": "oxfmt --check ."

@@ -388,6 +388,36 @@ describe('live diary HTTP API', () => {
     expect(await unavailable.text()).not.toContain('database secret text');
   });
 
+  it('maps entry creation policy failures to safe HTTP 429 guidance', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const boundary = createSupabaseBoundary();
+    const app = appWith(boundary);
+    const input = {
+      createRequestId: crypto.randomUUID(),
+      diaryDate: '2026-11-01',
+      body: '架空の作成制限テスト',
+      consentVersion: 'v1',
+    };
+
+    for (const [databaseCode, apiCode] of [
+      ['ENTRY_OWNER_CREATE_LIMIT_REACHED', 'ENTRY_CREATE_RATE_LIMIT_REACHED'],
+      ['ENTRY_GLOBAL_CREATE_LIMIT_REACHED', 'ENTRY_CREATE_RATE_LIMIT_REACHED'],
+      ['ENTRY_OWNER_RETAINED_LIMIT_REACHED', 'ENTRY_RETAINED_LIMIT_REACHED'],
+      ['ENTRY_GLOBAL_RETAINED_LIMIT_REACHED', 'ENTRY_RETAINED_LIMIT_REACHED'],
+    ]) {
+      boundary.rpcOverrides.set('create_entry', {
+        status: 400,
+        body: { code: 'P0001', message: databaseCode, details: 'private SQL detail' },
+      });
+      const response = await apiRequest(app, environment, token, '/entries', 'POST', input);
+      const body = await response.json();
+      expect(response.status).toBe(429);
+      expect(body.error.code).toBe(apiCode);
+      expect(body.error.message).not.toContain('private SQL detail');
+    }
+  });
+
   it('returns stable descending composite cursor pages and asks PostgREST to filter owner, deleted, and expired rows', async () => {
     const environment = liveEnvironment();
     const owner = crypto.randomUUID();

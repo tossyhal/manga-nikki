@@ -313,8 +313,10 @@ describe('OpenAIの利用制限エラーの分類', () => {
     { status: 429, code: 'insufficient_quota' },
     { status: 429, type: 'insufficient_quota' },
     { status: 429, code: 'credit_balance_exhausted' },
+    { status: 429, code: 'billing_hard_limit_reached' },
     { status: 429, error: { code: 'organization_usage_limit_exceeded' } },
     { status: 429, code: 'project_spend_limit_exceeded' },
+    { status: 429, error: { type: 'project_usage_limit_exceeded' } },
     { status: 429, code: 'organization_spend_limit_exceeded' },
   ])('残高・利用額上限を頻度制限と区別する', async (error) => {
     imageCall.mockRejectedValue(error);

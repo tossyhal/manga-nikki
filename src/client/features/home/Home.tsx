@@ -1,8 +1,7 @@
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { type Entry, type Generation } from '../../../shared/schemas';
-import { jstToday } from '../../../shared/date';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
 import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
@@ -13,6 +12,7 @@ import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { AppStateCard, configUnavailableMessage } from '../../app/AppStateCard';
 import { useHomeRecords } from './useHomeRecords';
+import { useJstToday } from '../../lib/useJstToday';
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
   return (
@@ -103,19 +103,34 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
           <Icon name="chevron-right" size={18} />
         </Link>
       </div>
-      <Link
-        className="home-today-image"
-        to={`/entries/${encodeURIComponent(entry.id)}`}
-        aria-label={`${comicTitle}の記録を読む`}
-      >
-        <EntryThumbnail
-          preview={preview}
-          className="home-today-image-preview"
-          iconSize={32}
-          ariaHidden
-          placeholderLabel={placeholder}
-        />
-      </Link>
+      <div className="home-today-image">
+        <Link
+          className="home-today-image-link"
+          to={`/entries/${encodeURIComponent(entry.id)}`}
+          aria-label={`${comicTitle}の記録を読む`}
+        >
+          <EntryThumbnail
+            preview={preview}
+            className="home-today-image-preview"
+            iconSize={32}
+            ariaHidden
+            placeholderLabel={placeholder}
+          />
+        </Link>
+        {preview.imageError && (
+          <button
+            className="thumbnail-retry-button"
+            type="button"
+            aria-label="漫画画像を再読み込み"
+            aria-disabled={preview.isLoading}
+            onClick={() => {
+              if (!preview.isLoading) preview.retryImage();
+            }}
+          >
+            <Icon name="refresh" size={18} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -129,25 +144,30 @@ export function Home({
   configError: boolean;
   retryConfig: () => void;
 }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [recordsRetry, setRecordsRetry] = useState(0);
   const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
-  const currentDay = jstToday();
-  const todayEntries = entries.filter((entry) => entry.diaryDate === currentDay);
+  const today = useJstToday();
+  const todayEntries = entries.filter((entry) => entry.diaryDate === today);
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
-  const [sampleOpen, setSampleOpen] = useState(false);
-  const [today] = useState(() => {
-    const date = jstToday();
-    return { date, label: formatDiaryDate(date) };
-  });
+  const sampleOpen = new URLSearchParams(location.search).get('sample') === '1';
+  const openedSampleInApp =
+    (location.state as { openedSampleInApp?: boolean } | null)?.openedSampleInApp === true;
+  const openSample = () => navigate('/?sample=1', { state: { openedSampleInApp: true } });
+  const closeSample = () => {
+    if (openedSampleInApp) navigate(-1);
+    else navigate('/', { replace: true });
+  };
 
   if (showSample && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
-          <button className="icon-button" type="button" onClick={() => setSampleOpen(false)}>
+          <button className="icon-button" type="button" onClick={closeSample}>
             <Icon name="back" />
             <span className="sr-only">戻る</span>
           </button>
@@ -175,11 +195,9 @@ export function Home({
 
   return (
     <div className="home-page">
-      {today && (
-        <time className="home-date" dateTime={today.date}>
-          {today.label}
-        </time>
-      )}
+      <time className="home-date" dateTime={today}>
+        {formatDiaryDate(today)}
+      </time>
       <section className="today-section" aria-labelledby="today-heading">
         <h1 id="today-heading" className={showSample && !configError ? undefined : 'sr-only'}>
           {showSample && !configError ? 'サンプル' : '今日の記録'}
@@ -192,11 +210,7 @@ export function Home({
             role="alert"
             actions={
               <>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="button button-secondary" type="button" onClick={openSample}>
                   サンプルを見る
                 </button>
                 <button className="button button-secondary" type="button" onClick={retryConfig}>
@@ -211,11 +225,7 @@ export function Home({
               <h2>{pageComic.title}</h2>
               <p>サンプル漫画</p>
               <div className="home-today-actions">
-                <button
-                  className="today-write-link"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="today-write-link" type="button" onClick={openSample}>
                   <span>漫画を読む</span>
                   <Icon name="chevron-right" size={18} />
                 </button>

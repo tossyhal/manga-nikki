@@ -21,6 +21,7 @@ const allowedEnvExamples = new Set([
   '.env.example',
   '.env.staging.example',
   '.env.production.example',
+  '.env.demo.example',
   '.dev.vars.example',
 ]);
 
@@ -71,10 +72,7 @@ async function assertPublicConfigRejected(args, env, variable, sentinels) {
     .filter((part) => typeof part === 'string')
     .join('\n');
   assert.ok(output.includes(variable), '拒否メッセージに変数名がありません。');
-  assert.ok(
-    output.includes('Supabaseサーバー専用キー形式'),
-    '拒否理由が固定メッセージにありません。',
-  );
+  assert.ok(output.includes('サーバー専用キー形式'), '拒否理由が固定メッセージにありません。');
   for (const sentinel of sentinels) {
     assert.ok(!output.includes(sentinel), '拒否メッセージに公開設定値が含まれています。');
   }
@@ -116,7 +114,13 @@ try {
     'VITE_SUPABASE_PUBLISHABLE_KEY=staging-publishable-sentinel',
     'VITE_TURNSTILE_SITE_KEY=staging-sitekey-sentinel',
   ].join('\n');
+  const safeDemoEnvironment = [
+    'VITE_SUPABASE_URL=https://demo-public-sentinel.invalid',
+    'VITE_SUPABASE_PUBLISHABLE_KEY=demo-publishable-sentinel',
+    'VITE_TURNSTILE_SITE_KEY=demo-sitekey-sentinel',
+  ].join('\n');
   await writeFile(path.join(fixtureRoot, '.env.staging.local'), safeStagingEnvironment);
+  await writeFile(path.join(fixtureRoot, '.env.demo.local'), safeDemoEnvironment);
   await writeFile(
     path.join(fixtureRoot, '.env.production.local'),
     'VITE_SUPABASE_URL=wrong-production-target-sentinel.invalid\n',
@@ -201,6 +205,9 @@ try {
     'local-env-sitekey-sentinel',
     'development-local-sentinel',
     'wrong-production-target-sentinel',
+    'demo-public-sentinel',
+    'demo-publishable-sentinel',
+    'demo-sitekey-sentinel',
     'process-env-supabase-sentinel',
     'process-env-publishable-sentinel',
     'process-env-sitekey-sentinel',
@@ -230,7 +237,194 @@ try {
     );
   }
 
-  console.log('Release environment isolation negative case passed.');
+  await rm(path.join(fixtureRoot, 'dist'), { recursive: true, force: true });
+  await rm(path.join(fixtureRoot, '.env.demo.local'));
+  let missingDemoFailure;
+  try {
+    await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'demo'], {
+      cwd: fixtureRoot,
+      env: childEnvironment,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 15_000,
+    });
+  } catch (error) {
+    missingDemoFailure = error;
+  }
+  assert.ok(missingDemoFailure, '公開設定がないdemo buildを受け付けてしまいました。');
+  assert.notEqual(missingDemoFailure.code, 'ETIMEDOUT');
+  const missingDemoOutput = [missingDemoFailure.stdout, missingDemoFailure.stderr]
+    .filter((part) => typeof part === 'string')
+    .join('\n');
+  for (const variable of [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_TURNSTILE_SITE_KEY',
+  ]) {
+    assert.ok(missingDemoOutput.includes(variable), `missing設定に変数名がありません: ${variable}`);
+  }
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'missing設定の拒否後にclient成果物が作られています。',
+  );
+
+  const demoSecret = 'sb_secret_demo-build-sentinel';
+  await writeFile(
+    path.join(fixtureRoot, '.env.demo.local'),
+    [
+      'VITE_SUPABASE_URL=https://demo-public-sentinel.invalid',
+      `VITE_SUPABASE_PUBLISHABLE_KEY=${demoSecret}`,
+      'VITE_TURNSTILE_SITE_KEY=demo-sitekey-sentinel',
+    ].join('\n'),
+  );
+  await assertPublicConfigRejected(
+    ['scripts/build-environment.mjs', 'demo'],
+    childEnvironment,
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    [demoSecret],
+  );
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'secret形式の拒否後にclient成果物が作られています。',
+  );
+
+  const demoOpenAiKey = 'sk-proj-demo-build-sentinel';
+  await writeFile(
+    path.join(fixtureRoot, '.env.demo.local'),
+    [
+      'VITE_SUPABASE_URL=https://demo-public-sentinel.invalid',
+      `VITE_SUPABASE_PUBLISHABLE_KEY=${demoOpenAiKey}`,
+      'VITE_TURNSTILE_SITE_KEY=demo-sitekey-sentinel',
+    ].join('\n'),
+  );
+  await assertPublicConfigRejected(
+    ['scripts/build-environment.mjs', 'demo'],
+    childEnvironment,
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    [demoOpenAiKey],
+  );
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'OpenAI secret形式の拒否後にclient成果物が作られています。',
+  );
+
+  const demoServerSecret = 'demo-server-secret-sentinel';
+  await writeFile(
+    path.join(fixtureRoot, '.env.demo.local'),
+    [
+      'VITE_SUPABASE_URL=https://demo-public-sentinel.invalid',
+      'VITE_SUPABASE_PUBLISHABLE_KEY=demo-publishable-sentinel',
+      'VITE_TURNSTILE_SITE_KEY=demo-sitekey-sentinel',
+      `OPENAI_API_KEY=${demoServerSecret}`,
+    ].join('\n'),
+  );
+  let unsupportedDemoFailure;
+  try {
+    await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'demo'], {
+      cwd: fixtureRoot,
+      env: childEnvironment,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 15_000,
+    });
+  } catch (error) {
+    unsupportedDemoFailure = error;
+  }
+  assert.ok(unsupportedDemoFailure, 'demoの公開設定にWorker secretを受け付けてしまいました。');
+  assert.notEqual(unsupportedDemoFailure.code, 'ETIMEDOUT');
+  const unsupportedDemoOutput = [unsupportedDemoFailure.stdout, unsupportedDemoFailure.stderr]
+    .filter((part) => typeof part === 'string')
+    .join('\n');
+  assert.ok(unsupportedDemoOutput.includes('OPENAI_API_KEY'));
+  assert.ok(!unsupportedDemoOutput.includes(demoServerSecret));
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'Worker secret設定の拒否後にclient成果物が作られています。',
+  );
+
+  await writeFile(path.join(fixtureRoot, '.env.demo.local'), safeDemoEnvironment);
+  try {
+    await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'demo'], {
+      cwd: fixtureRoot,
+      env: childEnvironment,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (error) {
+    const details = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    throw new Error(`隔離fixtureのdemo buildが失敗しました。${details ? `\n${details}` : ''}`);
+  }
+
+  const demoArtifactFiles = await collectFiles(path.join(fixtureRoot, 'dist'));
+  const demoWorkerConfigPath = demoArtifactFiles.find(
+    (file) => path.basename(file) === 'wrangler.json',
+  );
+  assert.ok(demoWorkerConfigPath, 'demo Worker設定が成果物にありません。');
+  const validDemoWorkerConfig = await readFile(demoWorkerConfigPath, 'utf8');
+  const routedDemoWorkerConfig = JSON.parse(validDemoWorkerConfig);
+  routedDemoWorkerConfig.route = 'demo.example.invalid/*';
+  await writeFile(demoWorkerConfigPath, JSON.stringify(routedDemoWorkerConfig));
+  let unexpectedRouteFailure;
+  try {
+    await execFileAsync(process.execPath, ['scripts/check-release-build.mjs'], {
+      cwd: fixtureRoot,
+      env: { ...childEnvironment, MANGA_NIKKI_RELEASE_TARGET: 'demo' },
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (error) {
+    unexpectedRouteFailure = error;
+  } finally {
+    await writeFile(demoWorkerConfigPath, validDemoWorkerConfig);
+  }
+  assert.ok(unexpectedRouteFailure, 'route単数形があるdemo設定を受け付けてしまいました。');
+
+  const demoArtifactContents = await Promise.all(demoArtifactFiles.map((file) => readFile(file)));
+  const demoArtifactText = Buffer.concat(demoArtifactContents).toString('utf8');
+  for (const sentinel of [
+    'local-env-sentinel',
+    'local-env-publishable-sentinel',
+    'local-env-sitekey-sentinel',
+    'development-local-sentinel',
+    'wrong-production-target-sentinel',
+    'staging-public-sentinel',
+    'staging-publishable-sentinel',
+    'staging-sitekey-sentinel',
+    'process-env-supabase-sentinel',
+    'process-env-publishable-sentinel',
+    'process-env-sitekey-sentinel',
+    'worker-secret-sentinel',
+    'turnstile-secret-sentinel',
+    'ai-secret-sentinel',
+    'process-env-server-secret-sentinel',
+    'process-env-turnstile-secret-sentinel',
+    'process-env-ai-secret-sentinel',
+    'should-be-ignored',
+  ]) {
+    assert.ok(
+      !demoArtifactText.includes(sentinel),
+      `demo成果物へ別環境の値が混入しました: ${sentinel}`,
+    );
+  }
+
+  const demoClientText = demoArtifactContents
+    .filter((_, index) =>
+      demoArtifactFiles[index].startsWith(path.join(fixtureRoot, 'dist/client')),
+    )
+    .map((contents) => contents.toString('utf8'))
+    .join('\n');
+  for (const sentinel of [
+    'https://demo-public-sentinel.invalid',
+    'demo-publishable-sentinel',
+    'demo-sitekey-sentinel',
+  ]) {
+    assert.ok(
+      demoClientText.includes(sentinel),
+      `demo公開設定がclient成果物にありません: ${sentinel}`,
+    );
+  }
+
+  console.log('Release environment isolation and demo target checks passed.');
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }

@@ -68,6 +68,7 @@ export class LiveGenerationError extends Error {
   constructor(
     public readonly status: 400 | 401 | 403 | 404 | 409 | 429 | 503,
     public readonly code: string,
+    public readonly retryableDependency = false,
   ) {
     super(code);
   }
@@ -80,6 +81,7 @@ const rpcFailures: Record<string, { status: LiveGenerationError['status']; code:
   NOT_FOUND: { status: 404, code: 'NOT_FOUND' },
   IDEMPOTENCY_CONFLICT: { status: 409, code: 'IDEMPOTENCY_CONFLICT' },
   REVISION_CONFLICT: { status: 409, code: 'REVISION_CONFLICT' },
+  REVISION_ALREADY_GENERATED: { status: 409, code: 'REVISION_ALREADY_GENERATED' },
   ENTRY_BUSY: { status: 409, code: 'ENTRY_BUSY' },
   USER_LIMIT_REACHED: { status: 429, code: 'USER_LIMIT_REACHED' },
   GLOBAL_LIMIT_REACHED: { status: 429, code: 'GLOBAL_LIMIT_REACHED' },
@@ -92,15 +94,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function unavailable(): LiveGenerationError {
-  return new LiveGenerationError(503, 'DEPENDENCY_UNAVAILABLE');
+function unavailable(retryableDependency = false): LiveGenerationError {
+  return new LiveGenerationError(503, 'DEPENDENCY_UNAVAILABLE', retryableDependency);
 }
 
-function rpcError(error: unknown): never {
+function rpcError(error: unknown, status: number): never {
   if (isRecord(error) && error.code === 'P0001' && typeof error.message === 'string') {
     const failure = rpcFailures[error.message];
     if (failure) throw new LiveGenerationError(failure.status, failure.code);
+    throw unavailable();
   }
+  if (
+    status === 0 ||
+    status === 408 ||
+    status === 429 ||
+    (status >= 500 && status <= 599 && status !== 501 && status !== 505)
+  )
+    throw unavailable(true);
   throw unavailable();
 }
 
@@ -111,8 +121,8 @@ export async function callGenerationRpc(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const client = createServerRpcClient(environment, fetcher);
-  const { data, error } = await client.rpc(name, args);
-  if (error) rpcError(error);
+  const { data, error, status } = await client.rpc(name, args);
+  if (error) rpcError(error, status);
   return data;
 }
 
@@ -436,7 +446,7 @@ export async function getLiveGeneration(
   return mapGeneration(generation, toEntry(entry), true);
 }
 
-export async function getLiveMockAssetUrl(
+export async function getLiveAssetUrl(
   context: GenerationContext,
   assetId: string,
 ): Promise<{ url: string; expiresAt: string } | null> {
@@ -637,3 +647,5 @@ async function getLiveComicAssetUrl(
     expiresAt: new Date(signingStartedAt + 60_000).toISOString(),
   };
 }
+
+export { getLiveAssetUrl as getLiveMockAssetUrl };

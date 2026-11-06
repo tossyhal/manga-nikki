@@ -24,12 +24,13 @@ export async function fetchMonthCoverage(
   initialCursor: string | null,
   targetMonth: string,
   shouldContinue: () => boolean,
+  signal?: AbortSignal,
 ) {
   let entries = initialEntries;
   let cursor = initialCursor;
 
   if (entries === null) {
-    const firstPage = await getEntries({ limit: pageSize });
+    const firstPage = await getEntries({ limit: pageSize, signal });
     if (!shouldContinue()) return null;
     entries = firstPage.items;
     cursor = firstPage.nextCursor;
@@ -42,7 +43,7 @@ export async function fetchMonthCoverage(
     }
     visitedCursors.add(cursor);
     const previousCursor = cursor;
-    const page = await getEntries({ cursor, limit: pageSize });
+    const page = await getEntries({ cursor, limit: pageSize, signal });
     if (!shouldContinue()) return null;
     if (page.nextCursor === previousCursor) {
       throw new Error('記録の続きを読み込めませんでした。再度お試しください。');
@@ -66,6 +67,7 @@ export async function fetchListCoverage(
   targetPage: number,
   shouldContinue: () => boolean,
   requestLimit = maxListRestoreRequests,
+  signal?: AbortSignal,
 ): Promise<ListCoverage | null> {
   let entries = initialEntries;
   let cursor = initialCursor;
@@ -79,7 +81,7 @@ export async function fetchListCoverage(
     }
     visitedCursors.add(cursor);
     const previousCursor = cursor;
-    const page = await getEntries({ cursor, limit: pageSize });
+    const page = await getEntries({ cursor, limit: pageSize, signal });
     if (!shouldContinue()) return null;
     if (page.nextCursor === previousCursor) {
       throw new Error('記録の続きを読み込めませんでした。再度お試しください。');

@@ -8,7 +8,7 @@
 > 現在の状態（2026-11-06時点）
 > PR#29までの変更は`main`へ統合済みです。現在の作業branchでは、OpenAI白黒生成のQueue経路に加え、画像のprivate Storage保存・DB完了確定・保存復旧・署名URL取得までをdefault Workerへ接続しています。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 >
-> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、期限削除、環境別sample buildと公開設定guardを実装しています。実生成画像はprivate `comics` bucketへ決定論的なpathで保存し、binary signature・MIME・PNG各chunk CRC・JPEGのSOS/EOI構造・寸法を照合します（8 MiB/画像、16 MiB/4コマ、2,048px/辺、4 MP/画像、16 MP/4コマ）。DB完了失敗後は保存済み画像を再検証して完了を再開し、欠損・不正画像は追加AI呼出しなしで失敗・消費確定します。本人の有効な日記、成功済みgeneration、comic内のasset参照を確認した後だけ60秒の署名URLを返し、署名直後にも状態を再確認します。閲覧中に署名URLが期限切れした場合は1回だけ自動再取得し、その後は手動操作で再試行します。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionは引き続き`sample` / `mock` / `GENERATION_ENABLED=false`で、Queue bindingもありません。DB migrationはbranchに追加中ですが共有DBへは適用していません。隔離Supabase統合では親担当者が保存・復旧・署名URL・他owner拒否・削除後404を確認しました。実AI課金・アカウント権限・品質、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境の全経路は未確認です。
+> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、期限削除、環境別sample buildと公開設定guardを実装しています。実生成画像はprivate `comics` bucketへ決定論的なpathで保存し、binary signature・MIME・PNG各chunk CRC・JPEGのSOS/EOI構造・寸法を照合します（8 MiB/画像、16 MiB/4コマ、2,048px/辺、4 MP/画像、16 MP/4コマ）。DB完了失敗後は保存済み画像を再検証して完了を再開し、欠損・不正画像は追加AI呼出しなしで失敗・消費確定します。本人の有効な日記、成功済みgeneration、comic内のasset参照を確認した後だけ60秒の署名URLを返し、署名直後にも状態を再確認します。閲覧中に署名URLが期限切れした場合は1回だけ自動再取得し、その後は手動操作で再試行します。日記の新規作成はowner50件/JST日・全体1,000件/JST日の頻度と、物理回収前100件/owner・5,000件/globalの保持上限で制限します。local-mockでは作成時fingerprintと削除tombstoneを保持して実DBの冪等契約に合わせます。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionは引き続き`sample` / `mock` / `GENERATION_ENABLED=false`で、Queue bindingもありません。独立した`demo` Wrangler targetと隔離buildを準備していますが、Cloudflare resource作成・秘密情報登録・共有DBへのmigration適用・deployは行っていません。DB migrationはbranchに追加中ですが共有DBへは適用していません。隔離Supabase統合では親担当者が保存・復旧・署名URL・他owner拒否・削除後404を確認しました。実AI課金・アカウント権限・品質、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境の全経路は未確認です。
 
 > 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
 
@@ -75,11 +75,11 @@
 
 ## PWAのビルド確認
 
-環境別のbuildは`pnpm build:staging`または`pnpm build:production`で行います。ローカル実行は成果物検査まででCloudflareへ公開しません。`develop`へのpush後、CIのdatabase/checkが成功し、所有者がRepository variable`STAGING_SAMPLE_CD_ENABLED=true`を設定した場合だけ、stagingへ架空sampleを配信します。既定は無効です。stagingは公開workers.dev URLで、個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番の配信はこのworkflowに含めず、別承認が必要です。対象環境の手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
+環境別buildはstaging / productionの架空sample確認に`pnpm build:staging` / `pnpm build:production`、隔離live-demo targetの成果物準備に`pnpm build:demo`を使います。`build:demo`には`.env.demo.local`の公開3値が必要です。これらのローカルbuildは`dist/`の成果物検査までで、Cloudflareへ公開しません。`develop`へのpush後、CIの`database`・`check`が成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`が設定されている場合に限り、既存staging Workerへ架空sampleを配信します。variableの既定は無効で、stagingでは個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番配信はこのworkflowの対象外です。手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 
 stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。Repository variable`STAGING_SAMPLE_CD_ENABLED`が未設定のため、sample CDはまだ有効化されていません。有効化に必要なGitHub Ruleset・Environment・Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowと資格情報は退役済みです。
 
-開発サーバーの起動とビルドでは、公開用設定に既知のSupabaseサーバー専用キー形式が入っている場合に処理を停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
+開発サーバーの起動とビルドでは、公開用設定に既知のSupabase / OpenAIサーバー専用キー形式が入っている場合に処理を停止します。demo buildではSupabase URLにHTTPSも要求します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
 
 PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
 
