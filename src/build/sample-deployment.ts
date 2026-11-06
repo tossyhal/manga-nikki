@@ -139,6 +139,13 @@ export type SampleDeploymentDependencies<E extends SampleDeploymentEnvironment> 
 type JsonRecord = Record<string, unknown>;
 type ApiEnvelope = JsonRecord & { success?: unknown; errors?: unknown; result?: unknown };
 
+function containsControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
 const MAX_API_RESPONSE_BYTES = 32 * 1024;
 const MAX_SMOKE_RESPONSE_BYTES = 16 * 1024;
 const SMOKE_ATTEMPTS = 5;
@@ -213,10 +220,10 @@ function validateContext<E extends SampleDeploymentEnvironment>(
           .sort()
           .join(',') ||
       Object.values(workerPublicVars).some(
-        (value) => !value || value.trim() !== value || /[\r\n\u0000]/.test(value),
+        (value) => !value || value.trim() !== value || containsControlCharacters(value),
       ) ||
       Object.values(releasePublicValues).some(
-        (value) => !value || value.trim() !== value || /[\r\n\u0000]/.test(value),
+        (value) => !value || value.trim() !== value || containsControlCharacters(value),
       ))
   ) {
     return fail('INPUT_WORKER_PUBLIC_VARS_INVALID');

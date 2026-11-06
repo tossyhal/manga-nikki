@@ -100,6 +100,10 @@ export async function withProductionWorkerSecretsFile<T>(
   const secrets = validateProductionWorkerSecrets(values);
   let directory: string | undefined;
   let filePath: string | undefined;
+  let cleanupFailed = false;
+  let operationFailed = false;
+  let operationError: unknown;
+  let result: T | undefined;
 
   try {
     directory = await mkdtemp(join(temporaryRoot, 'manga-nikki-production-secrets-'));
@@ -112,9 +116,11 @@ export async function withProductionWorkerSecretsFile<T>(
     } finally {
       await handle.close();
     }
-    return await operation(filePath);
+    result = await operation(filePath);
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
   } finally {
-    let cleanupFailed = false;
     if (filePath) {
       try {
         await unlink(filePath);
@@ -129,10 +135,11 @@ export async function withProductionWorkerSecretsFile<T>(
         cleanupFailed = true;
       }
     }
-    if (cleanupFailed) {
-      throw new SampleDeploymentFailure('WRANGLER_DEPLOY_FAILED');
-    }
   }
+
+  if (cleanupFailed) throw new SampleDeploymentFailure('WRANGLER_DEPLOY_FAILED');
+  if (operationFailed) throw operationError;
+  return result as T;
 }
 
 export async function runWranglerProductionConnectedDeploy(

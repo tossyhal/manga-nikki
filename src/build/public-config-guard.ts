@@ -96,11 +96,11 @@ function isPublishableKey(value: string): boolean {
 
 function assertUnpaddedSingleLine(value: string | undefined, variable: string): string {
   const normalized = value ?? '';
-  if (
-    normalized.length === 0 ||
-    normalized.trim() !== normalized ||
-    /[\u0000-\u001f\u007f]/.test(normalized)
-  ) {
+  const containsControlCharacters = [...normalized].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+  if (normalized.length === 0 || normalized.trim() !== normalized || containsControlCharacters) {
     throw new Error(`${variable}のproduction設定が不正です。`);
   }
   return normalized;

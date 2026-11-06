@@ -30,6 +30,13 @@ export type ProductionWorkerSecrets = Readonly<{
 
 export const PRODUCTION_PUBLIC_ENV_FILE = '.env.production.local';
 
+function containsControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
 const turnstileTestSecretKeys = new Set([
   '1x0000000000000000000000000000000AA',
   '2x0000000000000000000000000000000AA',
@@ -125,7 +132,7 @@ export async function removeProductionPublicEnvironmentFile(filePath: string): P
 }
 
 function assertSingleLineSecret(value: string | undefined): string {
-  if (!value || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) {
+  if (!value || value.trim() !== value || containsControlCharacters(value)) {
     throw new ProductionConnectedDeploymentFailure('INPUT_PRIVATE_SECRET_INVALID');
   }
   return value;
