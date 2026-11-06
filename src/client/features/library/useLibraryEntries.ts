@@ -11,6 +11,15 @@ function isSessionUnavailable(error: unknown) {
   );
 }
 
+function isMissingLocalSession(error: unknown) {
+  return (
+    error instanceof ApiClientError &&
+    error.status === 401 &&
+    error.code === 'AUTH_REQUIRED' &&
+    error.requestId === null
+  );
+}
+
 type ActiveRequest = { epoch: number; controller: AbortController };
 
 export function useLibraryEntries(initialMonth: string) {
@@ -81,6 +90,10 @@ export function useLibraryEntries(initialMonth: string) {
         syncEntries(result.entries, result.cursor);
       } catch (failure) {
         if (!requestIsActive(request)) return;
+        if (navigator.onLine && entriesRef.current === null && isMissingLocalSession(failure)) {
+          syncEntries([], null);
+          return;
+        }
         if (isSessionUnavailable(failure)) setSessionUnavailable(true);
         setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
       } finally {
