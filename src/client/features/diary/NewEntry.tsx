@@ -20,9 +20,15 @@ type NewEntryProps = {
   config: ClientConfig;
   onActivityChange: (activity: DiaryActivity) => void;
   hasBlockedNavigation: () => boolean;
+  hasConfirmedExit: () => boolean;
 };
 
-export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: NewEntryProps) {
+export function NewEntry({
+  config,
+  onActivityChange,
+  hasBlockedNavigation,
+  hasConfirmedExit,
+}: NewEntryProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
@@ -96,14 +102,19 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
       });
   }, [busy, dirty, entrySaveStarted, error, onActivityChange, pendingSave]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const refreshTimer = window.setTimeout(() => {
       if (navigator.onLine) void refreshQuota();
     }, 0);
     return () => {
       window.clearTimeout(refreshTimer);
-      activeRef.current = false;
       onActivityChange({ dirty: false, busy: false, failed: false, entrySaveStarted: false });
     };
   }, [onActivityChange, refreshQuota]);
@@ -159,7 +170,8 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
       try {
         entry = await createEntry(parsed.data, {
           onRequestStart: () => {
-            if (!activeRef.current) throw new DOMException('Entry save cancelled', 'AbortError');
+            if (!activeRef.current || hasConfirmedExit())
+              throw new DOMException('Entry save cancelled', 'AbortError');
             setEntrySaveStarted(true);
             onActivityChange({ dirty, busy: true, failed: false, entrySaveStarted: true });
           },

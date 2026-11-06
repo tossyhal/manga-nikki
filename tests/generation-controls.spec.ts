@@ -26,6 +26,7 @@ declare global {
     __e2eTurnstileRenderCount?: number;
     __e2eTurnstileRemoveCount?: number;
     __e2eSupabaseFetchCalls?: string[];
+    __releaseE2eAuthRefreshOnConfirm?: () => void;
     __releaseE2eGenerationCaptcha?: () => void;
     __releaseE2eRegistrationCaptcha?: () => void;
     __failE2eRegistrationCaptcha?: () => void;
@@ -756,7 +757,7 @@ test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れて�
   expect(entryPosts).toBe(0);
 });
 
-test('新規作成APIのAuth再確認中に離れてもPOSTを送信しない', async ({ page }) => {
+test('新規作成APIのAuth再確認中に離脱を確定したらPOSTを送信しない', async ({ page }) => {
   await installTurnstileFake(page, { delayFirstRegistrationCallback: true });
   let releaseRefresh!: () => void;
   const refreshGate = new Promise<void>((resolve) => {
@@ -850,12 +851,18 @@ test('新規作成APIのAuth再確認中に離れてもPOSTを送信しない', 
   const dialog = page.getByRole('dialog', { name: '入力内容が保存されていません' });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('保存されていない変更が失われます');
+  await page.exposeFunction('__releaseE2eAuthRefreshOnConfirm', () => releaseRefresh());
+  await dialog.getByRole('button', { name: '保存せずに離れる', exact: true }).evaluate((button) => {
+    button.addEventListener('click', () => void window.__releaseE2eAuthRefreshOnConfirm?.(), {
+      capture: true,
+      once: true,
+    });
+  });
   await clickAppDialogButton(page, '入力内容が保存されていません', '保存せずに離れる');
   await expect(page).toHaveURL(/\/$/);
 
-  releaseRefresh();
   await refreshResponse;
-  await page.evaluate(() => new Promise<void>((resolve) => window.setTimeout(resolve, 0)));
+  await page.waitForTimeout(100);
   expect(entryPosts).toBe(0);
 });
 

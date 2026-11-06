@@ -53,7 +53,9 @@ export function App() {
     blockedActivity?.busy && !(blockedActivity.dirty && blockedActivity.entrySaveStarted === false),
   );
   const blockerStateRef = useRef(blocker.state);
+  const leaveConfirmedRef = useRef(false);
   const hasBlockedNavigation = useCallback(() => blockerStateRef.current !== 'unblocked', []);
+  const hasConfirmedExit = useCallback(() => leaveConfirmedRef.current, []);
   useEffect(() => {
     let active = true;
     void getClientConfig()
@@ -73,6 +75,7 @@ export function App() {
   }, [location.pathname]);
   useLayoutEffect(() => {
     blockerStateRef.current = blocker.state;
+    if (blocker.state === 'unblocked') leaveConfirmedRef.current = false;
   }, [blocker.state]);
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
@@ -99,6 +102,7 @@ export function App() {
     personalDataAvailable,
     onActivityChange: reportDiaryActivity,
     hasBlockedNavigation,
+    hasConfirmedExit,
     retryConfig,
   };
   const showBlockedDialog =
@@ -142,11 +146,16 @@ export function App() {
           if (
             blocker.state === 'blocked' &&
             !(diaryActivityRef.current.failed && !diaryActivityRef.current.dirty)
-          )
+          ) {
+            if (!blockedBusy) leaveConfirmedRef.current = true;
             blocker.proceed();
+          }
         }}
         onCancel={() => {
-          if (blocker.state === 'blocked') blocker.reset();
+          if (blocker.state === 'blocked') {
+            leaveConfirmedRef.current = false;
+            blocker.reset();
+          }
         }}
       />
     </div>
