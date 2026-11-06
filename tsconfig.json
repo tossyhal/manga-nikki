@@ -16,5 +16,11 @@
     "noEmit": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "tests", "scripts/bootstrap-staging.ts", "*.config.ts"]
+  "include": [
+    "src",
+    "tests",
+    "scripts/bootstrap-staging.ts",
+    "scripts/deploy-staging-sample.ts",
+    "*.config.ts"
+  ]
 }
