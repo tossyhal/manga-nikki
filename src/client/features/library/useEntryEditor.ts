@@ -107,7 +107,6 @@ export function useEntryEditor({
       try {
         const latest = await readLatestEntry();
         if (!activeRef.current) return;
-        setEntry(latest);
         setDraftDate(latest.diaryDate);
         setDraftBody(latest.body);
       } catch {
@@ -137,7 +136,6 @@ export function useEntryEditor({
     try {
       const latest = await readLatestEntry();
       if (!activeRef.current) return;
-      setEntry(latest);
       setDraftDate(latest.diaryDate);
       setDraftBody(latest.body);
       const latestIsPending =

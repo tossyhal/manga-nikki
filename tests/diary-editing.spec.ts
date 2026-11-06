@@ -143,6 +143,127 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
 });
 
+test('編集保存直後の遅延再取得で同じrevisionの別タブ生成結果を表示する', async ({ page }) => {
+  const latestGeneration = generationFixtures(entryId, generationId, 2).succeeded;
+  const updatedEntry: Entry = {
+    id: entryId,
+    diaryDate: draftEntryDetailFixture.diaryDate,
+    body: '編集後の日記です。',
+    revision: 2,
+    latestGenerationId: generationId,
+    createdAt: draftEntryDetailFixture.createdAt,
+    updatedAt: draftEntryDetailFixture.updatedAt,
+  };
+  const latestDetail: EntryDetail = {
+    ...updatedEntry,
+    latestGeneration: null,
+  };
+  let releaseLatestRead!: () => void;
+  let notifyLatestRead!: () => void;
+  const latestReadRequested = new Promise<void>((resolve) => {
+    notifyLatestRead = resolve;
+  });
+  const latestReadGate = new Promise<void>((resolve) => {
+    releaseLatestRead = resolve;
+  });
+  let patchSaved = false;
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: latestGeneration }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      patchSaved = true;
+      return route.fulfill({ json: updatedEntry });
+    }
+    if (!patchSaved) return route.fulfill({ json: draftEntryDetailFixture });
+    notifyLatestRead();
+    await latestReadGate;
+    return route.fulfill({ json: latestDetail });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
+  await clickEntryMenuItem(page, '日記を編集');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(updatedEntry.body);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await latestReadRequested;
+  releaseLatestRead();
+
+  await expect(page.locator('.comic')).toBeVisible();
+  await expect(page.locator('.detail-date-row time')).toHaveAttribute(
+    'datetime',
+    updatedEntry.diaryDate,
+  );
+  await expect(page.getByRole('heading', { name: 'いつもの一日' })).toBeVisible();
+  await expect(page.getByText('漫画の状態を確認できません')).toHaveCount(0);
+});
+
+test('編集保存が成功した後の再取得失敗でも保留中の遷移を続ける', async ({ page }) => {
+  let releasePatch!: () => void;
+  let notifyPatch!: () => void;
+  const patchRequested = new Promise<void>((resolve) => {
+    notifyPatch = resolve;
+  });
+  const patchGate = new Promise<void>((resolve) => {
+    releasePatch = resolve;
+  });
+  let patchSaved = false;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      notifyPatch();
+      await patchGate;
+      patchSaved = true;
+      const update = route.request().postDataJSON() as {
+        expectedRevision: number;
+        diaryDate: string;
+        body: string;
+      };
+      return route.fulfill({
+        json: {
+          id: entryId,
+          diaryDate: update.diaryDate,
+          body: update.body,
+          revision: 2,
+          latestGenerationId: null,
+          createdAt: draftEntryDetailFixture.createdAt,
+          updatedAt: draftEntryDetailFixture.updatedAt,
+        } satisfies Entry,
+      });
+    }
+    if (!patchSaved) return route.fulfill({ json: draftEntryDetailFixture });
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend refresh error',
+          requestId: 'saved-entry-refresh-error-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を編集');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('保存成功後の再取得確認用の日記');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await patchRequested;
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releasePatch();
+
+  await expect(page).toHaveURL('/');
+});
+
 test('再生成中と失敗後も最後に保存した漫画を表示し、最新jobの状態を併記する', async ({ page }) => {
   const previousSuccess = generationFixtures(entryId, generationId, 1).succeeded;
   const retryId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -1452,6 +1573,123 @@ test('削除中のpollingエラーで保留中の移動を取り消さない', a
   releaseDelete();
 
   await expect(page).toHaveURL('/');
+});
+
+test('状態確認後の再取得失敗で保留中の移動を取り消す', async ({ page }) => {
+  const detail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: null,
+  };
+  let releaseRefresh!: () => void;
+  let notifyRefresh!: () => void;
+  const refreshRequested = new Promise<void>((resolve) => {
+    notifyRefresh = resolve;
+  });
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let holdRefresh = false;
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend generation lookup error',
+          requestId: 'generation-reference-unavailable-e2e',
+          retryable: true,
+        },
+      },
+    }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (!holdRefresh) return route.fulfill({ json: detail });
+    notifyRefresh();
+    await refreshGate;
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend refresh error',
+          requestId: 'generation-status-refresh-error-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.getByRole('heading', { name: '漫画の状態を確認できません' })).toBeVisible();
+  holdRefresh = true;
+  await page.getByRole('button', { name: '状態を再確認する' }).click();
+  await refreshRequested;
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseRefresh();
+
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await expect(page.locator('.detail-page p[role="alert"]')).toContainText(
+    '一時的に利用できません',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('受付後の状態再取得失敗で保留中の移動を取り消し、受付再確認を残す', async ({ page }) => {
+  let releaseRefresh!: () => void;
+  let notifyRefresh!: () => void;
+  const refreshRequested = new Promise<void>((resolve) => {
+    notifyRefresh = resolve;
+  });
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  let receiptAccepted = false;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (!receiptAccepted) return route.fulfill({ json: draftEntryDetailFixture });
+    notifyRefresh();
+    await refreshGate;
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend receipt refresh error',
+          requestId: 'generation-receipt-refresh-error-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+  await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+    receiptAccepted = true;
+    return route.fulfill({
+      status: 202,
+      json: {
+        generationId,
+        status: 'queued',
+        statusUrl: `/api/v1/generations/${generationId}`,
+      },
+    });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+  await refreshRequested;
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseRefresh();
+
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await expect(page.locator('.detail-page [role="alert"]')).toContainText(
+    '受付結果を受け取りましたが、状態を読み込めません。受付結果を再確認してください。',
+  );
+  await expect(page.getByRole('button', { name: '受付結果を確認', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('削除失敗時は保留中の移動を取り消してエラーを残す', async ({ page }) => {

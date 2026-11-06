@@ -4,6 +4,7 @@ import {
   ApiClientError,
   generate,
   getQuotaForExistingSession,
+  hasGenerationRequest,
   recheckGeneration,
 } from './api';
 import { invalidateClientConfig } from './config';
@@ -25,6 +26,20 @@ function mockFetch(request: (input: RequestInfo | URL, init?: RequestInit) => Pr
     if (String(input) === '/api/v1/config') return Response.json(mockConfig);
     return request(input, init);
   });
+}
+
+function denySessionStorageGetter() {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    get() {
+      throw new Error('review storage denied');
+    },
+  });
+  return () => {
+    if (original) Object.defineProperty(globalThis, 'sessionStorage', original);
+    else delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
+  };
 }
 
 beforeEach(() => {
@@ -251,6 +266,74 @@ describe('API error guidance', () => {
       new Headers(second.headers).get('Idempotency-Key'),
     );
     expect(JSON.parse(String(second.body))).toEqual({ expectedRevision: 4, captchaToken: '' });
+  });
+
+  it('keeps request checks safe and blocks generation when the sessionStorage getter is denied', async () => {
+    const request = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+    vi.stubGlobal('fetch', mockFetch(request));
+    const entry = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      revision: 1,
+    } as Parameters<typeof generate>[0];
+    const restoreStorage = denySessionStorageGetter();
+
+    try {
+      expect(hasGenerationRequest(entry)).toBe(false);
+      await expect(generate(entry)).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+        message: expect.stringContaining('ストレージ設定'),
+      });
+      await expect(recheckGeneration(entry)).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+      });
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      restoreStorage();
+    }
+  });
+
+  it('blocks generation and receipt checks when sessionStorage.getItem throws', async () => {
+    const request = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+    vi.stubGlobal('fetch', mockFetch(request));
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => {
+        throw new Error('review storage denied');
+      },
+      setItem: vi.fn(),
+    });
+    const entry = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      revision: 1,
+    } as Parameters<typeof generate>[0];
+
+    expect(hasGenerationRequest(entry)).toBe(false);
+    await expect(generate(entry)).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+    });
+    await expect(recheckGeneration(entry)).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('does not send a newly generated request key when sessionStorage cannot persist it', async () => {
+    const request = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+    vi.stubGlobal('fetch', mockFetch(request));
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('review storage denied');
+      },
+    });
+    const entry = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      revision: 1,
+    } as Parameters<typeof generate>[0];
+
+    await expect(generate(entry)).rejects.toMatchObject({
+      code: 'IDEMPOTENCY_STORAGE_UNAVAILABLE',
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('reads quota only from an existing live session', async () => {
