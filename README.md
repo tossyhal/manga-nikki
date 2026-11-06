@@ -42,6 +42,7 @@
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | システム構成・技術選定・未決定事項 | 実装に入る前 |
 | [API](docs/API.md) | HTTP API・漫画データ形式・DB保存・AIの共通契約v1 | 画面・API・DBの接続時 |
 | [OPERATIONS](docs/OPERATIONS.md) | 認証・個人データ保護・予算管理・公開前チェック | 認証・DB・AI生成・公開を扱う時 |
+| [DATABASE_MIGRATION](docs/DATABASE_MIGRATION.md) | 共有Supabase migrationのplan/apply手順と安全境界 | migration適用をレビューするとき |
 | [PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md) | main限定の架空sample配信と本番環境の境界 | production sample CDを扱う時 |
 | [AGENTS](AGENTS.md) | AIコーディングエージェント向けの行動指針 | AIツール利用時 |
 

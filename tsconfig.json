@@ -24,6 +24,7 @@
     "scripts/check-production-sample-preflight.ts",
     "scripts/deploy-production-sample.ts",
     "scripts/check-dev-database.ts",
+    "scripts/migrate-database.ts",
     "*.config.ts"
   ]
 }
