@@ -4,6 +4,59 @@ import { api } from '../../lib/api';
 import { exportComic } from './exportComic';
 import './comic-actions.css';
 
+const shareOperationTimeoutMs = 15_000;
+
+async function withShareOperationTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timeoutId = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(
+      () => reject(new Error('SHARE_OPERATION_TIMEOUT')),
+      shareOperationTimeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function createShareUrl(generationId: string): Promise<string> {
+  const controller = new AbortController();
+  let timeoutId = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      controller.abort();
+      reject(new Error('SHARE_REQUEST_TIMEOUT'));
+    }, shareOperationTimeoutMs);
+  });
+  try {
+    const result = await Promise.race([
+      api<{ path: string }>(`/generations/${generationId}/share`, {
+        method: 'POST',
+        signal: controller.signal,
+      }),
+      timeout,
+    ]);
+    if (!/^\/shared\/[a-f0-9]{64}$/.test(result.path)) throw new Error('INVALID_SHARE_URL');
+    return new URL(result.path, location.origin).href;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function writeNewShareUrlToClipboard(shareUrl: Promise<string>): Promise<void> {
+  const text = shareUrl.then((value) => new Blob([value], { type: 'text/plain' }));
+  // Safariはwrite()時点のユーザー操作を確認するため、ClipboardItem生成失敗時も遅延値の拒否を監視する。
+  void text.catch(() => undefined);
+  try {
+    const item = new ClipboardItem({ 'text/plain': text });
+    return withShareOperationTimeout(navigator.clipboard.write([item]));
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
 export function ComicActions({
   comic,
   images,
@@ -43,33 +96,64 @@ export function ComicActions({
       setSaving(false);
     }
   }
-  async function writeUrlToClipboard(value: string) {
+  function writeUrlToClipboard(value: string) {
     if (!navigator.clipboard?.writeText) throw new Error('CLIPBOARD_UNAVAILABLE');
-    await navigator.clipboard.writeText(value);
+    return withShareOperationTimeout(navigator.clipboard.writeText(value));
   }
   function showCopyFailure() {
     setShowUrlFallback(true);
     setMessage('URLをコピーできませんでした。下のURLを選択してコピーしてください。');
   }
   async function share() {
-    if (shareInFlight.current) return;
+    if (!generationId || shareInFlight.current) return;
     shareInFlight.current = true;
     setSharing(true);
     setMessage('');
     try {
-      let shareUrl = url;
-      if (!shareUrl) {
+      if (url) {
         try {
-          const result = await api<{ path: string }>(`/generations/${generationId}/share`, {
-            method: 'POST',
-          });
-          if (!/^\/shared\/[a-f0-9]{64}$/.test(result.path)) throw new Error('INVALID_SHARE_URL');
-          shareUrl = new URL(result.path, location.origin).href;
-          setUrl(shareUrl);
+          await writeUrlToClipboard(url);
+          setShowUrlFallback(false);
+          setMessage('URLをコピーしました。');
         } catch {
+          showCopyFailure();
+        }
+        return;
+      }
+
+      if (
+        typeof navigator.clipboard?.write === 'function' &&
+        typeof ClipboardItem !== 'undefined'
+      ) {
+        const shareUrlPromise = createShareUrl(generationId).then((shareUrl) => {
+          setUrl(shareUrl);
+          return shareUrl;
+        });
+        const clipboardPromise = writeNewShareUrlToClipboard(shareUrlPromise);
+        const [shareResult, clipboardResult] = await Promise.allSettled([
+          shareUrlPromise,
+          clipboardPromise,
+        ]);
+        if (shareResult.status === 'rejected') {
           setMessage('共有URLを作成できませんでした。時間をおいて再試行してください。');
           return;
         }
+        if (clipboardResult.status === 'rejected') {
+          showCopyFailure();
+          return;
+        }
+        setShowUrlFallback(false);
+        setMessage('URLをコピーしました。');
+        return;
+      }
+
+      let shareUrl: string;
+      try {
+        shareUrl = await createShareUrl(generationId);
+        setUrl(shareUrl);
+      } catch {
+        setMessage('共有URLを作成できませんでした。時間をおいて再試行してください。');
+        return;
       }
       try {
         await writeUrlToClipboard(shareUrl);

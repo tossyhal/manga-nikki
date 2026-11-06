@@ -5,18 +5,24 @@ import { Comic } from './Comic';
 import { ComicActions } from './ComicActions';
 import { shouldRenewExpiredAsset } from './signedAssetRefresh';
 
-export function SavedComic({
-  comic,
-  hideTitle,
-  generationId,
-}: {
+type SavedComicProps = {
   comic: ComicDocument;
   hideTitle: boolean;
   generationId?: string;
-}) {
+};
+
+export function SavedComic(props: SavedComicProps) {
+  const ids =
+    props.comic.visual.kind === 'page' ? [props.comic.visual.assetId] : props.comic.visual.assetIds;
+  const key = JSON.stringify([props.generationId ?? null, props.comic.visual.kind, ids]);
+  return <SavedComicContent key={key} {...props} />;
+}
+
+function SavedComicContent({ comic, hideTitle, generationId }: SavedComicProps) {
   const [images, setImages] = useState<Record<string, string>>({});
   const [imageRequestedAt, setImageRequestedAt] = useState<Record<string, number>>({});
   const [imageRequestedAtWall, setImageRequestedAtWall] = useState<Record<string, number>>({});
+  const [imageExpiresAt, setImageExpiresAt] = useState<Record<string, string>>({});
   const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadVersion, setReloadVersion] = useState(0);
@@ -32,35 +38,43 @@ export function SavedComic({
     void Promise.all(
       ids.map(async (id) => {
         try {
-          const requestedAt = performance.now();
-          const requestedAtWall = Date.now();
-          const result = await getAssetUrl(id);
-          return { id, url: result.url, requestedAt, requestedAtWall };
+          const result = await getAssetUrl(id, reloadVersion > 0 ? { fresh: true } : undefined);
+          if (active) {
+            setImages((current) => ({ ...current, [id]: result.url }));
+            setImageRequestedAt((current) => ({ ...current, [id]: result.requestedAt }));
+            setImageRequestedAtWall((current) => ({ ...current, [id]: result.requestedAtWall }));
+            setImageExpiresAt((current) => ({ ...current, [id]: result.expiresAt }));
+            setFailedImageIds((current) => current.filter((failedId) => failedId !== id));
+          }
         } catch {
-          return { id, url: null, requestedAt: null, requestedAtWall: null };
+          if (active) {
+            setImages((current) => {
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+            setImageRequestedAt((current) => {
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+            setImageRequestedAtWall((current) => {
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+            setImageExpiresAt((current) => {
+              const next = { ...current };
+              delete next[id];
+              return next;
+            });
+            setFailedImageIds((current) => (current.includes(id) ? current : [...current, id]));
+          }
         }
       }),
-    ).then((result) => {
+    ).then(() => {
       if (!active) return;
       autoRenewing.current = false;
-      setImages(
-        Object.fromEntries(result.flatMap((image) => (image.url ? [[image.id, image.url]] : []))),
-      );
-      setImageRequestedAt(
-        Object.fromEntries(
-          result.flatMap((image) =>
-            image.requestedAt !== null ? [[image.id, image.requestedAt]] : [],
-          ),
-        ),
-      );
-      setImageRequestedAtWall(
-        Object.fromEntries(
-          result.flatMap((image) =>
-            image.requestedAtWall !== null ? [[image.id, image.requestedAtWall]] : [],
-          ),
-        ),
-      );
-      setFailedImageIds(result.filter((image) => image.url === null).map((image) => image.id));
       setLoading(false);
     });
     return () => {
@@ -75,6 +89,7 @@ export function SavedComic({
     setImages({});
     setImageRequestedAt({});
     setImageRequestedAtWall({});
+    setImageExpiresAt({});
     setFailedImageIds([]);
     setLoading(true);
     setReloadVersion((version) => version + 1);
@@ -87,6 +102,9 @@ export function SavedComic({
         imageRequestedAt[id],
         imageRequestedAtWall[id],
         autoRenewAttempted.current,
+        performance.now(),
+        Date.now(),
+        imageExpiresAt[id],
       )
     )
       return false;
@@ -95,6 +113,7 @@ export function SavedComic({
     setImages({});
     setImageRequestedAt({});
     setImageRequestedAtWall({});
+    setImageExpiresAt({});
     setFailedImageIds([]);
     setLoading(true);
     setReloadVersion((version) => version + 1);
@@ -122,7 +141,9 @@ export function SavedComic({
         getFreshImages={async () => {
           const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
           return Object.fromEntries(
-            await Promise.all(ids.map(async (id) => [id, (await getAssetUrl(id)).url])),
+            await Promise.all(
+              ids.map(async (id) => [id, (await getAssetUrl(id, { fresh: true })).url]),
+            ),
           );
         }}
         ready={!loading && failedImageIds.length === 0}

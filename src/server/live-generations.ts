@@ -578,7 +578,7 @@ async function getLiveComicAssetMetadata(
   )
     return null;
 
-  const { data: entry, error: entryError } = await userClient
+  const entryQuery = userClient
     .from('entries')
     .select('id')
     .eq('id', parsedGeneration.data.entry_id)
@@ -586,6 +586,21 @@ async function getLiveComicAssetMetadata(
     .is('deleted_at', null)
     .gt('expires_at', new Date().toISOString())
     .maybeSingle();
+  let serverAssets: ReturnType<typeof createServerAssetMetadataClient>;
+  try {
+    serverAssets = createServerAssetMetadataClient(context.environment, context.fetcher);
+  } catch {
+    const { data: entry, error: entryError } = await entryQuery;
+    if (entryError) {
+      if ('status' in entryError && entryError.status === 401)
+        throw new LiveGenerationError(401, 'AUTH_REQUIRED');
+      throw unavailable();
+    }
+    if (!entry) return null;
+    throw unavailable();
+  }
+  const [{ data: entry, error: entryError }, { data: storedAsset, error: storedAssetError }] =
+    await Promise.all([entryQuery, serverAssets.getAsset(assetId)]);
   if (entryError) {
     if ('status' in entryError && entryError.status === 401)
       throw new LiveGenerationError(401, 'AUTH_REQUIRED');
@@ -593,8 +608,6 @@ async function getLiveComicAssetMetadata(
   }
   if (!entry) return null;
 
-  const serverAssets = createServerAssetMetadataClient(context.environment, context.fetcher);
-  const { data: storedAsset, error: storedAssetError } = await serverAssets.getAsset(assetId);
   if (storedAssetError) throw unavailable();
   const parsedAsset = privateAssetSchema.safeParse(storedAsset);
   if (

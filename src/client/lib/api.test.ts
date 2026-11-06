@@ -7,6 +7,7 @@ import {
   hasGenerationRequest,
   recheckGeneration,
 } from './api';
+import { getLiveAccessToken } from './auth';
 import { invalidateClientConfig } from './config';
 
 vi.mock('./auth', () => ({
@@ -44,6 +45,7 @@ function denySessionStorageGetter() {
 
 beforeEach(() => {
   invalidateClientConfig();
+  vi.mocked(getLiveAccessToken).mockReset().mockResolvedValue(null);
   const values = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => values.get(key) ?? null,
@@ -62,6 +64,32 @@ afterEach(() => {
 });
 
 describe('API error guidance', () => {
+  it('refuses to send an asset request when its authorization scope changed', async () => {
+    vi.mocked(getLiveAccessToken).mockResolvedValueOnce('new-owner-token');
+    const request = vi
+      .fn()
+      .mockResolvedValue(Response.json({ url: '/asset', expiresAt: '2099-01-01T00:00:00Z' }));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/config')
+        return Response.json({ ...mockConfig, dataMode: 'live' });
+      return request(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      api(
+        '/assets/asset-id/url',
+        {},
+        {
+          expectedScope: { dataMode: 'live', authorization: 'Bearer old-owner-token' },
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'AUTH_SCOPE_CHANGED', status: null });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('gives retry guidance when public configuration cannot be loaded', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
 

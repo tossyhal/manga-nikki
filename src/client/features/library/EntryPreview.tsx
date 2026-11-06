@@ -180,12 +180,11 @@ export function useEntryPreview(
     async function refreshComicImage(
       generation: Extract<Generation, { status: 'succeeded' }>,
       preserveError = false,
+      fresh = false,
     ) {
       if (!active || fetchingAsset || comicGeneration?.id !== generation.id) return;
       fetchingAsset = true;
       const requestId = ++assetRequestId;
-      const requestedAt = performance.now();
-      const requestedAtWall = Date.now();
       currentAsset = null;
       publish({
         imageUrl: null,
@@ -198,13 +197,13 @@ export function useEntryPreview(
           ? generation.comic.visual.assetId
           : generation.comic.visual.assetIds[0];
       try {
-        const asset = await getAssetUrl(assetId);
+        const asset = await getAssetUrl(assetId, fresh ? { fresh: true } : undefined);
         if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
           currentAsset = {
             url: asset.url,
             expiresAt: asset.expiresAt,
-            requestedAt,
-            requestedAtWall,
+            requestedAt: asset.requestedAt,
+            requestedAtWall: asset.requestedAtWall,
             token: requestId,
             state: 'loading',
           };
@@ -312,7 +311,7 @@ export function useEntryPreview(
       currentAsset = null;
       if (shouldRefresh) {
         autoRefreshAttempted = true;
-        void refreshComicImage(comic);
+        void refreshComicImage(comic, false, true);
         return;
       }
       publish({
@@ -346,7 +345,7 @@ export function useEntryPreview(
       if (!active || !comic || comic.status !== 'succeeded' || fetchingAsset) return;
       manualRetryPending = true;
       autoRefreshAttempted = false;
-      void refreshComicImage(comic, true);
+      void refreshComicImage(comic, true, true);
     };
 
     imageLoadRef.current = handleComicImageLoad;

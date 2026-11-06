@@ -1,10 +1,67 @@
-import { describe, expect, it, vi } from 'vitest';
+import scriptSample from '../../docs/contracts/script.example.json';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { createApp } from './app';
+import { scriptSchema } from './ai/script-schema';
 import {
   getLiveGenerationQuota,
   LiveGenerationError,
   reserveLiveOpenAIGeneration,
 } from './live-generations';
 import { mockEnvironment, type Environment } from './mode';
+
+const assetOwnerId = 'aaaaaaaa-1111-4111-8111-111111111111';
+const assetGenerationId = 'bbbbbbbb-2222-4222-8222-222222222222';
+const assetEntryId = 'cccccccc-3333-4333-8333-333333333333';
+const assetIds = [
+  'dddddddd-4444-4444-8444-444444444444',
+  'eeeeeeee-5555-4555-8555-555555555555',
+  'ffffffff-6666-4666-8666-666666666666',
+  '11111111-7777-4777-8777-777777777777',
+];
+const assetSigningKeyId = 'generation-test-signing-key';
+let assetPrivateKey: CryptoKey;
+let assetPublicJwk: JsonWebKey & { kid: string; alg: 'RS256'; use: 'sig' };
+
+beforeAll(async () => {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify'],
+  );
+  assetPrivateKey = pair.privateKey;
+  assetPublicJwk = {
+    ...(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    kid: assetSigningKeyId,
+    alg: 'RS256',
+    use: 'sig',
+  };
+});
+
+function encodeAssetTokenPart(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+async function signedAssetAccessToken(environment: Environment): Promise<string> {
+  const claims = {
+    iss: `${environment.SUPABASE_URL}/auth/v1`,
+    aud: 'authenticated',
+    exp: Math.floor(Date.now() / 1000) + 300,
+    sub: assetOwnerId,
+    role: 'authenticated',
+  };
+  const input = `${encodeAssetTokenPart({ alg: 'RS256', typ: 'JWT', kid: assetSigningKeyId })}.${encodeAssetTokenPart(claims)}`;
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    assetPrivateKey,
+    new TextEncoder().encode(input),
+  );
+  return `${input}.${Buffer.from(signature).toString('base64url')}`;
+}
 
 describe('live generation RPC errors', () => {
   it('blocks a new disallowed owner before CAPTCHA and reservation but preserves receipts', async () => {
@@ -134,5 +191,124 @@ describe('live generation RPC errors', () => {
 
     expect(rpcCalls).toEqual(['find_generation_receipt', 'reserve_openai_generation']);
     expect(queue.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('live comic asset metadata reads', () => {
+  it('starts entry visibility and service asset reads before either read completes', async () => {
+    const environment: Environment = {
+      ...mockEnvironment,
+      APP_ENV: 'staging',
+      DATA_MODE: 'live',
+      AI_MODE: 'mock',
+      SUPABASE_URL: 'https://asset-parallel-test.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      SUPABASE_SECRET_KEY: 'sb_secret_test',
+    };
+    const token = await signedAssetAccessToken(environment);
+    const assetId = assetIds[0]!;
+    const script = scriptSchema.parse(scriptSample);
+    const comic = {
+      schemaVersion: 1,
+      title: script.title,
+      panels: script.panels,
+      visual: { kind: 'panels', assetIds, textMode: 'external' },
+    };
+    const startedReads = new Set<string>();
+    const completedReads = new Set<string>();
+    let markBothReadsStarted!: () => void;
+    const bothReadsStarted = new Promise<void>((resolve) => {
+      markBothReadsStarted = resolve;
+    });
+    let releaseReads!: () => void;
+    const readsCanComplete = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const holdRead = async (name: string) => {
+      startedReads.add(name);
+      if (startedReads.size === 2) markBothReadsStarted();
+      await readsCanComplete;
+      completedReads.add(name);
+    };
+    const authFetch: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url === `${environment.SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
+        return Response.json({ keys: [assetPublicJwk] });
+      if (request.url === `${environment.SUPABASE_URL}/auth/v1/user`)
+        return Response.json({
+          id: assetOwnerId,
+          aud: 'authenticated',
+          role: 'authenticated',
+          app_metadata: {},
+          user_metadata: {},
+          created_at: '2026-01-01T00:00:00.000Z',
+        });
+      return new Response(null, { status: 404 });
+    };
+    const supabaseFetch: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const url = new URL(request.url);
+      const apiKey = request.headers.get('apikey');
+      if (url.pathname.endsWith('/rest/v1/assets')) {
+        if (apiKey === environment.SUPABASE_SECRET_KEY) {
+          await holdRead('service-asset');
+          return Response.json([
+            {
+              id: assetId,
+              generation_id: assetGenerationId,
+              owner_id: assetOwnerId,
+              object_path: `${assetOwnerId}/${assetGenerationId}/${assetId}.png`,
+              media_type: 'image/png',
+            },
+          ]);
+        }
+        return Response.json([{ id: assetId, generation_id: assetGenerationId }]);
+      }
+      if (url.pathname.endsWith('/rest/v1/generations')) {
+        if (url.searchParams.get('id') !== `eq.${assetGenerationId}`) return Response.json([]);
+        return Response.json([
+          {
+            id: assetGenerationId,
+            entry_id: assetEntryId,
+            entry_revision: 1,
+            status: 'succeeded',
+            stage: null,
+            comic_json: comic,
+            is_mock: false,
+          },
+        ]);
+      }
+      if (url.pathname.endsWith('/rest/v1/entries')) {
+        await holdRead('entry-visibility');
+        return Response.json([{ id: assetEntryId }]);
+      }
+      if (url.pathname.startsWith('/storage/v1/object/sign/comics/'))
+        return Response.json({
+          signedURL: `${url.pathname.replace('/storage/v1', '')}?token=signed-test-token`,
+        });
+      return new Response(null, { status: 404 });
+    };
+    const app = createApp({ authFetch, supabaseFetch });
+    const responsePromise = app.request(
+      `https://app.example/api/v1/assets/${assetId}/url`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      environment,
+    );
+
+    const didBothReadsStart = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 1000);
+      void bothReadsStarted.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+    const readsCompletedBeforeRelease = [...completedReads];
+    releaseReads();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(200);
+    expect(startedReads).toEqual(new Set(['entry-visibility', 'service-asset']));
+    expect(didBothReadsStart).toBe(true);
+    expect(readsCompletedBeforeRelease).toEqual([]);
   });
 });

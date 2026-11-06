@@ -31,6 +31,8 @@ import {
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const wranglerCli = join(repositoryRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+const PRODUCTION_SHARED_SMOKE_TOKEN = '0'.repeat(64);
+const MAX_SHARED_SMOKE_RESPONSE_BYTES = 16 * 1024;
 
 export type WranglerProductionConnectedDependencies = {
   executor?: WranglerExecutor;
@@ -49,12 +51,12 @@ export type ProductionConnectedDeploymentContext = Omit<
 export type ProductionConnectedDeploymentDependencies = SampleDeploymentDependencies<'production'>;
 export type ProductionConnectedDeploymentProgress = SampleDeploymentProgress<'production'>;
 
-export function runProductionConnectedDeployment(
+export async function runProductionConnectedDeployment(
   context: ProductionConnectedDeploymentContext,
   dependencies: ProductionConnectedDeploymentDependencies = {},
 ) {
   const { workerPublicVars } = validateProductionReleasePublicValues(context.releasePublicValues);
-  return runSampleDeployment(
+  const result = await runSampleDeployment(
     selectProductionConnectedProfile(context.infrastructureEnabled, context.generationEnabled),
     {
       ...context,
@@ -63,6 +65,78 @@ export function runProductionConnectedDeployment(
     },
     dependencies,
   );
+  if (result.deployment !== 'succeeded' || result.smoke !== 'passed') return result;
+
+  try {
+    await verifyProductionSharedSmoke(dependencies.publicFetcher ?? fetch, result.url);
+  } catch (error) {
+    dependencies.onProgress?.({ ...result, smoke: 'failed' });
+    throw error;
+  }
+
+  return result;
+}
+
+async function verifyProductionSharedSmoke(
+  fetcher: (input: string, init: RequestInit) => Promise<Response>,
+  workerUrl: string,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetcher(
+      new URL(`/api/v1/shared/${PRODUCTION_SHARED_SMOKE_TOKEN}`, workerUrl).toString(),
+      {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+  } catch {
+    throw new SampleDeploymentFailure('SMOKE_REQUEST_FAILED');
+  }
+
+  if (response.status !== 404) throw new SampleDeploymentFailure('SMOKE_RESPONSE_INVALID');
+
+  let body: unknown;
+  try {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('missing response body');
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_SHARED_SMOKE_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('response too large');
+      }
+      chunks.push(value);
+    }
+
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    throw new SampleDeploymentFailure('SMOKE_RESPONSE_INVALID');
+  }
+
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !('error' in body) ||
+    typeof body.error !== 'object' ||
+    body.error === null ||
+    !('code' in body.error) ||
+    body.error.code !== 'NOT_FOUND'
+  ) {
+    throw new SampleDeploymentFailure('SMOKE_RESPONSE_INVALID');
+  }
 }
 
 export function renderProductionConnectedDeploymentSummary(

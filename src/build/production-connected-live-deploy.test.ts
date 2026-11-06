@@ -29,8 +29,8 @@ const workerSecrets = [
   { type: 'secret_text', name: 'TURNSTILE_SECRET_KEY' },
 ];
 
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200 });
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
 }
 
 function settings(bindings: unknown[]): Response {
@@ -101,10 +101,18 @@ describe('production connected deployment guard', () => {
       const events: string[] = [];
       const githubFetcher = vi.fn(async () => githubResponses.shift()!);
       const cloudflareFetcher = vi.fn(async () => cloudflareResponses.shift()!);
-      const publicFetcher = vi.fn(async (input: string) => {
+      const publicFetcher = vi.fn(async (input: string, init: RequestInit) => {
         if (input.endsWith('/api/v1/health')) return json({ status: 'ok' });
         if (input.endsWith('/api/v1/config')) {
           return json({ dataMode: 'live', generationAvailable: available });
+        }
+        if (input.endsWith(`/api/v1/shared/${'0'.repeat(64)}`)) {
+          expect(init).toMatchObject({
+            method: 'GET',
+            cache: 'no-store',
+            redirect: 'error',
+          });
+          return json({ error: { code: 'NOT_FOUND' } }, 404);
         }
         return json({ environment: 'production', commit, dataMode: 'live' });
       });
@@ -142,7 +150,61 @@ describe('production connected deployment guard', () => {
         'https://manga-nikki.tossyhal.workers.dev/api/v1/health',
         'https://manga-nikki.tossyhal.workers.dev/api/v1/config',
         'https://manga-nikki.tossyhal.workers.dev/__deployment.json',
+        `https://manga-nikki.tossyhal.workers.dev/api/v1/shared/${'0'.repeat(64)}`,
       ]);
+    },
+  );
+
+  it.each([
+    [503, { error: { code: 'UNAVAILABLE' } }],
+    [404, { error: { code: 'OTHER_ERROR' } }],
+    [200, { error: { code: 'NOT_FOUND' } }],
+  ])(
+    'fails production smoke when the missing shared route is not 404 NOT_FOUND',
+    async (status, body) => {
+      const progress: Array<{ deployment: string; smoke: string }> = [];
+      const cloudflareResponses = [
+        settings([
+          { type: 'plain_text', name: 'APP_ENV', text: 'production' },
+          { type: 'plain_text', name: 'DATA_MODE', text: 'sample' },
+          { type: 'plain_text', name: 'AI_MODE', text: 'mock' },
+          { type: 'plain_text', name: 'GENERATION_ENABLED', text: 'false' },
+        ]),
+        settings([...workerVars, ...workerSecrets, { type: 'assets', name: 'ASSETS' }]),
+        json({ success: true, result: { enabled: true, previews_enabled: false } }),
+      ];
+      const publicFetcher = vi.fn(async (input: string) => {
+        if (input.endsWith('/api/v1/health')) return json({ status: 'ok' });
+        if (input.endsWith('/api/v1/config')) {
+          return json({ dataMode: 'live', generationAvailable: false });
+        }
+        if (input.endsWith(`/api/v1/shared/${'0'.repeat(64)}`)) return json(body, status);
+        return json({ environment: 'production', commit, dataMode: 'live' });
+      });
+
+      await expect(
+        runProductionConnectedDeployment(context(), {
+          githubFetcher: vi.fn(async () => json({ object: { sha: commit } })),
+          cloudflareFetcher: vi.fn(async () => cloudflareResponses.shift()!),
+          publicFetcher,
+          async prepareArtifact() {
+            return { configPath: '/dist/manga-nikki/wrangler.json' };
+          },
+          async deploy() {},
+          async sleep() {},
+          onProgress(nextProgress) {
+            progress.push({
+              deployment: nextProgress.deployment,
+              smoke: nextProgress.smoke,
+            });
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'SMOKE_RESPONSE_INVALID' });
+
+      expect(publicFetcher.mock.calls.at(-1)?.[0]).toBe(
+        `https://manga-nikki.tossyhal.workers.dev/api/v1/shared/${'0'.repeat(64)}`,
+      );
+      expect(progress.at(-1)).toEqual({ deployment: 'succeeded', smoke: 'failed' });
     },
   );
 

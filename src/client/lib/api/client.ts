@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ClientAuthError, getLiveAccessToken } from '../auth';
-import { getClientConfig } from '../config';
+import { getClientConfig, type ClientConfig } from '../config';
 
 export class ApiClientError extends Error {
   constructor(
@@ -40,6 +40,11 @@ const apiErrorMessages: Record<string, string> = {
     'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
   TOO_MANY_ACTIVE: '別の漫画を作成しています。進行中の記録を開いて結果を確認してください。',
   USER_LIMIT_REACHED: '本日の生成上限に達しています。保存済みの記録は引き続き見られます。',
+};
+
+export type ApiAuthorizationScope = {
+  dataMode: ClientConfig['dataMode'];
+  authorization: string;
 };
 
 function errorMessageFor(status: number, code: string): string {
@@ -101,32 +106,56 @@ async function authorizationFor(mode: 'mock' | 'live' | 'sample'): Promise<strin
   }
 }
 
-export async function api<T>(
-  path: string,
-  init: RequestInit = {},
-  hooks: { onRequestStart?: () => void } = {},
-): Promise<T> {
-  const fallback = '通信に失敗しました。入力内容を保持したまま再操作してください。';
-  init.signal?.throwIfAborted();
+async function readAuthorizationScope(signal?: AbortSignal | null): Promise<ApiAuthorizationScope> {
+  signal?.throwIfAborted();
   const config = await getClientConfig().catch(() => {
-    init.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     throw new ApiClientError(
       '現在、読み込めません。通信を確認して再読み込みしてください。',
       null,
       'CONFIG_UNAVAILABLE',
     );
   });
-  init.signal?.throwIfAborted();
+  signal?.throwIfAborted();
   const authorization = await authorizationFor(config.dataMode).catch((failure: unknown) => {
-    init.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     throw failure;
   });
+  signal?.throwIfAborted();
+  return { dataMode: config.dataMode, authorization };
+}
+
+export function getApiAuthorizationScope(): Promise<ApiAuthorizationScope> {
+  return readAuthorizationScope();
+}
+
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  hooks: {
+    onRequestStart?: () => void;
+    expectedScope?: ApiAuthorizationScope;
+  } = {},
+): Promise<T> {
+  const fallback = '通信に失敗しました。入力内容を保持したまま再操作してください。';
   init.signal?.throwIfAborted();
+  const scope = await readAuthorizationScope(init.signal);
+  if (
+    hooks.expectedScope &&
+    (scope.dataMode !== hooks.expectedScope.dataMode ||
+      scope.authorization !== hooks.expectedScope.authorization)
+  ) {
+    throw new ApiClientError(
+      '認証状態が変わりました。画面を再読み込みしてからお試しください。',
+      null,
+      'AUTH_SCOPE_CHANGED',
+    );
+  }
   let response: Response | undefined;
   let result: unknown;
   const headers = new Headers(init.headers);
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  headers.set('Authorization', authorization);
+  headers.set('Authorization', scope.authorization);
   try {
     hooks.onRequestStart?.();
     response = await fetch(`/api/v1${path}`, {
@@ -152,7 +181,7 @@ export async function api<T>(
     if (failure.success) {
       const { code, requestId, retryable } = failure.data.error;
       const message = errorMessageFor(response.status, code);
-      if (response.status === 401 && config.dataMode === 'live') {
+      if (response.status === 401 && scope.dataMode === 'live') {
         throw new ApiClientError(
           '匿名セッションを確認できません。自動で別アカウントは作成しません。セッションを失うと過去の記録を復旧できない場合があります。',
           response.status,
