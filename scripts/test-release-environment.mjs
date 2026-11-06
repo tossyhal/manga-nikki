@@ -130,7 +130,7 @@ try {
       'GENERATION_ENABLED="true"',
       'SUPABASE_SECRET_KEY="worker-secret-sentinel"',
       'TURNSTILE_SECRET_KEY="turnstile-secret-sentinel"',
-      'GEMINI_API_KEY="ai-secret-sentinel"',
+      'OPENAI_API_KEY="ai-secret-sentinel"',
     ].join('\n'),
   );
 
@@ -143,7 +143,7 @@ try {
     VITE_UNAPPROVED_PROCESS_SENTINEL: 'should-be-ignored',
     SUPABASE_SECRET_KEY: 'process-env-server-secret-sentinel',
     TURNSTILE_SECRET_KEY: 'process-env-turnstile-secret-sentinel',
-    GEMINI_API_KEY: 'process-env-ai-secret-sentinel',
+    OPENAI_API_KEY: 'process-env-ai-secret-sentinel',
   };
 
   const devSecretJwt = jwtWithRole('service_role', 'dev-jwt-payload-sentinel');

@@ -1,6 +1,6 @@
 # 開発手順（CONTRIBUTING）
 
-本書の実装状況はPR#23までの未マージStackの実装基準HEAD`f255783`（この文書更新commitより前）を指し、`main`にはまだ統合されていません。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約を追加していますが、private画像保存・assets登録・成功確定RPCは未実装です。新規実AI生成には保存handlerと復旧callbackの両方が必要です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 
 ## 1. 最初にやること（ツールの準備）
 
@@ -91,7 +91,7 @@ pnpm dev:connected
 
 ## 3. 初期基盤の範囲
 
-以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueなどは後続のStack PRで実装済みですが、共有DB適用や実AI接続は未完了です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
+以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueに加え、PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約まで実装しています。共有DB適用、private画像保存handler、実生成完了RPC、実環境検証は未完了です。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackがdurableな保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存系handlerが不足すれば新規受付を止めますが、既存queued jobと`reserved`枠はreleaseせず、ready復帰後に再配送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
@@ -141,9 +141,11 @@ pnpm preview
 
 Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
 
-`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。デプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。アプリ配信用のデプロイscriptはまだありません。実デプロイはCloudflare設定・秘密情報・接続先・公開条件を確認し、別途承認を得た後に、対象環境のbuild後`pnpm exec wrangler deploy`を手動実行します。Cloudflare Vite pluginはbuild時に対象環境を選ぶため、デプロイ時に`--env`は付けません。この作業ではデプロイコマンドを実行しません。
 
 DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
+
+上記のアプリ配信とは別に、staging用の最小Workerを初期作成する手動workflowを用意しています。Bitwardenの設定・main限定の実行・運用上の排他・作成結果の確認は[デプロイ基盤の初期設定](docs/DEPLOYMENT.md)に従ってください。通常CDや実AIの有効化は行いません。
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 
@@ -219,6 +221,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handlerを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、最新branchの全経路、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AIと生成画像のprivate Storage保存・署名URL発行は未接続で、新しい実AI生成は503で停止します。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、保存復旧callback契約を実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、保存handler、実生成の成功確定RPC、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実生成画像のprivate Storage保存・署名URL発行は未接続です。保存handlerまたは復旧callbackのどちらか一方でも未設定のWorkerでは実AI生成を503で停止します。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存handlerの一時障害はjobを`saving`のまま保持し、Cronは復旧callbackがあればGENERATION_ENABLEDやOpenAI API keyがなくても保存を再開します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
 - `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

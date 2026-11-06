@@ -22,3 +22,6 @@ test-results/
 Thumbs.db
 supabase/.temp/
 supabase/.branches/
+
+# Local AI generation results (diaries / images)
+generated/
