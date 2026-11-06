@@ -88,6 +88,7 @@ describe('live anonymous session', () => {
           persistSession: true,
           detectSessionInUrl: false,
         },
+        global: { fetch: expect.any(Function) },
       },
     );
   });

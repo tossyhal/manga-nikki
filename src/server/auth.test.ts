@@ -212,7 +212,7 @@ describe('Supabase access token boundary', () => {
 
     expect(authorizationHeaders[0]).toBe(`Bearer ${userToken}`);
     expect(apiKeys[0]).toBe(environment.SUPABASE_PUBLISHABLE_KEY);
-    expect(authorizationHeaders[1]).not.toBe(`Bearer ${userToken}`);
+    expect(authorizationHeaders[1]).toBe('');
     expect(apiKeys[1]).toBe(environment.SUPABASE_SECRET_KEY);
   });
 

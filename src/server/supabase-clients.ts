@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Environment } from './mode';
+import { createSupabaseApiKeyFetch } from '../shared/supabase-fetch';
 
 import {
   SupabaseConfigurationError,
@@ -20,7 +21,7 @@ export function createUserSupabaseClient(
     auth: authOptions,
     global: {
       headers: { Authorization: `Bearer ${accessToken}` },
-      ...(fetcher ? { fetch: fetcher } : {}),
+      fetch: createSupabaseApiKeyFetch(publishableKey, fetcher),
     },
   });
 }
@@ -29,7 +30,7 @@ export function createServerRpcClient(environment: Environment, fetcher?: typeof
   const secretKey = requiredKey(environment.SUPABASE_SECRET_KEY);
   const client = createClient(supabaseUrl(environment), secretKey, {
     auth: authOptions,
-    ...(fetcher ? { global: { fetch: fetcher } } : {}),
+    global: { fetch: createSupabaseApiKeyFetch(secretKey, fetcher) },
   });
   return { rpc: client.rpc.bind(client) };
 }
@@ -38,7 +39,7 @@ export function createServerAssetMetadataClient(environment: Environment, fetche
   const secretKey = requiredKey(environment.SUPABASE_SECRET_KEY);
   const client = createClient(supabaseUrl(environment), secretKey, {
     auth: authOptions,
-    ...(fetcher ? { global: { fetch: fetcher } } : {}),
+    global: { fetch: createSupabaseApiKeyFetch(secretKey, fetcher) },
   });
   return {
     getAsset: (assetId: string) =>
