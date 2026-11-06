@@ -2,101 +2,61 @@
 
 書いた日記を、読み返したくなる4コマに。
 
-日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
-技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
+日記をAIで4コマ漫画に変換して保存・閲覧する、スマートフォン向けPWAです。
+技育CAMP2026ハッカソンVol.6でチーム「27卒」が開発しました。
 
-> 現在の状態（2026-11-06時点）
-> PR#29までの変更は`main`へ統合済みです。現在の作業branchでは、OpenAI白黒生成のQueue経路に加え、画像のprivate Storage保存・DB完了確定・保存復旧・署名URL取得までをdefault Workerへ接続しています。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
->
-> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、期限削除、環境別sample buildと公開設定guardを実装しています。実生成画像はprivate `comics` bucketへ決定論的なpathで保存し、binary signature・MIME・PNG各chunk CRC・JPEGのSOS/EOI構造・寸法を照合します（8 MiB/画像、16 MiB/4コマ、2,048px/辺、4 MP/画像、16 MP/4コマ）。DB完了失敗後は保存済み画像を再検証して完了を再開し、欠損・不正画像は追加AI呼出しなしで失敗・消費確定します。本人の有効な日記、成功済みgeneration、comic内のasset参照を確認した後だけ60秒の署名URLを返し、署名直後にも状態を再確認します。閲覧中に署名URLが期限切れした場合は1回だけ自動再取得し、その後は手動操作で再試行します。日記の新規作成はowner50件/JST日・全体1,000件/JST日の頻度と、物理回収前100件/owner・5,000件/globalの保持上限で制限します。local-mockでは作成時fingerprintと削除tombstoneを保持して実DBの冪等契約に合わせます。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。stagingは`sample` / `mock` / `GENERATION_ENABLED=false`のままです。production buildは実DB/Auth/TurnstileへCRUD接続する`live` / `live` / `GENERATION_ENABLED=false`で、QueueとOpenAI keyは設定しません。owner限定のproduction connected CDで2026-11-06に初回公開済み（source `0ba2dc3057fbf1d3028188e000ec1f6a9bbb9c5e`、[Actions run](https://github.com/tossyhal/manga-nikki/actions/runs/42220799768)、attempt 2成功）です。health/config/marker、Worker bindings/secrets、read-only Supabase probeを確認しました。owner報告ではTurnstile操作後にiPhone Safariで日記保存・再読み込み・削除を確認済みです。別匿名ユーザーの所有者分離、CAPTCHAの失効・再利用拒否ケース、実Cron、PWAホーム追加は未確認です。10本のproduction migrationは適用済み（run `42211812661`、remote 10 / pending 0）です。独立`demo` targetのQueue・private画像経路、実AI課金・アカウント権限・品質、実Cloudflare Queue / Cronは未確認です。
+## 公開先
 
-> 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
+- [本番](https://manga-nikki.tossyhal.workers.dev)：匿名認証・日記保存・実AI生成
+- [staging](https://manga-nikki-staging.tossyhal.workers.dev)：架空サンプル専用、生成停止
 
-日記・生成・private画像保存用migration、RLS、専用RPCと隔離PostgreSQLテストがあります。production projectへの10本のmigration適用と接続版Worker配信、read-only probe、health/config/marker確認は完了していますが、別匿名ユーザーの所有者分離・CAPTCHAの失効・再利用拒否ケースと実Cronは未確認です。owner報告ではTurnstile操作後にiPhone Safariの日記保存・再読み込み・削除を確認済みです。隔離環境での部分検証の範囲は[supabase/README.md](supabase/README.md)を参照してください。
+本番はSupabase Auth/DB/private Storage、Turnstile、OpenAI、Cloudflare Queueへ接続します。
+現在の配信commitは各URLの`/__deployment.json`で確認できます。
+AIエージェントは課金生成を実行しません。予算・公開条件の変更には別承認が必要です。
 
-## 最初に読むドキュメント
+## 起動
 
-開発を始める際は、まず以下の3つを順番に読んでください。
+Gitとmiseを用意し、設定を確認してから実行します。
+既存のローカル設定は上書きしないでください。
 
-1. この`README.md`：プロジェクトの全体像とドキュメントの案内
-2. [仕様（docs/SPEC.md）](docs/SPEC.md)：作るアプリの機能・画面・完成条件
-3. [開発手順（CONTRIBUTING.md）](CONTRIBUTING.md)：環境構築・コマンド・GitとPRの進め方
+```sh
+mise trust
+mise install --locked
+pnpm install --frozen-lockfile
+cp .env.example .env.local
+cp .dev.vars.example .dev.vars
+pnpm dev
+```
 
-### 開発の基本方針
+Windows PowerShellでは`cp`を`Copy-Item`へ置き換えられます。
+初期設定は外部サービスへ接続しないモックです。詳細と接続版は[開発手順](CONTRIBUTING.md)を参照してください。
 
-- まずはモックで画面を一通りつなぐ
-  最初は共通の初期基盤を作り、「日記入力 → モック漫画の表示 → 保存・再取得」までの流れを通します（初期基盤の範囲は[CONTRIBUTING.md](CONTRIBUTING.md)を参照）。
-- デザイン・AIモデル・DBの完成を待たずに並行開発する
-  共通の型定義とモックデータを使って先行して開発を進めます。
-  - 全体の構成・技術選定：[ARCHITECTURE.md](docs/ARCHITECTURE.md)
-  - 画面とサーバーをつなぐ型・API仕様：[API.md](docs/API.md)
-  - 認証・費用制限・公開条件：[OPERATIONS.md](docs/OPERATIONS.md)
+## 実装を読む
 
-## ドキュメント一覧
+仕様・設定・契約の正本はコードです。採用版は[package.json](package.json)とlockfile、環境構成は[wrangler.jsonc](wrangler.jsonc)を参照してください。
 
-| 文書 | 内容 | 読むタイミング |
-|---|---|---|
-| [SPEC](docs/SPEC.md) | MVPの範囲・画面構成・完成条件 | 全員・最初に読む |
-| [CONTRIBUTING](CONTRIBUTING.md) | 環境構築・確認コマンド・Git/PRルール | 全員・開発開始時 |
-| [PLAN](docs/PLAN.md) | 開発ステップ・完了の目安・スケジュール | 全員・タスク確認時 |
-| [ARCHITECTURE](docs/ARCHITECTURE.md) | システム構成・技術選定・未決定事項 | 実装に入る前 |
-| [API](docs/API.md) | HTTP API・漫画データ形式・DB保存・AIの共通契約v1 | 画面・API・DBの接続時 |
-| [OPERATIONS](docs/OPERATIONS.md) | 認証・個人データ保護・予算管理・公開前チェック | 認証・DB・AI生成・公開を扱う時 |
-| [DATABASE_MIGRATION](docs/DATABASE_MIGRATION.md) | 共有Supabase migrationのplan/apply手順と安全境界 | migration適用をレビューするとき |
-| [PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md) | main限定の接続版配信と本番環境の境界 | production connected CDを扱う時 |
-| [AGENTS](AGENTS.md) | AIコーディングエージェント向けの行動指針 | AIツール利用時 |
+| 入口 | 内容 |
+|---|---|
+| [src/client](src/client) | React・React Routerの画面、PWA、認証とAPI呼出し |
+| [src/server/index.ts](src/server/index.ts) / [app.ts](src/server/app.ts) | Cloudflare Worker・HonoのHTTP、Queue、Cron |
+| [src/server/ai](src/server/ai) | OpenAI脚本・画像生成と固定モック |
+| [src/shared/schemas.ts](src/shared/schemas.ts) | Zodによる入力と共有データ契約 |
+| [supabase/migrations](supabase/migrations) | PostgreSQLのschema・RLS・RPC |
+| [docs/contracts](docs/contracts) | テスト対象の漫画JSON Schemaと架空fixture |
+| [.github/workflows](.github/workflows) / [scripts](scripts) | CI、配信、DB操作と検査 |
+| [design](design) | デザイン参照画像・SVG・プレビュー資産 |
 
-### 補助ファイル・テンプレート
+## 開発・運用
 
-- 漫画データの契約（JSON Schema / サンプル）
-  - [漫画JSON Schema](docs/contracts/comic.schema.json)
-  - [1枚画像方式（page）の例](docs/contracts/comic-page.example.json)
-  - [4枚画像方式（panels）の例](docs/contracts/comic-panels.example.json)
-  - ※ サンプルはすべて架空データであり、実際の画像は含みません。
-- GitHubテンプレート
-  - [Pull Requestテンプレート](.github/PULL_REQUEST_TEMPLATE.md)
-
-## 用語
+- [CONTRIBUTING.md](CONTRIBUTING.md)：起動、検査、ブランチとPR
+- [docs/OPERATIONS.md](docs/OPERATIONS.md)：秘密情報、配信、生成停止、DB変更と復旧
+- [supabase/README.md](supabase/README.md)：隔離DBテストとDBコードの入口
+- [構成図](docs/diagrams/README.md)：発表用PNGと編集用HTML
+- [AGENTS.md](AGENTS.md)：コーディングエージェントの作業規約
 
 <a id="glossary"></a>
 
-| 用語 | このプロジェクトでの意味 |
-|---|---|
-| JWT | 認証トークン。署名・発行元・期限等を検証して利用者を特定する |
-| RLS | DBの行ごとに読める利用者を制限する仕組み |
-| RPC | DB内の関数を呼ぶ仕組み。枠予約等を1トランザクションにまとめる |
-| 冪等性 | 同じ操作を再送してもjobや枠を重複作成しない性質 |
-| Queue / Consumer | 仕事を渡す待ち行列と、それを受けて実行する処理 |
-| claim | 1つのConsumerだけがjobの実行権を取得する操作 |
-| unknown | 外部AIで実行・課金されたか判断できないjob状態。自動再生成しない |
-| held | unknown等で費用の予約を保持する状態。外部未送信を確認するまで解放しない |
-| mock / fixture | 外部サービスの仮実装と、架空の日記・漫画などの固定データ |
-| migration | DB構造の変更を順番に再現するファイル |
-| revision | 日記の改訂番号。古い画面からの更新の衝突を検出する |
-| 秘密情報 | APIキー・認証トークンなど。Supabaseの固有名称だけsecret keyと記す |
+`unknown`は外部AIで実行・課金されたか判断できない生成状態です。自動再生成せず、`held`として費用の予約を保持します。
+冪等性は同じ要求の再送で生成や枠予約を重複させない性質、RLSはDBの行ごとのアクセス制限、RPCはDB内の関数呼出しです。
 
-## PWAのビルド確認
-
-`pnpm build:staging`は架空sample、`pnpm build:production`は接続版live CRUD成果物、`pnpm build:demo`は隔離live-demo成果物を作ります。production connected buildは公開Supabase URLを固定し、publishable keyとTurnstile site keyを含む公開3値で成果物を検査します。これらのローカルbuildはCloudflareへ公開しません。`develop`へのpush後、CIの`database`・`check`が成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`が設定されている場合に限り、既存staging Workerへ架空sampleを配信します。stagingでは個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。production connected CDはmainのpushまたは手動実行・CI成功・owner actorが揃ったjobで候補となります。production Environment variable`PRODUCTION_CONNECTED_CD_ENABLED`は`true`で、初回接続版(source `0ba2dc3057fbf1d3028188e000ec1f6a9bbb9c5e`、[Actions run](https://github.com/tossyhal/manga-nikki/actions/runs/42220799768)、attempt 2成功)を2026-11-06に公開済みです。公開先は`https://manga-nikki.tossyhal.workers.dev`です。現在の公開SHAは`/__deployment.json`で確認できます。owner報告ではTurnstile操作後にiPhone Safariの日記保存・再読み込み・削除を確認済みで、別匿名ユーザーの所有者分離、CAPTCHAの失効・再利用拒否ケース、実Cron、PWAホーム追加は未確認です。productionはSupabase Auth/DBとTurnstileへ接続し、実AIとQueueは停止します。詳細は[PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md)に記録します。staging手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
-
-stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。2026-11-06にdevelopの`80188a02c2f524febcd6f5164223b4b1059284b2`を初回公開し、[Actions実行](https://github.com/tossyhal/manga-nikki/actions/runs/42173608290)のdatabase/check/staging-deployはすべて成功しました。このSHAは初回配信の記録です。現在の公開commitは`/__deployment.json`のmarkerで確認してください。公開後の確認範囲と未確認事項は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowは退役済みで、資格情報は退役扱い（確認範囲は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照）です。
-
-開発サーバーの起動とビルドでは、公開用設定に既知のSupabase / OpenAIサーバー専用キー形式が入っている場合に処理を停止します。demo buildではSupabase URLにHTTPSも要求します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
-
-PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
-
-```sh
-pnpm test:e2e:pwa
-```
-
-`pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
-
-stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm build:staging`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。通常の`pnpm build`では開発用設定が混ざって`/config`が503になる場合があるため、sample previewには環境別buildを使います。日記保存の確認には、モックなら`pnpm dev`、Supabaseへ保存する場合は[local-connected手順](CONTRIBUTING.md#2-初回起動)に従い`pnpm dev:connected`を使ってください。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
-
-新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
-
-Android Chrome・iPhone SafariでのHTTPS実機インストール、standalone表示、更新は未確認です。ローカルpreviewでの確認は実機確認の代わりにはなりません。
-
-## ライセンス・利用条件
-
-ライセンスは現在未設定です。公開範囲や再利用条件はチームで相談して決定し、あわせて利用する依存ライブラリや生成AIの利用規約も確認します。
+ライセンスは未設定です。再利用条件と生成AIの利用規約は、利用前に確認してください。
