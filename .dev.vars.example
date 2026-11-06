@@ -1,5 +1,5 @@
-# Workerのローカル設定。基盤実装後に .dev.vars へコピー。
-# local-mockの設定。対応表: docs/ARCHITECTURE.md#mode-matrix
+# Workerのローカル設定。初回だけ .dev.vars へコピー。
+# local-mockの設定。起動手順: CONTRIBUTING.md
 # APP_ENV: development/staging/production、DATA_MODE: mock/live/sample、AI_MODE: mock/live
 # GENERATION_ENABLEDは実AI呼び出しだけを許可する。モック表示ではfalseのまま。
 # 秘密情報（APIキーなど）をcommitしない。
