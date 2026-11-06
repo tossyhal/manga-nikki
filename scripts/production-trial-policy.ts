@@ -52,7 +52,9 @@ try {
       if (
         operation === 'stop'
           ? status.enabled
-          : !status.trialPrepared || status.enabled !== (operation === 'enable')
+          : operation === 'activate-public80'
+            ? !status.enabled || !status.public80Prepared
+            : !status.trialPrepared || status.enabled !== (operation === 'enable')
       )
         throw new TrialPolicyFailure('TRIAL_POLICY_WRITE_RESULT_UNKNOWN');
     }
@@ -62,7 +64,8 @@ try {
         `- Confirmed enabled: ${status.enabled}`,
         '- 固定試験枠（prepare/enableの設定値）: owner/JST日・全体/JST日・全期間の各上限1漫画、総予算1,000,000 micro USD（1USD）。',
         '- 固定既存OpenAI profileのmax_cost_micro_usd=1,000,000はDB予約額です。providerが実請求を1USD以内に制限する厳密なcapではありません。',
-        '- enableは費用検証済みの明示確認が必要です。prepareは停止を維持します。一般向け継続運用の承認・上限拡張は行いません。',
+        '- activate-public80は累積予算80,000,000 micro USD、通常owner/JST日3回、全体件数capなし、初回成功ownerの日次回数例外です。既存予約・デバッグ費用も累積予算に含み、counterや履歴はresetしません。',
+        '- enableとactivate-public80は費用検証済みの明示確認が必要です。80USDは安全側のDB予約予算であり、provider実請求の厳密なcapではありません。prepareは停止を維持します。',
         '- このworkflowはAI APIを呼ばず、counter・reservation・既存generation・履歴を変更しません。stopも既存予約やunknownの枠を解放しません。',
         '',
       ].join('\n'),

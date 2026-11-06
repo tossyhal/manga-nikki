@@ -58,7 +58,7 @@
 - `.env.local`（`VITE_*`）はブラウザに公開される値だけを入れます（Supabase URL / publishable key、Turnstile site keyのみ）。
 - Workerは`.dev.vars`またはWorker設定から`SUPABASE_URL`・`SUPABASE_PUBLISHABLE_KEY`を読み取り、Auth/JWKS検証と利用者JWT付き読み取りクライアントに使います。`SUPABASE_SECRET_KEY`はサーバー専用RPC client factoryだけに渡します。
 - `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo`は対象環境のWorker設定を適用し、`dist/`を生成・検査します。ビルドはCloudflareへ接続・公開しません。Viteの環境ファイル読み込みを無効化し、対象環境の`.env.<環境>.local`にある許可済み3つの`VITE_*`だけを使います。demoとproductionは3値すべてが必須で、未設定なら停止します。CI production buildは固定Supabase URLと、Bitwardenから取得したpublishable key/site keyだけから一時公開設定ファイルを作成し、build後に削除します。`.env.local`・`.env.development.local`・`.dev.vars`・プロセス環境の`VITE_*`は使わず、Worker preview用にpluginが出力する`.dev.vars`も成果物から除きます。
-- Workerの環境変数はstagingが`APP_ENV=staging`・`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。productionは`APP_ENV=production`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`で、Supabase/Auth/Turnstileと日記CRUDへ接続し、日次期限削除Cronだけを使います。QueueとOpenAI keyは未設定です。専用demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue binding / Cronを定義します。Workers.devとpreview URLは無効で、routeも設定していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
+- Workerの環境変数はstagingが`APP_ENV=staging`・`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。productionは`APP_ENV=production`・`DATA_MODE=live`・`AI_MODE=live`で、生成flagはCDで指定します。Supabase/Auth/Turnstileと日記CRUD、専用Queue、日次期限削除・毎分生成復旧Cronを使います。OpenAI keyはWorker secretへ配置済みです。専用demo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue binding / Cronを定義します。Workers.devとpreview URLは無効で、routeも設定していません。`OPENAI_API_KEY`はWorker専用secretであり、ブラウザ環境へ公開しません。
 - release buildでは`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけをブラウザへ公開します。Supabase secret key、Turnstile検証用secret、AI APIキーを含む秘密情報はサーバー専用設定で管理します。
 - 開発サーバーの起動とビルドでは、解決済みの3つの公開設定値に`sb_secret_`形式、OpenAI APIキーの`sk-`形式、またはJWTの`role=service_role`が見つかった場合に停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出する保証ではありません。demo buildでは`VITE_SUPABASE_URL`に有効なHTTPS URLも必須です。
 - `.dev.vars`およびCloudflare Workers Secretsに、秘密情報（Supabase secret key、Turnstileの検証用秘密情報、AI APIキー。OpenAIを使う場合は`OPENAI_API_KEY`）を配置します。例ファイルは空値やplaceholderのみです。
@@ -134,14 +134,20 @@ handler未設定による新規生成停止は、providerを未開始のqueued j
 実際に課金されるAI生成を有効化する前に、「費用負担者・承認金額・利用プロバイダ/プロジェクト・モデルプロファイルと $C_{\max}$・日次/全期間枠・承認日」をこのドキュメントへ記録します。
 
 > 【現在の承認状態】
-> 2026-11-06にownerがOpenAI APIによる初回試験を総額1USD・全体最大1漫画・自動再試行なしで承認しました。UUID限定は行わず、全体枠で制限します。100USDクレジットはowner報告であり承認予算ではありません。一般向け生成の有効化は未承認です。モデル利用権限・最大費用・品質・実費の確認と試験policyの適用は未完了で、共有DB policyは停止中です。設定手順は`docs/PRODUCTION_DEPLOYMENT.md`を参照します。
+> 2026-11-06にownerがOpenAI APIによる初回試験を総額1USD・全体最大1漫画・自動再試行なしで承認しました。同日14:59UTCまでに、OpenAI側で厳密な1USD停止を設定できないことと実費未測定を説明し、ownerから「この費用条件で1件だけ試験する」と追認を受けました。今回はowner負担・OpenAIのmanga-nikkiプロジェクトで、固定profile（脚本gpt-4.1-mini-2025-04-14を1回、gpt-image-2.5-flareのlow/1024x1024を最大4回）による架空日記1件だけを試験します。
+>
+> DBの全体/JST日・全期間の各上限は1件、予算・予約額は各1,000,000 micro USDです。この予約額はprovider側の厳密な請求上限や数学的なCmaxの検証完了を意味しません。費用は1USD未満を見込む単発試験として追認されたもので、一般向け継続生成・追加試験・予算拡張は未承認です。UUID限定は行わず、全体枠で制限します。試験用配信42239099146の後、ownerから実AIの「4コマ表示・再読み込みOK」の報告を受けました。実費とモデル品質の詳細評価は未確認です。
+>
+> 100USDクレジットはowner報告で、残高・有効期限は独立確認していません。この試験はクレジット特典を予算拡張の根拠にせず、ownerが承認した費用条件で行います。別モデルへの自動フォールバックはしません。設定手順は`docs/PRODUCTION_DEPLOYMENT.md`を参照します。
+> **公開運用の追加承認（2026-11-07 JST）**：ownerは累積80USD、全体の固定回数上限なし、通常の匿名アカウントは3回/JST日、初回試験ownerは日次回数例外を承認しました。初回分とデバッグも同じ累積予算へ含み、既存counterや消費をリセットしません。80USDは安全側のDB予約予算で、provider実請求の厳密な停止保証ではありません。現在のprofileは1生成あたり1USDを予約し成功後の差額を戻さないため、予算から受付可能数が制約されます。私/エージェントから画像生成APIや実AIテストは実行しません。DB migrationと固定公開設定の適用完了までは停止を維持します。
+>
 > ※ 無料枠やクレジット特典を使う場合も、「請求先・対象API・残高・有効期限」が明確に確認できるまでは予算`0`として扱い、無料枠切れの際に別の有料モデルへ自動フォールバックさせません。
 
 ---
 
 ## 4. 環境分離と公開までの手順
 
-staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenとBitwarden secretは退役しました（ユーザー申告。Cloudflare API監査は未実施）。staging CDは`develop`へのpushでCIの`database`・`check`が成功した後にだけ候補となります。Repository variable`STAGING_SAMPLE_CD_ENABLED`の値が`true`の場合に限り、既存`manga-nikki-staging`へ架空sampleを公開します。Access認証は設けず、実データ・DB・Auth・Turnstile・AI・Queue・Cronは使用しません。production connected CDはmain限定・owner actor限定で実装済みです。Environment variable`PRODUCTION_CONNECTED_CD_ENABLED`は`false`で、旧sample flagからは昇格せず、無効時はBitwarden / Cloudflareへ接続しません。production初期設定、配信条件、公開前確認は[PRODUCTION_DEPLOYMENT](PRODUCTION_DEPLOYMENT.md)を参照してください。
+staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenとBitwarden secretは退役しました（ユーザー申告。Cloudflare API監査は未実施）。staging CDは`develop`へのpushでCIの`database`・`check`が成功した後にだけ候補となります。Repository variable`STAGING_SAMPLE_CD_ENABLED`の値が`true`の場合に限り、既存`manga-nikki-staging`へ架空sampleを公開します。Access認証は設けず、実データ・DB・Auth・Turnstile・AI・Queue・Cronは使用しません。production connected CDはmain限定・owner actor限定で実装済みです。Environment variable`PRODUCTION_CONNECTED_CD_ENABLED`は`true`です。旧sample flagからは昇格せず、このflagを無効にした場合はBitwarden / Cloudflareへ接続しません。production初期設定、配信条件、公開前確認は[PRODUCTION_DEPLOYMENT](PRODUCTION_DEPLOYMENT.md)を参照してください。
 
 1. 環境の分離（local / staging / demo）
    - 変数の組み合わせは[動作モード対応表](ARCHITECTURE.md#mode-matrix)に従います。localはモック、stagingは架空データ、demoは別のSupabaseプロジェクト・APIキー・Queueを基本とします。

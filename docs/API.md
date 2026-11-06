@@ -246,7 +246,7 @@ type ComicDocument = {
 | `public.generations` | `id`, `entry_id`, `owner_id`, `entry_revision`, `idempotency_key`, `request_hash`, `input_snapshot`, `model_profile_snapshot`, `claim_token`, `deadline_at`, `save_recovery_retry_at`（nullable）, `status`, `stage`, `comic_json`, `error_code`, `is_mock`, `created_at`, `updated_at`, `enqueued_at`, `started_at`, `completed_at`, `cancel_requested` | `UNIQUE(owner_id, idempotency_key)`、`status`のCHECK制約、entry所有者との整合性保証。`is_mock`は生成元を記録し、NULLは由来不明。`save_recovery_retry_at`は次回保存復旧の試行可能時刻 |
 | `public.assets` | `id`, `generation_id`, `owner_id`, `object_path`, `media_type`, `byte_size`, `width`, `height`, `content_sha256`, `created_at` | `UNIQUE(object_path)`、所有者/generation整合性、許可MIME・8 MiB・寸法・checksum制約 |
 | `private.comic_save_tasks` | `generation_id`, `owner_id`, `entry_id`, `entry_revision`, `diary_date`, `claim_token`, `save_claim_token`, `lease_expires_at`, `profile_id`, `script`, `comic_draft`, `asset_metadata` | service-onlyのdurable task。4件の予定asset ID/path/metadataを保存し、画像bytesは保持しない。successful completionでtaskを削除 |
-| `private.generation_policy` | `id=1`, `enabled`, `user_daily_limit`, `global_daily_limit`, `global_total_limit`, `budget_micro_usd`, `model_profile_json` | 初期値は`enabled=false`、全体枠/予算`0`。管理者のみ操作可能 |
+| `private.generation_policy` | `id=1`, `enabled`, `user_daily_limit`, `global_daily_limit`, `global_total_limit`, `daily_limit_exempt_owners`, `budget_micro_usd`, `model_profile_json` | 初期値は`enabled=false`、全体枠/予算`0`。管理者のみ操作可能 |
 | `private.quota_counters` | `scope`, `subject`, `day_key`, `count`, `committed_micro_usd` | `(scope, subject, day_key)`の一意制約。並行予約時に行ロックして集計 |
 | `private.reservations` | `generation_id`, `owner_id`, `reserved_day`, `max_cost_micro_usd`, `state`, `created_at` | `UNIQUE(generation_id)`。`state`は`reserved` / `consumed` / `held` / `released` |
 | `private.provider_attempts` | `id`, `generation_id`, `owner_id`, `stage`, `call_index`, `is_mock`, `state`, `request_id`, `started_at`, `finished_at` | `UNIQUE(generation_id, stage, call_index)`。生成jobと所有者の一致、mock由来の固定、AIモデルの重複呼び出し防止 |
@@ -257,12 +257,18 @@ type ComicDocument = {
 |---|---|
 | `profile_id` | `openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1` |
 | `is_mock` | `false` |
-| `max_cost_micro_usd` | DB側で承認・設定する正の整数。現在の料金・予算額は未承認 |
+| `max_cost_micro_usd` | DB側で承認・設定する正の整数。1生成全体の安全側予約額で、provider実請求の厳密なcapではない |
 | `max_image_calls` | `4` |
 | `provider` | `openai` |
 | `script_model` | `gpt-4.1-mini-2025-04-14` |
 | `image_model` | `gpt-image-2.5-flare` |
 | `color_mode` | `monochrome` |
+
+`global_daily_limit`と`global_total_limit`は`NULL`のときだけ全体件数による制限を省略します。`0`は受付不可のままです。`daily_limit_exempt_owners`は管理者だけが設定できる非公開のUUID配列（初期値`{}`）で、Workerが検証済みJWTから渡した`actorId`が含まれる場合だけユーザー日次上限を省略します。例外ownerも同時実行1件・累積予算・`unknown`保持・冪等性・所有者検証の対象です。通常のJST日次回数も例外ownerの回数も台帳へ記録します。migrationは既存設定やカウンターを変更せず、予算や例外ownerを自動有効化しません。
+
+2026-11-07のユーザー承認により、公開運用の設定は累積80USD（`budget_micro_usd=80000000`）・全体件数capなし・通常ユーザー3回/JST日・デバッグownerの日次例外とします。初回実行とデバッグの費用も同じ累積予算に含め、過去の消費・予約をリセットしません。この承認値の適用は別の運用手順で行います。
+
+例外ownerの`get_generation_quota.remaining_today`は日次残数の代わりに、累積残予算を選択済みprofileの最大費用で割った切り捨て整数（最大`9007199254740991`）です。無料mockに限り、1回以上利用可能であることを`1`で表し、未対応profileは`0`とします。通常ownerの残数は従来どおり日次上限から当日の使用回数を引きます。`generation_available`は全体件数cap・累積予算・active job・停止設定も検査し、公開HTTP契約v1のfieldと型を維持します。例外ownerのUUIDや例外設定自体はHTTPへ返しません。
 
 `max_cost_micro_usd`はscriptを1回、imageを最大4回実行する費用上限を含めます。profile snapshotは予約時に固定し、HTTP bodyからモデル・料金・枠を選べません。
 

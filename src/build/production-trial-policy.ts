@@ -19,7 +19,7 @@ import {
   runPsqlReadOnlyQuery,
 } from './dev-database-preflight-runner.ts';
 
-export type TrialPolicyOperation = 'check' | 'prepare' | 'enable' | 'stop';
+export type TrialPolicyOperation = 'check' | 'prepare' | 'enable' | 'stop' | 'activate-public80';
 type Code =
   | 'TRIAL_POLICY_INPUT_INVALID'
   | 'TRIAL_POLICY_METADATA_INVALID'
@@ -46,6 +46,7 @@ export class TrialPolicyFailure extends Error {
   }
 }
 export const TRIAL_POLICY_CONFIRMATIONS = {
+  'activate-public80': 'ENABLE_PUBLIC_80USD_3_PER_JST_DAY_OWNER_DEBUG',
   prepare: 'PREPARE_ONE_COMIC_1USD_TRIAL',
   enable: 'ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST',
   stop: 'STOP_GENERATION',
@@ -60,10 +61,15 @@ export type TrialPolicyStatus = Readonly<{
   trialPrepared: boolean;
   historyEmpty: boolean;
   policyTriggerPresent: boolean;
+  public80SchemaReady: boolean;
+  public80Ready: boolean;
+  public80Prepared: boolean;
+  cumulativeReservedCount: number;
+  cumulativeReservedMicroUsd: number;
 }>;
 export function validateTrialPolicyInput(env: NodeJS.ProcessEnv): TrialPolicyOperation {
   const operation = env.PRODUCTION_TRIAL_POLICY_OPERATION;
-  if (!['check', 'prepare', 'enable', 'stop'].includes(operation ?? ''))
+  if (!['check', 'prepare', 'enable', 'stop', 'activate-public80'].includes(operation ?? ''))
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
   if (
     operation !== 'check' &&
@@ -72,7 +78,10 @@ export function validateTrialPolicyInput(env: NodeJS.ProcessEnv): TrialPolicyOpe
         TRIAL_POLICY_CONFIRMATIONS[operation as keyof typeof TRIAL_POLICY_CONFIRMATIONS])
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
-  if (operation === 'enable' && env.PRODUCTION_TRIAL_PROVIDER_COST_VERIFIED !== 'true')
+  if (
+    (operation === 'enable' || operation === 'activate-public80') &&
+    env.PRODUCTION_TRIAL_PROVIDER_COST_VERIFIED !== 'true'
+  )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
   if (env.BWS_SUPABASE_DB_PASSWORD_SECRET_ID !== '6d238b9e-fdaf-497a-afef-b4f9011f9d33')
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
@@ -119,12 +128,30 @@ export function parseTrialPolicyStatus(raw: string): TrialPolicyStatus {
     value.identityOk !== true ||
     value.readOnly !== true ||
     value.policyExists !== true ||
-    ['enabled', 'initialPolicy', 'trialPrepared', 'historyEmpty', 'policyTriggerPresent'].some(
-      (key) => typeof value[key] !== 'boolean',
+    [
+      'enabled',
+      'initialPolicy',
+      'trialPrepared',
+      'historyEmpty',
+      'policyTriggerPresent',
+      'public80SchemaReady',
+      'public80Ready',
+      'public80Prepared',
+    ].some((key) => typeof value[key] !== 'boolean')
+  )
+    throw new TrialPolicyFailure('TRIAL_POLICY_METADATA_INVALID');
+  if (
+    ['cumulativeReservedCount', 'cumulativeReservedMicroUsd'].some(
+      (key) => !Number.isSafeInteger(value[key]) || (value[key] as number) < 0,
     )
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_METADATA_INVALID');
   return {
+    public80SchemaReady: value.public80SchemaReady as boolean,
+    public80Ready: value.public80Ready as boolean,
+    public80Prepared: value.public80Prepared as boolean,
+    cumulativeReservedCount: value.cumulativeReservedCount as number,
+    cumulativeReservedMicroUsd: value.cumulativeReservedMicroUsd as number,
     enabled: value.enabled as boolean,
     initialPolicy: value.initialPolicy as boolean,
     trialPrepared: value.trialPrepared as boolean,
@@ -154,6 +181,16 @@ export function assertTrialPolicyChangeAllowed(
   status: TrialPolicyStatus,
 ): void {
   if (operation === 'stop') return;
+  if (operation === 'activate-public80') {
+    if (
+      status.enabled ||
+      !status.public80SchemaReady ||
+      !status.public80Ready ||
+      !status.policyTriggerPresent
+    )
+      throw new TrialPolicyFailure('TRIAL_POLICY_STATE_INVALID');
+    return;
+  }
   if (
     status.enabled ||
     !status.historyEmpty ||
@@ -171,9 +208,9 @@ export function buildTrialPolicySql(
   providerCostVerified: boolean,
 ): string {
   if (
-    !['prepare', 'enable', 'stop'].includes(operation) ||
+    !['prepare', 'enable', 'stop', 'activate-public80'].includes(operation) ||
     typeof providerCostVerified !== 'boolean' ||
-    (operation === 'enable' && !providerCostVerified) ||
+    ((operation === 'enable' || operation === 'activate-public80') && !providerCostVerified) ||
     !source.startsWith(`BEGIN READ WRITE;\n${TRIAL_POLICY_SETTINGS_SENTINEL}`) ||
     source.split(TRIAL_POLICY_SETTINGS_SENTINEL).length !== 2
   )
@@ -223,7 +260,7 @@ export function classifyTrialPolicyWriteFailure(error: unknown): TrialPolicyWrit
   return causes.size === 1 ? [...causes][0]! : 'UNKNOWN';
 }
 export function renderTrialPolicyStatus(status: TrialPolicyStatus): string {
-  return `enabled=${status.enabled} initialPolicy=${status.initialPolicy} trialPrepared=${status.trialPrepared} historyEmpty=${status.historyEmpty} policyTriggerPresent=${status.policyTriggerPresent}`;
+  return `enabled=${status.enabled} initialPolicy=${status.initialPolicy} trialPrepared=${status.trialPrepared} historyEmpty=${status.historyEmpty} policyTriggerPresent=${status.policyTriggerPresent} public80SchemaReady=${status.public80SchemaReady} public80Ready=${status.public80Ready} public80Prepared=${status.public80Prepared} cumulativeReservedCount=${status.cumulativeReservedCount} cumulativeReservedMicroUsd=${status.cumulativeReservedMicroUsd}`;
 }
 export async function writeTrialPolicy(
   operation: Exclude<TrialPolicyOperation, 'check'>,
@@ -232,13 +269,23 @@ export async function writeTrialPolicy(
   executor: typeof execute = execute,
 ): Promise<void> {
   if (
-    !['prepare', 'enable', 'stop'].includes(operation) ||
+    !['prepare', 'enable', 'stop', 'activate-public80'].includes(operation) ||
     typeof providerCostVerified !== 'boolean' ||
-    (operation === 'enable' && !providerCostVerified)
+    ((operation === 'enable' || operation === 'activate-public80') && !providerCostVerified)
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
   await verifyPinnedRootCertificate(DEV_DATABASE_ROOT_CERTIFICATE_PATH, new Date());
-  const source = await readFile(TRIAL_POLICY_WRITE_PATH, 'utf8');
+  const source = await readFile(
+    operation === 'activate-public80'
+      ? fileURLToPath(
+          new URL(
+            '../../supabase/operations/production-public80-policy-write.sql',
+            import.meta.url,
+          ),
+        )
+      : TRIAL_POLICY_WRITE_PATH,
+    'utf8',
+  );
   const sql = buildTrialPolicySql(source, operation, providerCostVerified);
   const env = createPsqlEnvironment(connection(password));
   env.PGOPTIONS =
