@@ -91,3 +91,11 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GEN
 一次資料は[Supabaseの既定設定](https://github.com/supabase/postgres/blob/develop/ansible/files/postgresql_config/supautils.conf.j2)、[supautilsのpolicy委任仕様](https://github.com/supabase/supautils#table-ownership-bypass)、[GUC登録](https://github.com/supabase/supautils/blob/master/src/supautils.c)です。`current_setting('supautils.policy_grants',true)`は読取専用で確認でき、設定変更やowner roleの追加は不要です。
 
 `supabase/tests/production_platform_delegation.sql`は、固定2tableを委任したsupautils付きの廃棄可能PostgreSQL専用fixtureです。非superuserかつownerのUSAGE/SETなしでの作成、既存policy保持、不一致時のtransaction rollback、RLS維持を確認します。
+
+## 初回試験直前の検証記録（2026-11-06 UTC）
+
+- [42237568661](https://github.com/tossyhal/manga-nikki/actions/runs/42237568661)で、同じaccount-owned tokenによるQueue・Workerの読取、private Storage設定、固定restrictive policyのmetadata検査が成功しました。tokenはWorkers Editorをmanga-nikkiだけ、Queues Writeを対象accountに限定しています。旧tokenは新CDの検証前に失効させません。
+- [42234891276](https://github.com/tossyhal/manga-nikki/actions/runs/42234891276)では、Storageの一時Auth利用者2人・架空PNGによる直接読取/署名/書込拒否とcleanupが成功しました。このrun全体は当時のQueue権限不足で失敗しており、全成功とは扱いません。後続の上記runでQueue権限を確認済みです。
+- [42235181419](https://github.com/tossyhal/manga-nikki/actions/runs/42235181419)のreadbackはenabled=false、trialPrepared=true、historyEmpty=true、policyTriggerPresent=trueです。[42237804661](https://github.com/tossyhal/manga-nikki/actions/runs/42237804661)ではsource 0572d938a679ec3afdc5e78eebbf5973943bae58を、生成OFFのままQueue・OpenAI key・Cron付きで配信し、検査が成功しました。
+- ownerはiPhoneのホーム画面PWAで、架空日記の保存・再起動後の保持・削除の成功を報告しました。別匿名ユーザーによる日記所有者分離、実CAPTCHA失効/再利用拒否、実Cron実行結果、実AI品質・実費はこの時点では未検証です。
+- ownerは実請求を厳密に1USDで停止できない条件を確認し、架空日記1件だけの試験を追認しました。`provider_cost_verified`はこの試験の費用条件を確認・承認した操作入力であり、厳密なprovider請求capの証明ではありません。承認内容は`docs/OPERATIONS.md`に記録します。

@@ -14,7 +14,7 @@ on:
         default: ''
         required: false
       provider_cost_verified:
-        description: enable専用。脚本1回＋画像4回の実請求上限を別途検証済み（DB予約額だけではprovider capにならない）
+        description: enable専用。脚本1回＋画像4回の費用条件を確認し承認済み（厳密な実請求停止を保証しない）
         type: boolean
         default: false
         required: true
