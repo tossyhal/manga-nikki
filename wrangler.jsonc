@@ -99,7 +99,10 @@
       "triggers": { "crons": ["* * * * *", "0 15 * * *"] },
     },
     "production": {
-      "triggers": { "crons": ["0 15 * * *"] },
+      "name": "manga-nikki",
+      "workers_dev": true,
+      "preview_urls": false,
+      "triggers": { "crons": [] },
       "vars": {
         "APP_ENV": "production",
         "DATA_MODE": "sample",

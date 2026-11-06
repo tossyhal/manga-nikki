@@ -141,7 +141,7 @@ handler未設定による新規生成停止は、providerを未開始のqueued j
 
 ## 4. 環境分離と公開までの手順
 
-staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenとBitwarden secretは退役しました（ユーザー申告。Cloudflare API監査は未実施）。通常CDは`develop`へのpushでCIの`database`・`check`が成功した後にだけ候補となります。Repository variable`STAGING_SAMPLE_CD_ENABLED`の既定は未設定なので、ownerが必要な保護設定を確認し`true`にするまで配信しません。CDは既存`manga-nikki-staging`だけを更新し、workers.devで架空sampleを公開します。Access認証は設けず、実データ・DB・Auth・Turnstile・AI・Queue・Cronは使用しません。本番公開は対象外です。
+staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenとBitwarden secretは退役しました（ユーザー申告。Cloudflare API監査は未実施）。staging CDは`develop`へのpushでCIの`database`・`check`が成功した後にだけ候補となります。Repository variable`STAGING_SAMPLE_CD_ENABLED`の値が`true`の場合に限り、既存`manga-nikki-staging`へ架空sampleを公開します。Access認証は設けず、実データ・DB・Auth・Turnstile・AI・Queue・Cronは使用しません。production sample CDはmain限定・owner actor限定で実装済みで、production Environment variable`PRODUCTION_SAMPLE_CD_ENABLED`が`true`でない場合は成功skipします。production初期設定、対象固定、BitwardenからCloudflare Worker token 1件だけを取得する制約、公開承認後の有効化は[PRODUCTION_DEPLOYMENT](PRODUCTION_DEPLOYMENT.md)を参照してください。
 
 1. 環境の分離（local / staging / demo）
    - 変数の組み合わせは[動作モード対応表](ARCHITECTURE.md#mode-matrix)に従います。localはモック、stagingは架空データ、demoは別のSupabaseプロジェクト・APIキー・Queueを基本とします。
@@ -150,7 +150,7 @@ staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenと
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。stagingは`workers_dev=true`、`preview_urls=false`、Cronなし、`DATA_MODE=sample`で、Queue bindingもありません。productionは`DATA_MODE=sample`でQueue bindingなし、日次期限削除Cronのみを設定します。独立demo targetは専用名`manga-nikki-demo`、Queue producer / consumer、batch size 1・concurrency 2、1分照合と日次削除Cronを設定します。CronやQueue bindingの記載は設定であり、remote Queue作成やdeployは行いません。staging sampleの配信は既存CD workflowの条件が満たされた場合だけ行われます。
+   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。stagingは`workers_dev=true`、`preview_urls=false`、Cronなし、`DATA_MODE=sample`で、Queue bindingもありません。productionも`APP_ENV=production`・`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`で、CD targetは`manga-nikki`、workers.dev有効・preview URL無効、Cron / Queueなしです。独立demo targetは専用名`manga-nikki-demo`、Queue producer / consumer、batch size 1・concurrency 2、1分照合と日次削除Cronを設定します。CronやQueue bindingの記載は設定であり、remote Queue作成やdeployは行いません。sample CDは各環境のflagとbranch条件が満たされた場合だけ行われます。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
    - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`でsample成果物確認 → 既存staging sample CDが有効な場合の配信・smoke確認 → 隔離demo環境・DB / Queue / 秘密情報確認 → 公開範囲の別承認 → 実AI費用の別承認後に少数の生成計測」の順に進めます。
@@ -162,7 +162,7 @@ staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenと
 
 ### 実デモ用live-demoを準備する手順
 
-`wrangler.jsonc`には独立した`demo` targetを追加しています。staging / productionのsample設定は変えていません。現在のdemo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、専用Queue名とCronを定義し、Workers.dev / preview URLを無効にしてrouteを設定していません。`pnpm build:demo`はローカルで成果物を作成・検査するだけで、Cloudflareへ接続・公開しません。この設定にはHTTPの検証先がないため、公開routeを追加した別承認・別PRより前にlive HTTP検証を行える状態ではありません。実資源の準備と公開hostnameの決定にはそれぞれ別途承認が必要です。Turnstile widgetは承認されたhostnameだけを許可し、routeの追加は別PRで行います。
+`wrangler.jsonc`には独立した`demo` targetを追加しています。staging sample設定は変えていません。productionはsample CD用に固定名`manga-nikki`、workers.dev有効、preview URL無効、Cronなしへ更新しています。現在のdemo targetは`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、専用Queue名とCronを定義し、Workers.dev / preview URLを無効にしてrouteを設定していません。`pnpm build:demo`はローカルで成果物を作成・検査するだけで、Cloudflareへ接続・公開しません。この設定にはHTTPの検証先がないため、公開routeを追加した別承認・別PRより前にlive HTTP検証を行える状態ではありません。実資源の準備と公開hostnameの決定にはそれぞれ別途承認が必要です。Turnstile widgetは承認されたhostnameだけを許可し、routeの追加は別PRで行います。
 
 1. **実資源準備と公開hostnameの別途承認を得た後**、架空日記専用のSupabase demo projectと、そのhostnameだけを許可したTurnstile widgetを用意し、匿名Authを設定します。`supabase/migrations/`のレビュー済みmigrationを順番に適用し、`supabase/storage/comics-bucket.sql`でprivate `comics` bucketを設定します。migrationとbucket設定は管理roleで適用し、Worker用secret keyをDDL実行に使いません。専用Cloudflare Queueもこの承認後に作成します。共有DBや参加者データは使いません。
 2. `.env.demo.example`を`.env.demo.local`へコピーし、ブラウザへ公開する`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_TURNSTILE_SITE_KEY`だけを設定します。`VITE_SUPABASE_URL`はHTTPSの有効なURLにします。Supabase secret key、Turnstile検証用secret、AI API keyをこのファイルへ入れません。
