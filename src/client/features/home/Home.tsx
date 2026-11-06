@@ -11,6 +11,7 @@ import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { AppStateCard, configUnavailableMessage } from '../../app/AppStateCard';
 import { useHomeRecords } from './useHomeRecords';
+import { useDelayedLoading } from '../../lib/useDelayedLoading';
 import { useJstToday } from '../../lib/useJstToday';
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
@@ -33,8 +34,9 @@ function RecentRecords({ entries }: { entries: Entry[] }) {
 
 function TodayEntryHero({ entry }: { entry: Entry }) {
   const preview = useEntryPreview(entry, { eager: true });
-  let placeholder = '漫画はまだありません';
-  if (preview.isLoading) placeholder = '漫画を読み込んでいます';
+  const showPreviewLoading = useDelayedLoading(preview.isLoading);
+  let placeholder = preview.isLoading && !showPreviewLoading ? '' : '漫画はまだありません';
+  if (preview.isLoading && showPreviewLoading) placeholder = '漫画を読み込んでいます';
   else if (preview.imageError) placeholder = '漫画画像を表示できません';
   else if (preview.error && !preview.generation) placeholder = '記録の状態を確認できません';
   else if (preview.generation?.status === 'queued' || preview.generation?.status === 'running')
@@ -73,7 +75,7 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
           <Icon name="chevron-right" size={18} />
         </Link>
       </div>
-      <div className="home-today-image">
+      <div className="home-today-image" aria-busy={preview.isLoading}>
         <Link
           className="home-today-image-link"
           to={`/entries/${encodeURIComponent(entry.id)}`}
@@ -118,6 +120,7 @@ export function Home({
   const navigate = useNavigate();
   const [recordsRetry, setRecordsRetry] = useState(0);
   const records = useHomeRecords(config, configError, recordsRetry);
+  const showRecordsLoading = useDelayedLoading(records.status === 'loading');
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
   const today = useJstToday();
@@ -219,12 +222,16 @@ export function Home({
             status
           />
         ) : records.status === 'loading' ? (
-          <AppStateCard
-            headingLevel="h2"
-            title="記録を読み込んでいます"
-            description="少しお待ちください。"
-            status
-          />
+          showRecordsLoading ? (
+            <AppStateCard
+              headingLevel="h2"
+              title="記録を読み込んでいます"
+              description="少しお待ちください。"
+              status
+            />
+          ) : (
+            <div className="today-loading-placeholder" aria-busy="true" />
+          )
         ) : records.status === 'error' ? (
           <AppStateCard
             headingLevel="h2"

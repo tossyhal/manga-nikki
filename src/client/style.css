@@ -284,6 +284,12 @@ p {
   background: var(--color-paper);
 }
 
+.today-loading-placeholder {
+  min-height: 226px;
+  border-radius: 22px;
+  background: var(--color-paper);
+}
+
 .today-empty-card > p {
   margin: 0;
   font-size: 17px;
@@ -1689,6 +1695,14 @@ p {
 .entry-draft-card {
   margin: 30px 0 18px;
   padding: 18px;
+  border-radius: 22px;
+  background: #f6f6f6;
+}
+
+.detail-loading-placeholder {
+  display: block;
+  min-height: 311px;
+  margin: 30px 0 18px;
   border-radius: 22px;
   background: #f6f6f6;
 }

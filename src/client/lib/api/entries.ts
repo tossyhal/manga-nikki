@@ -1,20 +1,97 @@
 import type { Entry, EntryDetail } from '../../../shared/schemas';
-import { api, ApiClientError } from './client';
+import {
+  api,
+  ApiClientError,
+  getApiAuthorizationScope,
+  type ApiAuthorizationScope,
+} from './client';
+import {
+  entryReadCacheEpoch,
+  getOrCreateEntryRead,
+  getEntryReadCache,
+  invalidateEntryReadCache,
+  setEntryReadCache,
+} from './entryReadCache';
 
-export const getEntry = (id: string) => api<EntryDetail>(`/entries/${encodeURIComponent(id)}`);
-export function getEntries({
+export type EntryReadOptions = { fresh?: boolean; signal?: AbortSignal };
+
+function canCacheEntryDetail(detail: EntryDetail) {
+  if (detail.latestGenerationId === null) return true;
+  return (
+    detail.latestGeneration?.id === detail.latestGenerationId &&
+    detail.latestGeneration.status !== 'queued' &&
+    detail.latestGeneration.status !== 'running'
+  );
+}
+
+async function readCachedEntry<T>(
+  kind: 'entries' | 'entry',
+  scope: ApiAuthorizationScope,
+  path: string,
+  options: EntryReadOptions,
+  canCache: (value: T) => boolean = () => true,
+): Promise<T> {
+  options.signal?.throwIfAborted();
+  if (options.fresh) invalidateEntryReadCache();
+  const cacheEpoch = entryReadCacheEpoch(kind);
+  if (!options.fresh) {
+    const cached = getEntryReadCache<T>(kind, scope, path);
+    if (cached.found) return cached.value;
+  }
+  const load = async () => {
+    const result = await api<T>(path, { signal: options.signal }, { expectedScope: scope });
+    options.signal?.throwIfAborted();
+    if (kind === 'entries') invalidateEntryReadCache('entry');
+    if (canCache(result)) setEntryReadCache(kind, scope, path, result, cacheEpoch);
+    return result;
+  };
+  return options.signal ? load() : getOrCreateEntryRead(kind, scope, path, cacheEpoch, load);
+}
+
+export async function getEntry(id: string, options: EntryReadOptions = {}) {
+  options.signal?.throwIfAborted();
+  if (options.fresh) invalidateEntryReadCache();
+  const path = `/entries/${encodeURIComponent(id)}`;
+  const scope = await getApiAuthorizationScope();
+  options.signal?.throwIfAborted();
+  return readCachedEntry<EntryDetail>('entry', scope, path, options, canCacheEntryDetail);
+}
+
+export async function getEntries({
   cursor,
   limit,
   signal,
+  fresh = false,
 }: {
   cursor?: string;
   limit?: number;
   signal?: AbortSignal;
+  fresh?: boolean;
 } = {}) {
   const query = new URLSearchParams();
   if (cursor) query.set('cursor', cursor);
   if (limit !== undefined) query.set('limit', String(limit));
-  return api<{ items: Entry[]; nextCursor: string | null }>(`/entries?${query}`, { signal });
+  const path = `/entries?${query}`;
+  const clearIncompleteList = () => invalidateEntryReadCache('entries');
+  if (signal?.aborted) {
+    if (cursor) clearIncompleteList();
+    signal.throwIfAborted();
+  }
+  if (cursor) signal?.addEventListener('abort', clearIncompleteList, { once: true });
+  try {
+    signal?.throwIfAborted();
+    if (fresh) invalidateEntryReadCache();
+    const scope = await getApiAuthorizationScope();
+    signal?.throwIfAborted();
+    return await readCachedEntry<{ items: Entry[]; nextCursor: string | null }>(
+      'entries',
+      scope,
+      path,
+      { signal, fresh },
+    );
+  } finally {
+    if (cursor) signal?.removeEventListener('abort', clearIncompleteList);
+  }
 }
 
 export type CreateEntryInput = {
