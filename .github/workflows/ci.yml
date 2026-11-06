@@ -2,12 +2,13 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.ref) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   database:
     runs-on: ubuntu-24.04
@@ -50,3 +51,54 @@ jobs:
       - run: pnpm test:e2e
       - name: PWA検査（検査済みのビルド成果物を再利用）
         run: pnpm exec playwright test --config playwright.pwa.config.ts
+
+  staging-deploy:
+    needs: [database, check]
+    if: >-
+      github.repository == 'tossyhal/manga-nikki' &&
+      vars.STAGING_SAMPLE_CD_ENABLED == 'true' &&
+      needs.database.result == 'success' &&
+      needs.check.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: staging
+    concurrency:
+      group: manga-nikki-deploy-staging
+      queue: max
+      cancel-in-progress: false
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - name: staging公開設定ファイルがないことを確認
+        run: |
+          node --input-type=module -e "import { lstatSync } from 'node:fs'; try { lstatSync('.env.staging.local'); console.error('STAGING_ENV_FILE_PRESENT'); process.exitCode = 1; } catch (error) { if (error.code !== 'ENOENT') { console.error('STAGING_ENV_FILE_CHECK_FAILED'); process.exitCode = 1; } }"
+      - run: pnpm build:staging
+      - name: Bitwarden secret IDの形式を検証
+        env:
+          BWS_CLOUDFLARE_SECRET_ID: ${{ vars.BWS_CLOUDFLARE_SECRET_ID }}
+        run: |
+          node -e "const id = process.env.BWS_CLOUDFLARE_SECRET_ID ?? ''; const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; if (!uuid.test(id)) { console.error('BWS_CLOUDFLARE_SECRET_ID_INVALID'); process.exitCode = 1; }"
+      - name: Bitwardenからstaging Worker用tokenを取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_CLOUDFLARE_SECRET_ID }} > CLOUDFLARE_API_TOKEN
+      - name: 既存staging Workerへ架空sampleを配信して確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_WORKER_URL: ${{ vars.STAGING_WORKER_URL }}
+        run: node --experimental-strip-types scripts/deploy-staging-sample.ts

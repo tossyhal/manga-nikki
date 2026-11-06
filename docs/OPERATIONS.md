@@ -139,7 +139,7 @@ handler未設定による新規生成停止は、providerを未開始のqueued j
 
 ## 4. 環境分離と公開までの手順
 
-dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](DEPLOYMENT.md)を参照してください。mainから明示的に起動する専用workflowで接続確認と最小Workerの作成を分け、workers.devとpreview URLを無効にします。作成中は別経路から同名Workerを作成・更新しないことを必須条件とします。これは通常CDやアプリ公開ではなく、既存Workerの検出時の上書き、Supabase接続、本番作成、実AI有効化は行いません。
+staging用Workerの初期作成は完了し、初期作成用Cloudflare tokenとBitwarden secretは退役しました（ユーザー申告。Cloudflare API監査は未実施）。通常CDは`develop`へのpushでCIの`database`・`check`が成功した後にだけ候補となります。Repository variable`STAGING_SAMPLE_CD_ENABLED`の既定は未設定なので、ownerが必要な保護設定を確認し`true`にするまで配信しません。CDは既存`manga-nikki-staging`だけを更新し、workers.devで架空sampleを公開します。Access認証は設けず、実データ・DB・Auth・Turnstile・AI・Queue・Cronは使用しません。本番公開は対象外です。
 
 1. 環境の分離（local / staging / demo）
    - 変数の組み合わせは[動作モード対応表](ARCHITECTURE.md#mode-matrix)に従います。localはモック、stagingは架空データ、demoは別のSupabaseプロジェクト・APIキー・Queueを基本とします。
@@ -148,11 +148,11 @@ dev（staging）用Workerの初期作成は[デプロイ基盤の初期設定](D
    - 匿名AuthとTurnstile連携、レビュー済みのSQL migration、private Storageバケット（`comics`）、RLS / RPCの権限を設定します。
    - migrationファイルは`supabase/migrations/`で再現可能にし、共有DBへ適用する際はレビュー後に接続先と適用順序を確認してから実行します。
 3. Cloudflare Workers側の設定
-   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。staging/productionにも日次Cronを準備しますが、初期`DATA_MODE=sample`のmode gateにより個人DB/Storageへ接続せず、Queue bindingもありません。Cron設定だけでremote Queue作成やdeployは行っていません。
+   - `wrangler.jsonc`は`local-connected`に1分のQueue照合と日次期限削除Cronを定義します。Queue bindingは`GENERATION_QUEUE`、queue名は`manga-nikki-generations-local-connected`、consumer batch size 1 / concurrency 2です。stagingは`workers_dev=true`、`preview_urls=false`、Cronなし、`DATA_MODE=sample`です。productionの公開条件は別途承認・手順とし、このCDから変更しません。
    - クラウド上で誤ってモック認証が起動できないことを必ず確認します。
 4. 段階的な検証とデプロイ
-   - 「標準検査（lint / typecheck / test / build） → `pnpm build:staging`による成果物確認 → staging環境での統合検証 → demo環境のDB / Queue / 秘密情報確認 → 別承認後の少数の実生成による計測」の順に進めます。
-   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。実デプロイは接続先・binding・秘密情報・公開条件を確認した後、別途明示承認を得てから対象環境のbuild成果物に対して`pnpm exec wrangler deploy`を実行します。Cloudflare Vite pluginはbuild時に環境を選択し、生成済みの環境別Wrangler設定を使うため、deploy時の`--env`指定はしません。現在アプリ配信用のデプロイscriptはありません。最小Workerの初期作成手順は[DEPLOYMENT](DEPLOYMENT.md)に分けています。この作業では実デプロイを行っていません。
+   - 標準検査成功後の`develop` pushから、ownerが有効化した場合に限り、staging sample CDが公開架空sampleを配信・smoke確認します。詳細と有効化前のGitHub保護条件は[DEPLOYMENT](DEPLOYMENT.md)を参照してください。
+   - `build:staging` / `build:production`と`pnpm preview`はローカルの成果物作成・確認であり、実環境へ公開しません。staging deployは生成済みのstaging Wrangler設定を使い、deploy時に`--env`を指定しません。初期Workerが存在しない場合やsecret/Queue等bindingがある場合は停止します。production・Supabase・実AIの設定を変更するworkflowではありません。
    - ストレージ容量・転送量・WorkerのCPU/メモリ・Queueの利用枠を実アカウントで確認します。
    - Supabaseの休止条件と匿名登録レート制限を確認します。
    - 画像サイズ上限は目標サイズではありません。平均サイズ×生成件数で容量、さらに閲覧回数を掛けて転送量を見積もります。
