@@ -26,7 +26,7 @@ describe('scheduled handler', () => {
       GENERATION_RECONCILE_CRON,
       RETENTION_CLEANUP_CRON,
     ]);
-    expect(config.env.staging?.triggers?.crons).toEqual([RETENTION_CLEANUP_CRON]);
+    expect(config.env.staging?.triggers?.crons).toEqual([]);
     expect(config.env.production?.triggers?.crons).toEqual([RETENTION_CLEANUP_CRON]);
   });
 
