@@ -255,6 +255,76 @@ test('pathname遷移ではmainへfocusし、記録タブのquery更新ではtab 
   await expect(listTab).toHaveAttribute('aria-selected', 'true');
 });
 
+test('詳細メニューは外側操作とTab離脱で閉じ、Escapeと矢印キーを保つ', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  const edit = page.getByRole('menuitem', { name: '日記を編集' });
+  const remove = page.getByRole('menuitem', { name: '日記を削除' });
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await expect(edit).toBeFocused();
+  await page.locator('.detail-title').click();
+  await expect(menu).toHaveCount(0);
+
+  await trigger.click();
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(menu).toHaveCount(0);
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await trigger.click();
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('ポインターでメニューを閉じる際にblurが先行しても再度開かない', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  await trigger.click();
+  await expect(menu).toBeVisible();
+
+  await page.evaluate(() => {
+    const triggerButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="その他の操作"]',
+    );
+    const menuItem = document.querySelector<HTMLButtonElement>('[role="menuitem"]');
+    if (!triggerButton || !menuItem) throw new Error('詳細メニューがありません');
+    menuItem.focus();
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }),
+    );
+    menuItem.blur();
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse', button: 0 }),
+    );
+    triggerButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
   await installMockUiRoutes(page);
 

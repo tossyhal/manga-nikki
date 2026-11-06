@@ -107,6 +107,19 @@ function EntryHistoryItem({
         </span>
         <Icon name="chevron-right" size={20} />
       </Link>
+      {preview.imageError && (
+        <button
+          className="entry-history-image-retry"
+          type="button"
+          aria-label="漫画画像を再読み込み"
+          aria-disabled={preview.isLoading}
+          onClick={() => {
+            if (!preview.isLoading) preview.retryImage();
+          }}
+        >
+          <Icon name="refresh" size={18} />
+        </button>
+      )}
     </li>
   );
 }
