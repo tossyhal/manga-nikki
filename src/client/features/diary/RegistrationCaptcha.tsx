@@ -77,11 +77,11 @@ export function RegistrationCaptcha({
   onError: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const callbacksRef = useRef({ onToken, onError });
+  const callbacksRef = useRef({ requestKey, onToken, onError });
 
   useEffect(() => {
-    callbacksRef.current = { onToken, onError };
-  }, [onError, onToken]);
+    callbacksRef.current = { requestKey, onToken, onError };
+  }, [onError, onToken, requestKey]);
 
   useEffect(() => {
     let active = true;
@@ -92,22 +92,29 @@ export function RegistrationCaptcha({
       .then((api) => {
         if (!active || !containerRef.current) return;
         turnstile = api;
+        const isCurrent = () => active && callbacksRef.current.requestKey === requestKey;
         widgetId = api.render(containerRef.current, {
           sitekey: siteKey,
           ...(action ? { action } : {}),
           execution: 'execute',
           appearance: 'execute',
           callback: (token) => {
+            if (!isCurrent()) return;
             if (token) callbacksRef.current.onToken(token);
             else callbacksRef.current.onError();
           },
-          'error-callback': () => callbacksRef.current.onError(),
-          'expired-callback': () => callbacksRef.current.onError(),
+          'error-callback': () => {
+            if (isCurrent()) callbacksRef.current.onError();
+          },
+          'expired-callback': () => {
+            if (isCurrent()) callbacksRef.current.onError();
+          },
         });
         api.execute(widgetId);
       })
       .catch(() => {
-        if (active) callbacksRef.current.onError();
+        if (active && callbacksRef.current.requestKey === requestKey)
+          callbacksRef.current.onError();
       });
 
     return () => {

@@ -28,6 +28,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   const requestId = useRef(crypto.randomUUID());
   const activeRef = useRef(true);
   const actionInFlightRef = useRef(false);
+  const registrationPendingRef = useRef(false);
   const errorRef = useRef<HTMLParagraphElement | null>(null);
   const saveErrorCardRef = useRef<HTMLElement | null>(null);
   const { online, refreshOnlineStatus } = useOnlineStatus();
@@ -81,10 +82,12 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
   );
   const dirty = saved === null && (body.length > 0 || date !== initialDate);
+  const operationBusy = busy || pendingSave !== null;
 
   useLayoutEffect(() => {
-    if (activeRef.current) onActivityChange({ dirty, busy, failed: Boolean(error) });
-  }, [busy, dirty, error, onActivityChange]);
+    if (activeRef.current)
+      onActivityChange({ dirty, busy: busy || pendingSave !== null, failed: Boolean(error) });
+  }, [busy, dirty, error, onActivityChange, pendingSave]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -206,7 +209,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   }
 
   async function save(makeComic: boolean) {
-    if (!activeRef.current || actionInFlightRef.current) return;
+    if (!activeRef.current || actionInFlightRef.current || registrationPendingRef.current) return;
     if (!navigator.onLine) {
       refreshOnlineStatus();
       setError('オフラインのため保存できません。入力内容はこの画面に残っています。');
@@ -236,6 +239,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
               '匿名登録用の確認を利用できません。入力した本文はこの画面に残っています。',
             );
           }
+          registrationPendingRef.current = true;
           setPendingSave(makeComic);
           setCaptchaAttempt((attempt) => attempt + 1);
           return;
@@ -254,8 +258,9 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   }
 
   async function completeRegistration(captchaToken: string) {
-    if (!activeRef.current || actionInFlightRef.current) return;
+    if (!activeRef.current || actionInFlightRef.current || !registrationPendingRef.current) return;
     const makeComic = pendingSave;
+    registrationPendingRef.current = false;
     setPendingSave(null);
     if (makeComic === null) return;
     if (!navigator.onLine) {
@@ -306,12 +311,17 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
   }
 
   function failRegistrationCaptcha() {
+    if (!activeRef.current || !registrationPendingRef.current) return;
+    registrationPendingRef.current = false;
     setPendingSave(null);
     setError('確認に失敗しました。本文は残っています。新しい確認を取得して再操作してください。');
   }
 
   const primaryDisabled =
-    busy || saved !== null || !online || (quotaState === 'loading' && configAllowsGeneration);
+    operationBusy ||
+    saved !== null ||
+    !online ||
+    (quotaState === 'loading' && configAllowsGeneration);
   const pageClasses = [
     'new-entry-page',
     !online && 'is-offline',
@@ -340,12 +350,12 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
         }}
       >
         <h1 className="sr-only">日記を書く</h1>
-        <fieldset disabled={busy || saved !== null} className="entry-form-fields">
+        <fieldset disabled={operationBusy || saved !== null} className="entry-form-fields">
           <div className="date-row">
             <DiaryDateField id="date" value={date} onChange={setDate} />
             <button
               className="button-text"
-              disabled={busy || saved !== null || !online}
+              disabled={operationBusy || saved !== null || !online}
               type="button"
               onClick={() => void save(false)}
             >
@@ -403,7 +413,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
             </p>
             <button
               className="button-text"
-              disabled={busy || refreshing}
+              disabled={operationBusy || refreshing}
               type="button"
               onClick={() => {
                 setQuotaState('loading');
@@ -433,7 +443,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
           </>
         )}
         {pendingSave !== null && config.dataMode === 'live' && (
-          <section className="captcha-card" aria-label="匿名登録">
+          <section className="captcha-card" aria-label="匿名登録" aria-busy={operationBusy}>
             <p>匿名登録を続けるため、登録用の確認を行います。</p>
             {siteKey ? (
               <RegistrationCaptcha
@@ -488,7 +498,7 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
         {generationCheckEntry && (
           <button
             className="button button-secondary"
-            disabled={busy}
+            disabled={operationBusy}
             type="button"
             onClick={() => void checkGenerationReceipt()}
           >
@@ -503,20 +513,22 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
             <div className="primary-action-dock">
               <div className="primary-action-row">
                 <button className="button button-primary" disabled={primaryDisabled} type="submit">
-                  {busy
-                    ? '保存しています…'
-                    : saveErrorIntent !== null
-                      ? 'もう一度保存'
-                      : canGenerate
-                        ? '4コマにする'
-                        : quotaState === 'loading' && configAllowsGeneration
-                          ? '利用枠を確認しています…'
-                          : '下書きとして保存'}
+                  {pendingSave !== null
+                    ? '登録用の確認中…'
+                    : busy
+                      ? '保存しています…'
+                      : saveErrorIntent !== null
+                        ? 'もう一度保存'
+                        : canGenerate
+                          ? '4コマにする'
+                          : quotaState === 'loading' && configAllowsGeneration
+                            ? '利用枠を確認しています…'
+                            : '下書きとして保存'}
                 </button>
                 {quota && !showQuotaStatus && (
                   <button
                     className="button-text quota-refresh-action"
-                    disabled={busy || refreshing}
+                    disabled={operationBusy || refreshing}
                     type="button"
                     onClick={() => void refreshQuota()}
                   >
