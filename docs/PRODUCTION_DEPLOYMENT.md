@@ -75,9 +75,9 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GEN
 - `openai-readiness.yml`はmainのowner限定手動実行です。固定2モデルの情報をGETするだけで課金生成は行いません。成功しても生成権限、組織認証、残高を保証しません。
 - `production-generation-setup.yml`の`check`はQueue・Storage・DB権限を読み取ります。`setup`は不足する専用Queueと非公開`comics` bucketだけを作成し、既存設定の不一致では停止します。
 - `setup-storage-policies`は不足する固定2件のrestrictive deny policyだけを作成します。`probe-storage`は架空PNGと一時利用者で直接アクセス拒否を確認して片付けます。書込操作のconfirmationは`manga-nikki-generations-production`です。中断・失敗時は結果を調査し、自動で再試行しません。
-- Worker限定tokenでQueue作成が拒否された場合、ownerが[Queues](https://dash.cloudflare.com/c9cee9599752cb191815c0eea6ff457e/queues)で上記の名前を作成します。追加のアカウント全体tokenは要求しません。
+- Worker限定tokenでQueue作成が拒否された場合、ownerが[Queues](https://dash.cloudflare.com/c9cee9599752cb191815c0eea6ff457e/queues)で上記の名前を作成します。Worker権限を全Workerへ広げません。通常CDではaccount-owned tokenの別policyへ、Workers Editorをmanga-nikkiだけ、Queues Writeを対象accountに設定します。プロフィール側のQueues専用tokenをWorker用tokenへ置き換えるとWorker配信は拒否されます。
 
-生成基盤の配信前にQueue・Storage拒否試験を完了し、生成ON前にDBの全体枠1、総予算1,000,000 micro USD以下、使用済みcounter、固定profileと最大費用を確認します。予約上限はOpenAI側の請求を強制停止する機能ではありません。最大費用の根拠が確認できるまで課金試験は行いません。
+生成基盤の配信前にQueue・Storage拒否試験を完了し、生成ON前にDBの全体枠1、総予算1,000,000 micro USD以下、使用済みcounter、固定profileと最大費用を確認します。予約上限はOpenAI側の請求を強制停止する機能ではありません。通常の公開拡張では最大費用の根拠を確認します。今回の単発試験は、厳密な実請求停止を保証できないことをownerが理解して追認した例外として区別します。
 
 試験枠の操作はmainのowner限定`production-generation-trial-policy.yml`で行います。`check`は読取のみ、`prepare`は`PREPARE_ONE_COMIC_1USD_TRIAL`を確認文字列に指定し、生成停止を維持して日次・全期間1漫画、総予算・予約額各1USDの固定profileを設定します。既存counter行または生成履歴があれば停止し、削除やresetはしません。`enable`は`ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST`と`provider_cost_verified=true`が必要で、費用の根拠確認前に実行しません。`stop`は`STOP_GENERATION`を指定し、policyのenabledだけをfalseにします。既存予約やunknownの枠は維持します。
 
