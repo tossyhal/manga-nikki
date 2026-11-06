@@ -26,6 +26,7 @@ function inputFromEnvironment(environment: NodeJS.ProcessEnv): DatabaseMigration
   return {
     operation: environment.DATABASE_MIGRATION_OPERATION,
     expectedManifest: environment.DATABASE_MIGRATION_EXPECTED_MANIFEST,
+    runAttempt: environment.GITHUB_RUN_ATTEMPT,
   };
 }
 
@@ -69,19 +70,29 @@ function operationFromEnvironment(environment: NodeJS.ProcessEnv): DatabaseMigra
   return environment.DATABASE_MIGRATION_OPERATION === 'apply' ? 'apply' : 'plan';
 }
 
+function databaseWriteWasAttempted(error: unknown): boolean {
+  return error instanceof DatabaseMigrationFailure && error.databaseWriteAttempted;
+}
+
 function renderFailureSummary(
   code: DisplayErrorCode,
   operation: DatabaseMigrationOperation,
+  databaseWriteAttempted: boolean,
 ): string {
-  return [
+  const lines = [
     '## Supabase DB migration',
     '',
     `- Operation: \`${operation}\``,
     '- Outcome: `failed`',
     `- Failure code: \`${code}\``,
+    `- Database write attempted: ${databaseWriteAttempted ? 'yes' : 'no'}`,
     '- エラー詳細、SQL本文、DB出力、接続情報、秘密情報は記録していません。',
-    '',
-  ].join('\n');
+  ];
+  if (databaseWriteAttempted) {
+    lines.push('- 結果不明。再実行せず、remote migration historyをownerが調査してください。');
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 async function writeSummary(path: string, content: string): Promise<void> {
@@ -119,7 +130,11 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(result));
   } catch (error) {
     failureCode = errorCode(error);
-    summary = renderFailureSummary(failureCode, operationFromEnvironment(process.env));
+    summary = renderFailureSummary(
+      failureCode,
+      operationFromEnvironment(process.env),
+      databaseWriteWasAttempted(error),
+    );
   }
 
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;

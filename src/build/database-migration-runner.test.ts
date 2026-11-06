@@ -9,18 +9,33 @@ import {
   type SupabaseCliExecution,
 } from './database-migration-runner.ts';
 
-class FakeStream extends EventEmitter {}
+class FakeStream extends EventEmitter {
+  destroyed = false;
+
+  destroy(): void {
+    this.destroyed = true;
+  }
+}
 
 class FakeChild extends EventEmitter {
   readonly stdout = new FakeStream();
   readonly stderr = new FakeStream();
-  readonly pid: number | undefined = undefined;
+  pid: number | undefined = undefined;
   readonly signals: NodeJS.Signals[] = [];
+  closeOnSignal: NodeJS.Signals | 'all' | 'none' = 'all';
+  unrefCalled = false;
 
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
     this.signals.push(signal);
-    queueMicrotask(() => this.emit('close', null, signal));
+    if (this.closeOnSignal === 'all' || this.closeOnSignal === signal) {
+      queueMicrotask(() => this.emit('close', null, signal));
+    }
     return true;
+  }
+
+  unref(): this {
+    this.unrefCalled = true;
+    return this;
   }
 }
 
@@ -65,6 +80,7 @@ describe('Supabase db push process boundary', () => {
     let receivedCommand = '';
     let receivedArgs: readonly string[] = [];
     let receivedOptions: Record<string, unknown> | undefined;
+    const signalSource = new EventEmitter();
     const spawnProcess = spawnStub((command, args, options, child) => {
       receivedCommand = command;
       receivedArgs = args;
@@ -72,7 +88,7 @@ describe('Supabase db push process boundary', () => {
       queueMicrotask(() => child.emit('close', 0, null));
     });
 
-    await runSupabaseDbPush(execution({ spawnProcess }));
+    await runSupabaseDbPush(execution({ spawnProcess }), { signalSource });
 
     expect(receivedCommand).toBe('/tmp/pinned/supabase');
     expect(receivedOptions).toMatchObject({
@@ -111,6 +127,8 @@ describe('Supabase db push process boundary', () => {
     expect(databaseUrl.searchParams.get('sslmode')).toBe('verify-full');
     expect(databaseUrl.searchParams.get('sslrootcert')).toBeTruthy();
     expect(receivedArgs).toContain('/tmp/restricted-workdir');
+    expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+    expect(signalSource.listenerCount('SIGINT')).toBe(0);
   });
 
   it('does not include CLI output or credentials in fixed failures', async () => {
@@ -172,5 +190,119 @@ describe('Supabase db push process boundary', () => {
     expect(createSupabaseCliEnvironment('/tmp/pinned/supabase', 'secret').PGPASSWORD).toBe(
       'secret',
     );
+  });
+
+  it('forwards parent SIGTERM and SIGINT, force kills after the grace period, and removes handlers', async () => {
+    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+      const signalSource = new EventEmitter();
+      let childProcess: FakeChild | undefined;
+      const spawnProcess = spawnStub((_command, _args, _options, child) => {
+        childProcess = child;
+        child.closeOnSignal = 'SIGKILL';
+      });
+      const pending = runSupabaseDbPush(execution({ spawnProcess }), {
+        signalSource,
+        forceKillDelayMs: 1,
+      });
+
+      expect(signalSource.listenerCount('SIGTERM')).toBe(1);
+      expect(signalSource.listenerCount('SIGINT')).toBe(1);
+      signalSource.emit(signal);
+      await expect(pending).rejects.toMatchObject({
+        code: 'CLI_INTERRUPTED',
+        message: 'CLI_INTERRUPTED',
+      });
+      expect(childProcess?.signals).toEqual([signal, 'SIGKILL']);
+      expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+      expect(signalSource.listenerCount('SIGINT')).toBe(0);
+    }
+  });
+
+  it('removes parent signal handlers when the child emits an error', async () => {
+    const signalSource = new EventEmitter();
+    const spawnProcess = spawnStub((_command, _args, _options, child) => {
+      queueMicrotask(() => child.emit('error', new Error('platform detail')));
+    });
+
+    await expect(
+      runSupabaseDbPush(execution({ spawnProcess }), { signalSource }),
+    ).rejects.toMatchObject({ code: 'CLI_START_FAILED' });
+    expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+    expect(signalSource.listenerCount('SIGINT')).toBe(0);
+  });
+
+  it('settles and releases process handles if a child remains open after SIGKILL', async () => {
+    const signalSource = new EventEmitter();
+    let childProcess: FakeChild | undefined;
+    const spawnProcess = spawnStub((_command, _args, _options, child) => {
+      childProcess = child;
+      child.closeOnSignal = 'none';
+    });
+    const pending = runSupabaseDbPush(execution({ spawnProcess }), {
+      signalSource,
+      forceKillDelayMs: 1,
+      settleAfterKillDelayMs: 1,
+    });
+
+    signalSource.emit('SIGTERM');
+    await expect(pending).rejects.toMatchObject({ code: 'CLI_INTERRUPTED' });
+    expect(childProcess?.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(childProcess?.stdout.destroyed).toBe(true);
+    expect(childProcess?.stderr.destroyed).toBe(true);
+    expect(childProcess?.unrefCalled).toBe(true);
+    expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+    expect(signalSource.listenerCount('SIGINT')).toBe(0);
+  });
+
+  it('kills the remaining group immediately when a cancelled parent closes first', async () => {
+    const killGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    vi.useFakeTimers();
+    try {
+      for (const [index, termination] of ['close', 'error'].entries()) {
+        const signalSource = new EventEmitter();
+        const timersBeforeRun = vi.getTimerCount();
+        let cancelledChild: FakeChild | undefined;
+        const childPid = 43125 + index;
+        const cancelledSpawn = spawnStub((_command, _args, _options, child) => {
+          child.pid = childPid;
+          cancelledChild = child;
+        });
+        const pending = runSupabaseDbPush(execution({ spawnProcess: cancelledSpawn }), {
+          signalSource,
+          forceKillDelayMs: 10_000,
+        });
+
+        signalSource.emit('SIGTERM');
+        expect(killGroup).toHaveBeenNthCalledWith(index * 2 + 1, -childPid, 'SIGTERM');
+        if (termination === 'close') cancelledChild?.emit('close', 0, null);
+        else cancelledChild?.emit('error', new Error('platform detail'));
+        await expect(pending).rejects.toMatchObject({ code: 'CLI_INTERRUPTED' });
+
+        expect(killGroup).toHaveBeenNthCalledWith(index * 2 + 2, -childPid, 'SIGKILL');
+        expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+        expect(signalSource.listenerCount('SIGINT')).toBe(0);
+        expect(vi.getTimerCount()).toBe(timersBeforeRun);
+      }
+    } finally {
+      killGroup.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not kill a process group when the CLI exits normally', async () => {
+    const killGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const signalSource = new EventEmitter();
+    const spawnProcess = spawnStub((_command, _args, _options, child) => {
+      child.pid = 43126;
+      queueMicrotask(() => child.emit('close', 0, null));
+    });
+    try {
+      await runSupabaseDbPush(execution({ spawnProcess }), { signalSource });
+      expect(killGroup).not.toHaveBeenCalled();
+      expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+      expect(signalSource.listenerCount('SIGINT')).toBe(0);
+    } finally {
+      killGroup.mockRestore();
+    }
   });
 });

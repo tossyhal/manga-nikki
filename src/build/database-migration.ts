@@ -32,16 +32,20 @@ export type DatabaseMigrationOperation = 'plan' | 'apply';
 export type DatabaseMigrationInput = Readonly<{
   operation: string | undefined;
   expectedManifest: string | undefined;
+  runAttempt?: string;
 }>;
 
 export type DatabaseMigrationErrorCode =
   | 'INPUT_OPERATION_INVALID'
+  | 'INPUT_APPLY_RERUN_FORBIDDEN'
   | 'INPUT_MANIFEST_REQUIRED'
   | 'INPUT_MANIFEST_INVALID'
   | 'EXPECTED_MANIFEST_MISMATCH'
   | 'MIGRATION_FILES_CHANGED'
   | 'MIGRATION_HISTORY_CHANGED'
   | 'POST_APPLY_STATE_INVALID'
+  | 'CLI_WRITE_RESULT_UNKNOWN'
+  | 'POST_APPLY_VERIFICATION_FAILED'
   | 'CLI_CONFIGURATION_INVALID'
   | 'CLI_BINARY_INVALID'
   | 'CLI_SIDECAR_INVALID'
@@ -50,11 +54,13 @@ export type DatabaseMigrationErrorCode =
 
 export class DatabaseMigrationFailure extends Error {
   readonly code: DatabaseMigrationErrorCode;
+  readonly databaseWriteAttempted: boolean;
 
-  constructor(code: DatabaseMigrationErrorCode) {
+  constructor(code: DatabaseMigrationErrorCode, databaseWriteAttempted = false) {
     super(code);
     this.name = 'DatabaseMigrationFailure';
     this.code = code;
+    this.databaseWriteAttempted = databaseWriteAttempted;
   }
 }
 
@@ -72,6 +78,7 @@ export type DatabaseMigrationMetadata = Readonly<{
   sourceCommit: string;
   manifestSha256: string;
   migrationHistory: 'present' | 'absent';
+  databaseWriteAttempted: boolean;
   remoteVersionsBefore: readonly string[];
   remoteVersionsAfter: readonly string[] | null;
   localMigrations: readonly LocalMigration[];
@@ -108,8 +115,8 @@ export type DatabaseMigrationDependencies = Readonly<{
   runCli?: typeof runSupabaseDbPush;
 }>;
 
-function fail(code: DatabaseMigrationErrorCode): never {
-  throw new DatabaseMigrationFailure(code);
+function fail(code: DatabaseMigrationErrorCode, databaseWriteAttempted = false): never {
+  throw new DatabaseMigrationFailure(code, databaseWriteAttempted);
 }
 
 export function validateDatabaseMigrationInput(
@@ -117,6 +124,9 @@ export function validateDatabaseMigrationInput(
 ): Readonly<{ operation: DatabaseMigrationOperation; expectedManifest?: string }> {
   if (input.operation !== 'plan' && input.operation !== 'apply') {
     return fail('INPUT_OPERATION_INVALID');
+  }
+  if (input.operation === 'apply' && input.runAttempt !== '1') {
+    return fail('INPUT_APPLY_RERUN_FORBIDDEN');
   }
   const expectedManifest = input.expectedManifest?.trim() ?? '';
   if (input.operation === 'apply' && expectedManifest.length === 0) {
@@ -284,6 +294,7 @@ function metadata(
   manifestHash: string,
   localMigrations: readonly LocalMigration[],
   remoteVersionsAfter: readonly string[] | null,
+  databaseWriteAttempted: boolean,
 ): DatabaseMigrationMetadata {
   return {
     operation,
@@ -292,6 +303,7 @@ function metadata(
     sourceCommit: result.commit,
     manifestSha256: manifestHash,
     migrationHistory: result.migrationHistory,
+    databaseWriteAttempted,
     remoteVersionsBefore: [...result.remoteVersions],
     remoteVersionsAfter: remoteVersionsAfter ? [...remoteVersionsAfter] : null,
     localMigrations: localMigrations.map(({ version, filename, sha256 }) => ({
@@ -327,7 +339,7 @@ export async function runDatabaseMigration(
   }
 
   if (validatedInput.operation === 'plan') {
-    return metadata('plan', 'planned', before, manifestSha256, migrations, null);
+    return metadata('plan', 'planned', before, manifestSha256, migrations, null, false);
   }
 
   if (before.pendingMigrations.length === 0) {
@@ -352,6 +364,7 @@ export async function runDatabaseMigration(
       manifestSha256,
       migrations,
       after.remoteVersions,
+      false,
     );
   }
 
@@ -413,29 +426,45 @@ export async function runDatabaseMigration(
       }
     }
 
-    await runCli({
-      cliPath: dependencies.cli.cliPath,
-      workdir,
-      databasePassword: context.databasePassword ?? '',
-    });
-
-    const after = await preflight(context);
-    const afterMigrations = await listMigrations(migrationsDirectory);
-    assertPreflightMatchesLocalFiles(after, afterMigrations);
-    if (after.commit !== before.commit || !sameMigrations(afterMigrations, migrations)) {
-      return fail('MIGRATION_FILES_CHANGED');
+    try {
+      await runCli({
+        cliPath: dependencies.cli.cliPath,
+        workdir,
+        databasePassword: context.databasePassword ?? '',
+      });
+    } catch {
+      return fail('CLI_WRITE_RESULT_UNKNOWN', true);
     }
-    if (
-      after.pendingMigrations.length !== 0 ||
-      !sameVersions(
+
+    try {
+      const after = await preflight(context);
+      const afterMigrations = await listMigrations(migrationsDirectory);
+      assertPreflightMatchesLocalFiles(after, afterMigrations);
+      if (after.commit !== before.commit || !sameMigrations(afterMigrations, migrations)) {
+        return fail('POST_APPLY_VERIFICATION_FAILED', true);
+      }
+      if (
+        after.pendingMigrations.length !== 0 ||
+        !sameVersions(
+          after.remoteVersions,
+          migrations.map(({ version }) => version),
+        )
+      ) {
+        return fail('POST_APPLY_VERIFICATION_FAILED', true);
+      }
+
+      return metadata(
+        'apply',
+        'applied',
+        before,
+        manifestSha256,
+        migrations,
         after.remoteVersions,
-        migrations.map(({ version }) => version),
-      )
-    ) {
-      return fail('POST_APPLY_STATE_INVALID');
+        true,
+      );
+    } catch {
+      return fail('POST_APPLY_VERIFICATION_FAILED', true);
     }
-
-    return metadata('apply', 'applied', before, manifestSha256, migrations, after.remoteVersions);
   } finally {
     await removeDirectory(workdir, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -472,6 +501,7 @@ export function renderDatabaseMigrationSummary(result: DatabaseMigrationMetadata
     `- Source commit: \`${result.sourceCommit}\``,
     `- Manifest SHA-256: \`${result.manifestSha256}\``,
     `- Migration history: ${result.migrationHistory === 'present' ? '存在' : '未作成'}`,
+    `- Database write attempted: ${result.databaseWriteAttempted ? 'yes' : 'no'}`,
     `- Remote versions before: ${result.remoteVersionsBefore.join(', ') || 'なし'}`,
     `- Remote versions after: ${remoteAfter}`,
     '',

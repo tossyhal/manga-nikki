@@ -40,11 +40,14 @@ applyはfresh read-only planのmanifestと入力値が完全一致しないと�
 
 workflowは公式Supabase CLI v2.122.0 Linux amd64 archiveをSHA-256 `59ed066847b98d7461c60e9109d40cab6b9756177ce06ebb05b51338519f5136`で確認し、`supabase`本体と`supabase-go`だけを展開します。apply時のCLIは`db push --skip-vault --yes`に固定し、`--include-all`、`--include-roles`、`--include-seed`、reset、migration repairは行いません。password-freeの固定接続URLと、CLI subprocessに限る`PGPASSWORD`を使います。CLIのstdout/stderrは上限付きで取得して破棄し、失敗時は固定codeだけを出します。
 
-適用後にread-only preflightを再実行し、全local migration versionがremote historyに存在してpendingが0件の場合だけ成功扱いにします。pendingがないapplyはCLIを起動しないno-opです。
+適用後にread-only preflightを再実行し、全local migration versionがremote historyに存在してpendingが0件の場合だけ成功扱いにします。pendingがないapplyはCLIを起動しないno-opです。Summaryには`Database write attempted`を表示し、成功したapplyでは`yes`、planとno-opでは`no`になります。
 
 ## 障害時の扱い
 
-- apply結果が不明、workflowが中断、またはpostflightが失敗した場合は同じapplyを再実行せず、Summaryの固定codeとremote migration historyをownerが調査します。自動rollback・retry・migration repairはありません。
+- `apply`は`GITHUB_RUN_ATTEMPT=1`のときだけ進み、GitHubの「Re-run failed jobs」では拒否します。planは再実行できます。
+- 適用stepは`exec node`で開始し、GitHub Actionsのworkflow cancellation signalをNodeの親プロセスが直接受け取れるようにします。signal送信とプロセスツリー終了の流れは[GitHub公式仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)に従います。
+- Summaryが`Database write attempted: yes`の場合、CLI起動後に中断した場合、またはapply step開始後にSummaryが残らず中断した場合は、書き込み結果不明として再実行せず、remote migration historyをownerが調査します。新しいdispatchへ同じmanifestを入力する操作は技術的には可能なため、write attempt後に自動・手動で再dispatchしないでください。自動rollback・retry・migration repairはありません。
+- `Database write attempted: no`であれば、この実行ではCLIによるmigration書き込みを開始していません。Summaryの固定codeを確認し、必要なら新しいworkflow dispatchでplanからやり直します。
 - CLIはmigration file内の`BEGIN` / `COMMIT`を実行します。`COMMIT`後にCLIがversionをmigration ledgerへ記録する前に接続が切れたりjobが中断したりすると、schema変更だけが残りversionが未記録になる可能性があります。こうなった場合はDB状態と該当SQLを確認し、追加SQLやledgerの手編集をせず止めます。
 - 共有DBへの適用後も、RLS / RPC / Auth / Storageの実運用確認が完了したことにはなりません。migration作業とアプリ結合試験は別に記録します。
 

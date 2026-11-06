@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createDatabaseMigrationManifest,
   hashDatabaseMigrationManifest,
+  renderDatabaseMigrationSummary,
   runDatabaseMigration,
+  runDatabaseMigrationGate,
   validateDatabaseMigrationInput,
   validatePinnedSupabaseCli,
   type DatabaseMigrationDependencies,
@@ -19,6 +21,7 @@ import {
   DEV_DATABASE_SETUP_REF,
   DEV_DATABASE_SETUP_REPOSITORY,
   DEV_DATABASE_SETUP_TRIGGERING_ACTOR,
+  DevDatabasePreflightFailure,
   type DevDatabasePreflightContext,
   type DevDatabasePreflightResult,
   type LocalMigration,
@@ -75,7 +78,7 @@ function preflight(
 }
 
 function input(overrides: Partial<DatabaseMigrationInput> = {}): DatabaseMigrationInput {
-  return { operation: 'plan', expectedManifest: undefined, ...overrides };
+  return { operation: 'plan', expectedManifest: undefined, runAttempt: '1', ...overrides };
 }
 
 function migrationDirectory(): Promise<string> {
@@ -118,8 +121,15 @@ function baseDependencies(
   };
 }
 
-async function expectFailureCode(promise: Promise<unknown>, expected: string): Promise<void> {
-  await expect(promise).rejects.toMatchObject({ code: expected });
+async function expectFailureCode(
+  promise: Promise<unknown>,
+  expected: string,
+  databaseWriteAttempted?: boolean,
+): Promise<void> {
+  await expect(promise).rejects.toMatchObject({
+    code: expected,
+    ...(databaseWriteAttempted === undefined ? {} : { databaseWriteAttempted }),
+  });
 }
 
 afterEach(async () => {
@@ -143,6 +153,31 @@ describe('database migration inputs and manifest', () => {
         input({ operation: 'apply', expectedManifest: 'A'.repeat(64) }),
       ).expectedManifest,
     ).toBe('a'.repeat(64));
+  });
+
+  it('rejects apply reruns before the gate but allows plan reruns', async () => {
+    const manifest = 'a'.repeat(64);
+    for (const runAttempt of ['2', undefined]) {
+      expect(() =>
+        validateDatabaseMigrationInput(
+          input({ operation: 'apply', expectedManifest: manifest, runAttempt }),
+        ),
+      ).toThrow(expect.objectContaining({ code: 'INPUT_APPLY_RERUN_FORBIDDEN' }));
+    }
+    expect(
+      validateDatabaseMigrationInput(input({ operation: 'plan', runAttempt: '2' })).operation,
+    ).toBe('plan');
+
+    const gate = vi.fn(async () => commit);
+    await expectFailureCode(
+      runDatabaseMigrationGate(
+        input({ operation: 'apply', expectedManifest: manifest, runAttempt: '2' }),
+        context(),
+        gate,
+      ),
+      'INPUT_APPLY_RERUN_FORBIDDEN',
+    );
+    expect(gate).not.toHaveBeenCalled();
   });
 
   it('hashes a stable manifest with project, commit, remote versions, and every local migration', () => {
@@ -176,6 +211,8 @@ describe('database migration inputs and manifest', () => {
     expect(result.outcome).toBe('planned');
     expect(result.manifestSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(result.pendingMigrations).toEqual([secondMigration]);
+    expect(result.databaseWriteAttempted).toBe(false);
+    expect(renderDatabaseMigrationSummary(result)).toContain('Database write attempted: no');
     expect(result.localMigrations).toEqual(allMigrations);
     expect(JSON.stringify(result)).not.toContain(databasePassword);
     expect(cli).not.toHaveBeenCalled();
@@ -198,6 +235,7 @@ describe('database migration inputs and manifest', () => {
         },
       ),
       'EXPECTED_MANIFEST_MISMATCH',
+      false,
     );
     expect(await readdir(root)).toEqual(['manga-nikki-supabase-cli-v2.122.0']);
     expect(cli).not.toHaveBeenCalled();
@@ -284,6 +322,8 @@ describe('database migration inputs and manifest', () => {
     expect(result.remoteVersionsBefore).toEqual([firstVersion]);
     expect(result.remoteVersionsAfter).toEqual([firstVersion, secondVersion]);
     expect(result.pendingMigrations).toEqual([secondMigration]);
+    expect(result.databaseWriteAttempted).toBe(true);
+    expect(renderDatabaseMigrationSummary(result)).toContain('Database write attempted: yes');
     expect(runCli).toHaveBeenCalledTimes(1);
     expect(await readdir(root)).toEqual(['manga-nikki-supabase-cli-v2.122.0']);
   });
@@ -307,6 +347,7 @@ describe('database migration inputs and manifest', () => {
       },
     );
     expect(result.outcome).toBe('already-current');
+    expect(result.databaseWriteAttempted).toBe(false);
     expect(result.remoteVersionsAfter).toEqual([firstVersion, secondVersion]);
     expect(runCli).not.toHaveBeenCalled();
   });
@@ -335,8 +376,83 @@ describe('database migration inputs and manifest', () => {
           runCli,
         },
       ),
-      'POST_APPLY_STATE_INVALID',
+      'POST_APPLY_VERIFICATION_FAILED',
+      true,
     );
+    expect(runCli).toHaveBeenCalledTimes(1);
+    expect(await readdir(root)).toEqual(['manga-nikki-supabase-cli-v2.122.0']);
+  });
+
+  it('reports an unknown write result and cleans up when the CLI fails', async () => {
+    const source = await migrationDirectory();
+    const root = await mkdtemp(join(tmpdir(), 'manga-nikki-db-migration-cli-root-'));
+    temporaryDirectories.push(root);
+    const initialManifest = hashDatabaseMigrationManifest(
+      createDatabaseMigrationManifest(preflight(), allMigrations),
+    );
+    const runCli = vi.fn(async () => {
+      throw new Error('raw CLI output and password must not escape');
+    });
+
+    const failure = await runDatabaseMigration(
+      input({ operation: 'apply', expectedManifest: initialManifest }),
+      context(),
+      {
+        ...baseDependencies(source),
+        temporaryDirectory: root,
+        cli: await pinnedCli(root),
+        runCli,
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: 'CLI_WRITE_RESULT_UNKNOWN',
+      databaseWriteAttempted: true,
+      message: 'CLI_WRITE_RESULT_UNKNOWN',
+    });
+    expect((failure as Error).message).not.toContain(databasePassword);
+    expect((failure as Error).message).not.toContain('raw CLI output');
+    expect(runCli).toHaveBeenCalledTimes(1);
+    expect(await readdir(root)).toEqual(['manga-nikki-supabase-cli-v2.122.0']);
+  });
+
+  it('treats a stale-head postflight as an attempted write and never preserves its raw error', async () => {
+    const source = await migrationDirectory();
+    const root = await mkdtemp(join(tmpdir(), 'manga-nikki-db-migration-cli-root-'));
+    temporaryDirectories.push(root);
+    const initialManifest = hashDatabaseMigrationManifest(
+      createDatabaseMigrationManifest(preflight(), allMigrations),
+    );
+    const runPreflight = vi
+      .fn<() => Promise<DevDatabasePreflightResult>>()
+      .mockResolvedValueOnce(preflight())
+      .mockResolvedValueOnce(preflight())
+      .mockRejectedValueOnce(new DevDatabasePreflightFailure('GITHUB_HEAD_STALE'));
+    const runCli = vi.fn(async () => undefined);
+
+    const failure = await runDatabaseMigration(
+      input({ operation: 'apply', expectedManifest: initialManifest }),
+      context(),
+      {
+        ...baseDependencies(source, { runPreflight }),
+        temporaryDirectory: root,
+        cli: await pinnedCli(root),
+        runCli,
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: 'POST_APPLY_VERIFICATION_FAILED',
+      databaseWriteAttempted: true,
+      message: 'POST_APPLY_VERIFICATION_FAILED',
+    });
+    expect((failure as Error).message).not.toContain('GITHUB_HEAD_STALE');
     expect(runCli).toHaveBeenCalledTimes(1);
     expect(await readdir(root)).toEqual(['manga-nikki-supabase-cli-v2.122.0']);
   });

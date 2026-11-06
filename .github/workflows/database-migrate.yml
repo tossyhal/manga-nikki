@@ -34,6 +34,7 @@ jobs:
           CHECK_SHA: ${{ github.sha }}
           CHECK_ACTOR_ID: ${{ github.actor_id }}
           CHECK_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
           CHECK_OPERATION: ${{ inputs.operation }}
           CHECK_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
         run: |
@@ -50,7 +51,7 @@ jobs:
             process.env.CHECK_TRIGGERING_ACTOR === 'tossyhal' &&
             (operation === 'plan' || operation === 'apply') &&
             validManifest &&
-            (operation !== 'apply' || manifest !== '');
+            (operation !== 'apply' || (manifest !== '' && process.env.CHECK_RUN_ATTEMPT === '1'));
           if (!allowed) {
             console.error('OWNER_GATE_OR_INPUT_REJECTED');
             process.exitCode = 1;
@@ -118,6 +119,10 @@ jobs:
           DATABASE_MIGRATION_OPERATION: ${{ inputs.operation }}
           DATABASE_MIGRATION_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
         run: node --experimental-strip-types scripts/migrate-database.ts --gate-only
+      - name: PostgreSQL 16 clientを導入
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
       - name: 固定Supabase CLIとsidecarを検証して配置
         if: inputs.operation == 'apply'
         env:
@@ -180,4 +185,4 @@ jobs:
           DATABASE_MIGRATION_EXPECTED_MANIFEST: ${{ inputs.expected_manifest }}
           SUPABASE_CLI_PATH: ${{ runner.temp }}/manga-nikki-supabase-cli-v2.122.0/supabase
           SUPABASE_GO_PATH: ${{ runner.temp }}/manga-nikki-supabase-cli-v2.122.0/supabase-go
-        run: node --experimental-strip-types scripts/migrate-database.ts
+        run: exec node --experimental-strip-types scripts/migrate-database.ts
