@@ -66,4 +66,28 @@ gh workflow run ci.yml --ref main --repo tossyhal/manga-nikki
 
 Turnstile widget `manga-nikki-prod`、公開hostname、Supabase Auth側のTurnstile設定と匿名サインイン有効化はownerから準備完了の報告を受けています。10 production migrationは成功apply済み(run `42211812661`)です。deploy後のWorker bindings/secrets、read-only Supabase probe、health/config/deployment markerの実ブラウザ確認は成功しました。実Cronの実行結果、別匿名ユーザーによる所有者分離QA、CAPTCHA失効・再利用拒否ケース、PWAホーム追加は未確認です。owner報告ではTurnstile操作後にiPhone Safariからの日記保存・再読み込み・削除を確認済みです。agent-browserによる確認は手動CAPTCHAが表示された時点でキャンセルしました。
 
-実AIの費用承認は未実施で、`OPENAI_API_KEY`とQueueは設定しません。実AIを有効にする前に、生成中の画面遷移・受付状態を無通知にしない既知P2-2を修正・再確認し、budget、Queue、二重実行防止、画像保存/復旧を別承認・別検証します。
+2026-11-06にownerがOpenAIの初回試験を総額1USD、全体最大1漫画、自動再試行なしで承認しました。UUID限定は行わず、試験中の受付は全体枠で制限します。100USDのAPIクレジットはowner報告であり、承認予算の増額ではありません。一般向け生成の有効化は未承認です。画面遷移後の受付状態通知は実装・ローカル検証済みですが、実AI・実費・実Storage/Queueは未検証です。
+
+## 生成基盤の段階設定
+
+production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GENERATION_ENABLED`は初期値`false`です。前者だけを`true`にすると、専用Queue `manga-nikki-generations-production`、復旧Cron、`OPENAI_API_KEY`と`GENERATION_ALLOWED_OWNER_ID`を追加した版を配信します。後者とDB policyが両方有効になるまで実AI生成は始まりません。試験の`PRODUCTION_GENERATION_ALLOWED_OWNER_ID`は`all`です。OpenAI keyは`BWS_OPENAI_API_KEY_SECRET_ID`からbuild後だけ取得します。
+
+- `openai-readiness.yml`はmainのowner限定手動実行です。固定2モデルの情報をGETするだけで課金生成は行いません。成功しても生成権限、組織認証、残高を保証しません。
+- `production-generation-setup.yml`の`check`はQueue・Storage・DB権限を読み取ります。`setup`は不足する専用Queueと非公開`comics` bucketだけを作成し、既存設定の不一致では停止します。
+- `setup-storage-policies`は不足する固定2件のrestrictive deny policyだけを作成します。`probe-storage`は架空PNGと一時利用者で直接アクセス拒否を確認して片付けます。書込操作のconfirmationは`manga-nikki-generations-production`です。中断・失敗時は結果を調査し、自動で再試行しません。
+- Worker限定tokenでQueue作成が拒否された場合、ownerが[Queues](https://dash.cloudflare.com/c9cee9599752cb191815c0eea6ff457e/queues)で上記の名前を作成します。追加のアカウント全体tokenは要求しません。
+
+生成基盤の配信前にQueue・Storage拒否試験を完了し、生成ON前にDBの全体枠1、総予算1,000,000 micro USD以下、使用済みcounter、固定profileと最大費用を確認します。予約上限はOpenAI側の請求を強制停止する機能ではありません。最大費用の根拠が確認できるまで課金試験は行いません。
+
+試験枠の操作はmainのowner限定`production-generation-trial-policy.yml`で行います。`check`は読取のみ、`prepare`は`PREPARE_ONE_COMIC_1USD_TRIAL`を確認文字列に指定し、生成停止を維持して日次・全期間1漫画、総予算・予約額各1USDの固定profileを設定します。既存counter行または生成履歴があれば停止し、削除やresetはしません。`enable`は`ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST`と`provider_cost_verified=true`が必要で、費用の根拠確認前に実行しません。`stop`は`STOP_GENERATION`を指定し、policyのenabledだけをfalseにします。既存予約やunknownの枠は維持します。
+
+基盤を追加した後の生成停止はDB policyをfalseにし、必要なら`PRODUCTION_GENERATION_ENABLED=false`で再配信します。Queue/Secretsが残るため`PRODUCTION_GENERATION_INFRA_ENABLED`はtrueを維持します。基盤なし版への切替は通常停止とは別の削除計画が必要です。
+
+
+## Storage policyの正式委任
+
+`supautils.policy_grants`が`postgres`へ`storage.buckets`と`storage.objects`の両方を委任している場合は、owner membershipや`SET ROLE`がなくても固定restrictive policyを作成できます。metadataと実行直前のSQLは、登録済みGUCが`context=sighup`・`vartype=string`であることと、JSON内の固定2tableを照合します。委任設定自体やGRANT、table owner、RLSは変更しません。設定がない場合は既存のowner/SET ROLE経路だけを許可し、既存policy不一致は上書きせず停止します。
+
+一次資料は[Supabaseの既定設定](https://github.com/supabase/postgres/blob/develop/ansible/files/postgresql_config/supautils.conf.j2)、[supautilsのpolicy委任仕様](https://github.com/supabase/supautils#table-ownership-bypass)、[GUC登録](https://github.com/supabase/supautils/blob/master/src/supautils.c)です。`current_setting('supautils.policy_grants',true)`は読取専用で確認でき、設定変更やowner roleの追加は不要です。
+
+`supabase/tests/production_platform_delegation.sql`は、固定2tableを委任したsupautils付きの廃棄可能PostgreSQL専用fixtureです。非superuserかつownerのUSAGE/SETなしでの作成、既存policy保持、不一致時のtransaction rollback、RLS維持を確認します。

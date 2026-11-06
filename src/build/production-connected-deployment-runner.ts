@@ -21,6 +21,7 @@ import {
 } from './sample-deployment-runner.ts';
 import {
   PRODUCTION_CONNECTED_PROFILE,
+  selectProductionConnectedProfile,
   validateProductionWorkerSecrets,
   validateProductionReleasePublicValues,
   type ProductionReleasePublicValues,
@@ -41,6 +42,8 @@ export type ProductionConnectedDeploymentContext = Omit<
   'workerPublicVars' | 'releasePublicValues'
 > & {
   releasePublicValues: ProductionReleasePublicValues;
+  infrastructureEnabled?: string;
+  generationEnabled?: string;
 };
 
 export type ProductionConnectedDeploymentDependencies = SampleDeploymentDependencies<'production'>;
@@ -52,7 +55,7 @@ export function runProductionConnectedDeployment(
 ) {
   const { workerPublicVars } = validateProductionReleasePublicValues(context.releasePublicValues);
   return runSampleDeployment(
-    PRODUCTION_CONNECTED_PROFILE,
+    selectProductionConnectedProfile(context.infrastructureEnabled, context.generationEnabled),
     {
       ...context,
       workerPublicVars,
@@ -82,9 +85,10 @@ export async function prepareProductionConnectedReleaseArtifact(
   workerPublicVars: Readonly<Record<string, string>>,
   releasePublicValues: ProductionReleasePublicValues,
   projectRoot?: string,
+  profile = PRODUCTION_CONNECTED_PROFILE,
 ): Promise<{ configPath: string }> {
   return prepareSampleReleaseArtifact(
-    PRODUCTION_CONNECTED_PROFILE,
+    profile,
     commit,
     projectRoot,
     workerPublicVars,
@@ -96,8 +100,9 @@ export async function withProductionWorkerSecretsFile<T>(
   values: Partial<ProductionWorkerSecrets>,
   operation: (secretsFile: string) => Promise<T>,
   temporaryRoot = tmpdir(),
+  profile = PRODUCTION_CONNECTED_PROFILE,
 ): Promise<T> {
-  const secrets = validateProductionWorkerSecrets(values);
+  const secrets = validateProductionWorkerSecrets(values, profile);
   let directory: string | undefined;
   let filePath: string | undefined;
   let cleanupFailed = false;
@@ -147,6 +152,7 @@ export async function runWranglerProductionConnectedDeploy(
   cloudflareApiToken: string | undefined,
   secrets: Partial<ProductionWorkerSecrets>,
   dependencies: WranglerProductionConnectedDependencies = {},
+  profile = PRODUCTION_CONNECTED_PROFILE,
 ): Promise<void> {
   if (
     !cloudflareApiToken ||
@@ -185,5 +191,6 @@ export async function runWranglerProductionConnectedDeploy(
       }
     },
     dependencies.temporaryRoot,
+    profile,
   );
 }

@@ -5,7 +5,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { publicConfigGuard } from './src/build/public-config-guard';
 import {
-  PRODUCTION_CONNECTED_PROFILE,
+  selectProductionConnectedProfile,
+  productionGenerationQueueConfiguration,
   validateProductionReleasePublicValues,
 } from './src/build/production-connected-deployment';
 
@@ -13,6 +14,10 @@ const isReleaseBuild = ['staging', 'production', 'demo'].includes(
   process.env.MANGA_NIKKI_RELEASE_TARGET ?? '',
 );
 const isConnectedProductionBuild = process.env.MANGA_NIKKI_RELEASE_TARGET === 'production';
+const productionProfile = selectProductionConnectedProfile(
+  process.env.PRODUCTION_GENERATION_INFRA_ENABLED,
+  process.env.PRODUCTION_GENERATION_ENABLED,
+);
 const isPlaywrightE2e = process.env.MANGA_NIKKI_E2E === '1';
 
 export default defineConfig({
@@ -54,7 +59,7 @@ export default defineConfig({
             config: (workerConfig) => {
               const secrets = {
                 required: isConnectedProductionBuild
-                  ? [...(PRODUCTION_CONNECTED_PROFILE.requiredSecretBindings ?? [])]
+                  ? [...(productionProfile.requiredSecretBindings ?? [])]
                   : [],
               };
               if (!isConnectedProductionBuild) return { secrets };
@@ -65,7 +70,18 @@ export default defineConfig({
                 VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY,
               });
               return {
-                vars: { ...(workerConfig.vars ?? {}), ...workerPublicVars },
+                vars: {
+                  ...(workerConfig.vars ?? {}),
+                  ...workerPublicVars,
+                  GENERATION_ENABLED: String(productionProfile.generationEnabled ?? false),
+                },
+                ...(productionProfile.queueName
+                  ? {
+                      queues: productionGenerationQueueConfiguration(productionProfile.queueName),
+                      // Vite pluginは配列を連結するため、Wranglerにある日次Cronは重ねない。
+                      triggers: { crons: ['* * * * *'] },
+                    }
+                  : {}),
                 secrets,
               };
             },

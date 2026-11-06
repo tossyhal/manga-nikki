@@ -25,16 +25,28 @@ async function main(): Promise<void> {
   try {
     envFilePath = await writeProductionPublicEnvironmentFile(projectRoot, values);
     const childEnv: NodeJS.ProcessEnv = {};
-    for (const name of ['PATH', 'HOME', 'TMPDIR', 'CI', 'WRANGLER_SEND_METRICS'] as const) {
+    for (const name of [
+      'PATH',
+      'HOME',
+      'TMPDIR',
+      'CI',
+      'WRANGLER_SEND_METRICS',
+      'PRODUCTION_GENERATION_INFRA_ENABLED',
+      'PRODUCTION_GENERATION_ENABLED',
+    ] as const) {
       if (process.env[name] !== undefined) childEnv[name] = process.env[name];
     }
-    const result = await execFileAsync('pnpm', ['build:production'], {
-      cwd: projectRoot,
-      env: childEnv,
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 120_000,
-      windowsHide: true,
-    });
+    const result = await execFileAsync(
+      process.execPath,
+      ['scripts/build-environment.mjs', 'production'],
+      {
+        cwd: projectRoot,
+        env: childEnv,
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 120_000,
+        windowsHide: true,
+      },
+    );
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
   } catch (error) {

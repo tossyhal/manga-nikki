@@ -17,6 +17,8 @@ export type SampleDeploymentProfile<E extends SampleDeploymentEnvironment> = Rea
   crons?: readonly string[];
   requiredSecretBindings?: readonly string[];
   connected?: boolean;
+  generationEnabled?: boolean;
+  queueName?: string;
   authorizedActorId?: string;
   triggeringActor?: string;
 }>;
@@ -158,7 +160,7 @@ function expectedWorkerVars<E extends SampleDeploymentEnvironment>(
     APP_ENV: profile.appEnvironment,
     DATA_MODE: profile.dataMode ?? 'sample',
     AI_MODE: profile.aiMode ?? 'mock',
-    GENERATION_ENABLED: 'false',
+    GENERATION_ENABLED: String(profile.generationEnabled ?? false),
     ...publicWorkerVars,
   } as const;
 }
@@ -440,8 +442,18 @@ async function readWorkerSettingsAllowMissingAware(
   const seenVars = new Map<string, string>();
   const seenSecrets = new Set<string>();
   let assetsBindingCount = 0;
+  let queueBindingCount = 0;
   for (const binding of bindings) {
     if (!isRecord(binding)) return fail('WORKER_BINDINGS_PRESENT');
+    if (
+      profile.queueName &&
+      binding.type === 'queue' &&
+      binding.name === 'GENERATION_QUEUE' &&
+      binding.queue_name === profile.queueName
+    ) {
+      queueBindingCount += 1;
+      continue;
+    }
     if (binding.type === 'assets' && (binding.name === 'ASSETS' || binding.name === 'assets')) {
       assetsBindingCount += 1;
       continue;
@@ -455,7 +467,12 @@ async function readWorkerSettingsAllowMissingAware(
       if (
         (expectedValue !== undefined || legacyValue !== undefined) &&
         typeof binding.text === 'string' &&
-        (binding.text === expectedValue || binding.text === legacyValue) &&
+        (binding.text === expectedValue ||
+          binding.text === legacyValue ||
+          (profile.queueName !== undefined &&
+            !requireTargetBindings &&
+            binding.name === 'GENERATION_ENABLED' &&
+            ['false', 'true'].includes(binding.text))) &&
         !seenVars.has(binding.name)
       ) {
         seenVars.set(binding.name, binding.text as string);
@@ -474,7 +491,11 @@ async function readWorkerSettingsAllowMissingAware(
     }
     return fail('WORKER_BINDINGS_PRESENT');
   }
-  if (assetsBindingCount > 1) {
+  if (
+    assetsBindingCount > 1 ||
+    queueBindingCount > 1 ||
+    (requireTargetBindings && profile.queueName && queueBindingCount !== 1)
+  ) {
     return fail('WORKER_BINDINGS_PRESENT');
   }
 
@@ -488,7 +509,14 @@ async function readWorkerSettingsAllowMissingAware(
         ? !varsMatch(expectedVars) ||
           seenSecrets.size !== (profile.requiredSecretBindings?.length ?? 0) ||
           !(profile.requiredSecretBindings ?? []).every((name) => seenSecrets.has(name))
-        : !(noVars || varsMatch(expectedVars) || varsMatch(legacySampleVars))
+        : !(
+            noVars ||
+            varsMatch(expectedVars) ||
+            varsMatch(legacySampleVars) ||
+            (profile.queueName !== undefined &&
+              (varsMatch({ ...expectedVars, GENERATION_ENABLED: 'false' }) ||
+                varsMatch({ ...expectedVars, GENERATION_ENABLED: 'true' })))
+          )
     ) {
       return fail('WORKER_BINDINGS_PRESENT');
     }
@@ -583,14 +611,16 @@ async function verifyPublicSmoke(
   }, sleeper);
   if (health.status !== 'ok') return fail('SMOKE_HEALTH_INVALID');
 
+  const generationMatches = (value: unknown) =>
+    profile.generationEnabled ? typeof value === 'boolean' : value === false;
   const config = await withSmokeRetry(async () => {
     const body = await readSmokeJson(fetcher, `${workerUrl}/api/v1/config`);
-    if (body.dataMode !== expectedDataMode || body.generationAvailable !== false) {
+    if (body.dataMode !== expectedDataMode || !generationMatches(body.generationAvailable)) {
       return fail('SMOKE_CONFIG_INVALID');
     }
     return body;
   }, sleeper);
-  if (config.dataMode !== expectedDataMode || config.generationAvailable !== false) {
+  if (config.dataMode !== expectedDataMode || !generationMatches(config.generationAvailable)) {
     return fail('SMOKE_CONFIG_INVALID');
   }
 

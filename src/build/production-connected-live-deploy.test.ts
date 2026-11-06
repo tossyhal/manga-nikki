@@ -57,61 +57,119 @@ function context(
 }
 
 describe('production connected deployment guard', () => {
-  it('checks live mode and disabled generation after deployment with exact Worker bindings', async () => {
-    const githubResponses = [json({ object: { sha: commit } }), json({ object: { sha: commit } })];
-    const cloudflareResponses = [
-      settings([
-        { type: 'plain_text', name: 'APP_ENV', text: 'production' },
-        { type: 'plain_text', name: 'DATA_MODE', text: 'sample' },
-        { type: 'plain_text', name: 'AI_MODE', text: 'mock' },
-        { type: 'plain_text', name: 'GENERATION_ENABLED', text: 'false' },
-      ]),
-      settings([...workerVars, ...workerSecrets, { type: 'assets', name: 'ASSETS' }]),
-      json({ success: true, result: { enabled: true, previews_enabled: false } }),
-    ];
-    const events: string[] = [];
-    const githubFetcher = vi.fn(async () => githubResponses.shift()!);
-    const cloudflareFetcher = vi.fn(async () => cloudflareResponses.shift()!);
-    const publicFetcher = vi.fn(async (input: string) => {
-      if (input.endsWith('/api/v1/health')) return json({ status: 'ok' });
-      if (input.endsWith('/api/v1/config')) {
-        return json({ dataMode: 'live', generationAvailable: false });
-      }
-      return json({ environment: 'production', commit, dataMode: 'live' });
-    });
+  it.each([
+    [undefined, undefined, false],
+    ['true', 'false', false],
+    ['true', 'true', false],
+    ['true', 'true', true],
+  ])(
+    'checks exact bindings and DB stop for infra=%s enabled=%s available=%s',
+    async (infra, enabled, available) => {
+      const githubResponses = [
+        json({ object: { sha: commit } }),
+        json({ object: { sha: commit } }),
+      ];
+      const cloudflareResponses = [
+        settings([
+          { type: 'plain_text', name: 'APP_ENV', text: 'production' },
+          { type: 'plain_text', name: 'DATA_MODE', text: 'sample' },
+          { type: 'plain_text', name: 'AI_MODE', text: 'mock' },
+          { type: 'plain_text', name: 'GENERATION_ENABLED', text: 'false' },
+        ]),
+        settings([
+          ...workerVars.map((binding) =>
+            binding.name === 'GENERATION_ENABLED'
+              ? { ...binding, text: enabled ?? 'false' }
+              : binding,
+          ),
+          ...workerSecrets,
+          ...(infra
+            ? [
+                { type: 'secret_text', name: 'OPENAI_API_KEY' },
+                { type: 'secret_text', name: 'GENERATION_ALLOWED_OWNER_ID' },
+                {
+                  type: 'queue',
+                  name: 'GENERATION_QUEUE',
+                  queue_name: 'manga-nikki-generations-production',
+                },
+              ]
+            : []),
+          { type: 'assets', name: 'ASSETS' },
+        ]),
+        json({ success: true, result: { enabled: true, previews_enabled: false } }),
+      ];
+      const events: string[] = [];
+      const githubFetcher = vi.fn(async () => githubResponses.shift()!);
+      const cloudflareFetcher = vi.fn(async () => cloudflareResponses.shift()!);
+      const publicFetcher = vi.fn(async (input: string) => {
+        if (input.endsWith('/api/v1/health')) return json({ status: 'ok' });
+        if (input.endsWith('/api/v1/config')) {
+          return json({ dataMode: 'live', generationAvailable: available });
+        }
+        return json({ environment: 'production', commit, dataMode: 'live' });
+      });
 
-    const result = await runProductionConnectedDeployment(context(), {
-      githubFetcher,
-      cloudflareFetcher,
-      publicFetcher,
-      async prepareArtifact() {
-        events.push('prepare');
-        return { configPath: '/dist/manga-nikki/wrangler.json' };
-      },
-      async beforeDeploy() {
-        events.push('probe');
-      },
-      async deploy(configPath) {
-        expect(configPath).toBe('/dist/manga-nikki/wrangler.json');
-        events.push('deploy');
-      },
-      async sleep() {},
-    });
+      const result = await runProductionConnectedDeployment(
+        context({ infrastructureEnabled: infra, generationEnabled: enabled }),
+        {
+          githubFetcher,
+          cloudflareFetcher,
+          publicFetcher,
+          async prepareArtifact() {
+            events.push('prepare');
+            return { configPath: '/dist/manga-nikki/wrangler.json' };
+          },
+          async beforeDeploy() {
+            events.push('probe');
+          },
+          async deploy(configPath) {
+            expect(configPath).toBe('/dist/manga-nikki/wrangler.json');
+            events.push('deploy');
+          },
+          async sleep() {},
+        },
+      );
 
-    expect(result).toEqual({
-      environment: 'production',
-      commit,
-      url: 'https://manga-nikki.tossyhal.workers.dev',
-      deployment: 'succeeded',
-      smoke: 'passed',
-    });
-    expect(events).toEqual(['prepare', 'probe', 'deploy']);
-    expect(publicFetcher.mock.calls.map(([url]) => url)).toEqual([
-      'https://manga-nikki.tossyhal.workers.dev/api/v1/health',
-      'https://manga-nikki.tossyhal.workers.dev/api/v1/config',
-      'https://manga-nikki.tossyhal.workers.dev/__deployment.json',
-    ]);
-  });
+      expect(result).toEqual({
+        environment: 'production',
+        commit,
+        url: 'https://manga-nikki.tossyhal.workers.dev',
+        deployment: 'succeeded',
+        smoke: 'passed',
+      });
+      expect(events).toEqual(['prepare', 'probe', 'deploy']);
+      expect(publicFetcher.mock.calls.map(([url]) => url)).toEqual([
+        'https://manga-nikki.tossyhal.workers.dev/api/v1/health',
+        'https://manga-nikki.tossyhal.workers.dev/api/v1/config',
+        'https://manga-nikki.tossyhal.workers.dev/__deployment.json',
+      ]);
+    },
+  );
+
+  it.each([
+    [{ type: 'queue', name: 'GENERATION_QUEUE', queue_name: 'other-queue' }],
+    [{ type: 'secret_text', name: 'OTHER_KEY' }],
+    [
+      { type: 'queue', name: 'GENERATION_QUEUE', queue_name: 'manga-nikki-generations-production' },
+      { type: 'queue', name: 'GENERATION_QUEUE', queue_name: 'manga-nikki-generations-production' },
+    ],
+  ])(
+    'rejects unexpected or duplicate bindings even with generation infrastructure',
+    async (...bindings) => {
+      const deploy = vi.fn();
+      await expect(
+        runProductionConnectedDeployment(context({ infrastructureEnabled: 'true' }), {
+          githubFetcher: vi.fn(async () => json({ object: { sha: commit } })),
+          cloudflareFetcher: vi.fn(async () => settings(bindings)),
+          async prepareArtifact() {
+            return { configPath: '/dist/wrangler.json' };
+          },
+          deploy,
+        }),
+      ).rejects.toMatchObject({ code: 'WORKER_BINDINGS_PRESENT' });
+      expect(deploy).not.toHaveBeenCalled();
+    },
+  );
 
   it('blocks unexpected Worker bindings and failed Supabase probes before Wrangler', async () => {
     const initial = [settings([{ type: 'secret_text', name: 'OPENAI_API_KEY' }]), settings([])];
