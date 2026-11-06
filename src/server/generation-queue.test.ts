@@ -702,6 +702,30 @@ describe('generation queue consumer', () => {
     expect(createImageProvider).not.toHaveBeenCalled();
   });
 
+  it('rejects another owner in a claimed job before invoking providers or attempt RPCs', async () => {
+    const liveDemo: Environment = {
+      ...environment(),
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+      OPENAI_API_KEY: 'provider-key-for-test-only',
+      GENERATION_ALLOWED_OWNER_ID: 'aaaaaaaa-1111-4111-8111-111111111111',
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    const createScriptProvider = vi.fn();
+    const createImageProvider = vi.fn();
+    await expect(
+      runOpenAIGeneration(liveDemo, fetcher, openAIClaim(), {
+        saveGeneratedComic: vi.fn<SaveGeneratedComic>(),
+        recoverGeneratedComic: vi.fn<RecoverGeneratedComic>(),
+        createScriptProvider,
+        createImageProvider,
+      }),
+    ).rejects.toThrow('OPENAI_GENERATION_DISABLED');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(createScriptProvider).not.toHaveBeenCalled();
+    expect(createImageProvider).not.toHaveBeenCalled();
+  });
+
   it.each(['throws', 'returns another generation'] as const)(
     'keeps a saving generation pending when the saver %s after saving starts',
     async (saveOutcome) => {
