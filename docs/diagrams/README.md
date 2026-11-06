@@ -21,9 +21,9 @@
 5. Consumerが画像をprivate Storageへ保存する
 6. Consumerが完了RPCで生成を確定する
 
-Hono API、Queue Consumer、Scheduled Handlerは1つのWorkerのハンドラーで、いずれもPostgreSQLとStorageを使います。Hono APIとScheduled Handlerの通信は1本の幹にまとめています。ラベルの「署名URL発行」はHono API、「期限切れ削除」はScheduled Handlerの処理です。Cron Triggersは外側からScheduled Handlerを起動します。
+Hono API、Queue Consumer、Scheduled Handlerは1つのWorkerのハンドラーで、いずれもPostgreSQLとStorageを使います。Hono APIとScheduled Handlerの通信は1本の幹にまとめています。「DB操作・生成枠予約」と「署名URL発行」はHono API、「期限切れ削除」はScheduled Handlerの処理です。Cron Triggersは外側からScheduled Handlerを起動します。
 
-画面の静的ファイルはStatic Assetsが配信し、`/api/*`だけをHonoへ渡します。Static AssetsはWorkerと同じデプロイに含まれますが、Honoを経由しないため`Worker`の枠の外に描いています。
+画面の静的ファイルはStatic Assetsが配信し、`/api/*`だけをHonoへ渡します。Static AssetsはWorkerと一緒にデプロイされますが、Honoを経由しないため`Worker`の枠の外に描いています。`deploy`の矢印は両方を含むCloudflareの枠へつないでいます。
 
 CAPTCHAの検証は2種類あります。匿名登録ではSupabase Authが検証し、漫画の生成受付ではHono APIがTurnstileの`siteverify`を呼びます。DBの読み取りは利用者JWTとRLS、更新はサーバー専用RPCを使います。migrationはGitHub Actionsの手動実行で、デプロイのたびには適用されません。
 
