@@ -6,6 +6,7 @@ import type { AppContext } from './AppContext';
 import { BottomNav } from './BottomNav';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PwaNotice } from './PwaNotice';
+import { StartupScreen } from './StartupScreen';
 
 function documentTitle(pathname: string) {
   if (pathname === '/new') return '日記を書く | 漫画日記';
@@ -21,6 +22,7 @@ export function App() {
   const mainRef = useRef<HTMLElement | null>(null);
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
+  const [initialConfigPending, setInitialConfigPending] = useState(true);
   const [configRetry, setConfigRetry] = useState(0);
   const [diaryActivity, setDiaryActivity] = useState<DiaryActivity>({
     dirty: false,
@@ -70,10 +72,16 @@ export function App() {
     let active = true;
     void getClientConfig()
       .then((loadedConfig) => {
-        if (active) setConfig(loadedConfig);
+        if (active) {
+          setConfig(loadedConfig);
+          setInitialConfigPending(false);
+        }
       })
       .catch(() => {
-        if (active) setConfigError(true);
+        if (active) {
+          setConfigError(true);
+          setInitialConfigPending(false);
+        }
       });
     return () => {
       active = false;
@@ -161,18 +169,18 @@ export function App() {
         <PwaNotice
           diaryDirty={diaryActivity.dirty}
           diaryBusy={diaryActivity.busy}
-          hideOfflineNotice={location.pathname === '/new'}
+          hideOfflineNotice={location.pathname === '/new' && !initialConfigPending}
         />
       </div>
       <main
         id="main"
         ref={mainRef}
         tabIndex={-1}
-        className={`app-main${isPrimaryRoute ? ' primary-content' : ''}${location.pathname === '/' ? ' app-main-home' : ''}`}
+        className={`app-main${isPrimaryRoute ? ' primary-content' : ''}${location.pathname === '/' ? ' app-main-home' : ''}${initialConfigPending ? ' app-main-startup' : ''}`}
       >
-        <Outlet context={context} />
+        {initialConfigPending ? <StartupScreen /> : <Outlet context={context} />}
       </main>
-      <BottomNav />
+      {!initialConfigPending && <BottomNav />}
       <ConfirmDialog
         open={showBlockedDialog}
         variant={blockedActivity !== null && !blockedBusy ? 'navigation-exit' : 'default'}

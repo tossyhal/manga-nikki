@@ -90,7 +90,7 @@ test('狭い画面で下書き保存とHTML風の文字を安全に表示でき�
     true,
   );
 });
-test('設定取得中は利用不可と誤表示しない', async ({ page }) => {
+test('初回設定取得中は起動画面を表示し利用不可と誤表示しない', async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -100,12 +100,14 @@ test('設定取得中は利用不可と誤表示しない', async ({ page }) => 
     await route.continue();
   });
   await page.goto('/new');
-  const loadingCard = page.locator('.app-state-card');
-  await expect(loadingCard.getByRole('heading', { name: '準備しています' })).toBeVisible();
-  await expect(loadingCard).toContainText('入力画面を読み込んでいます。');
+  const startupScreen = page.locator('.startup-screen');
+  await expect(startupScreen).toBeVisible();
+  await expect(startupScreen).toContainText('漫画日記');
+  await expect(startupScreen).toContainText('準備中');
   await expect(page.getByText('保存機能は利用できません。')).not.toBeVisible();
   release();
   await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
+  await expect(startupScreen).toHaveCount(0);
 });
 
 test('設定取得失敗時は案内と公開サンプルだけを表示する', async ({ page }) => {
@@ -433,8 +435,12 @@ test('ライブの新規作成は入力だけでは登録やCAPTCHA、書き込�
   const body = '入力だけの架空の日記\n改行を保持する。';
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diary.fill(body);
-  await page.getByLabel('日付', { exact: true }).focus();
+  const dateTrigger = page.getByLabel('日付', { exact: true });
+  await dateTrigger.focus();
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dateTrigger).toBeFocused();
   await expect(diary).toHaveValue(body);
   await expect(page).toHaveURL(/\/new$/);
   await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);

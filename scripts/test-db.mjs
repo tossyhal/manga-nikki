@@ -403,6 +403,8 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_storage.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_shares.sql'), 'utf8')));
+  console.log('成功: 漫画共有の所有者確認・本文非公開・再送・期限/削除失効・RPC権限');
   succeeded(await sql(await readFile(join(root, 'supabase/tests/entry_write_limits.sql'), 'utf8')));
   succeeded(
     await sql(

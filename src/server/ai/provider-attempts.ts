@@ -21,8 +21,17 @@ export type ProviderAttemptOutcome = Readonly<{
   metadata?: ProviderCallMetadata;
 }>;
 
+export type ProviderAttemptHandle = Readonly<{
+  callIndex: number;
+  attemptId: string;
+}>;
+
 export interface ProviderAttemptHooks {
   begin(stage: ProviderStage, callIndex: number): Promise<string>;
+  beginBatch?(
+    stage: ProviderStage,
+    callIndices: readonly number[],
+  ): Promise<readonly ProviderAttemptHandle[]>;
   finish(
     stage: ProviderStage,
     callIndex: number,

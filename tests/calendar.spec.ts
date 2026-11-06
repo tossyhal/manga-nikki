@@ -588,7 +588,7 @@ test('Homeは開いたままJST日付が変わると日付表示と今日の記�
   await expect(page.getByRole('heading', { name: '今日に切り替わった架空日記' })).toBeVisible();
 });
 
-test('日付入力中にJST日付が変わっても選択日と本文を保持する', async ({ page }) => {
+test('日付選択中にJST日付が変わると新しい今日を選べて、本文を保持する', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-11-05T14:59:00.000Z') });
   await useMockConfig(page);
   await page.route('**/api/v1/me/quota', (route) =>
@@ -603,15 +603,23 @@ test('日付入力中にJST日付が変わっても選択日と本文を保持�
   );
 
   await page.goto('/new?date=2026-11-05');
-  const dateInput = page.getByLabel('日付');
+  const dateTrigger = page.getByRole('button', { name: '日付', exact: true });
+  const selectedDate = dateTrigger.locator('time');
   const diaryInput = page.getByLabel('今日はどんな日だった？', { exact: true });
   await diaryInput.fill('日付境界をまたいで入力している架空の日記です。');
-  await expect(dateInput).toHaveValue('2026-11-05');
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-05');
+  await dateTrigger.click();
+  const dateDialog = page.getByRole('dialog');
+  const newlyFutureDate = dateDialog.getByRole('button', { name: '2026年11月6日', exact: true });
+  await expect(newlyFutureDate).toBeDisabled();
 
   await page.clock.runFor(60_001);
 
-  await expect(dateInput).toHaveAttribute('max', '2026-11-06');
-  await expect(dateInput).toHaveValue('2026-11-05');
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-05');
+  await expect(newlyFutureDate).toBeEnabled();
+  await expect(newlyFutureDate).toHaveAttribute('aria-current', 'date');
+  await newlyFutureDate.click();
+  await expect(selectedDate).toHaveAttribute('datetime', '2026-11-06');
   await expect(diaryInput).toHaveValue('日付境界をまたいで入力している架空の日記です。');
 });
 
@@ -642,7 +650,7 @@ test('Libraryはタブ復帰時に今日の判定を更新し、選択日を保�
   await expect(page).toHaveURL(libraryUrl);
 });
 
-test('一覧の再読み込みは選択状態を保って先頭から取り直し、遅延応答を混ぜない', async ({ page }) => {
+test('一覧を再入場すると先頭から取り直し、遅延応答を混ぜない', async ({ page }) => {
   const today = jstToday();
   const previousMonth = shiftMonth(monthKey(today), -1);
   const firstPage = Array.from({ length: 20 }, (_, index) =>
@@ -711,7 +719,11 @@ test('一覧の再読み込みは選択状態を保って先頭から取り直�
   await staleRequested;
 
   try {
-    await page.getByRole('button', { name: '記録を再読み込み' }).click();
+    await page.locator('.bottom-nav').getByRole('link', { name: '日記を書く' }).click();
+    await expect(page).toHaveURL('/new');
+    await page.locator('.bottom-nav').getByRole('link', { name: '記録' }).click();
+    await expect(page).toHaveURL(/\/library(?:\?.*)?$/);
+    await page.getByRole('tab', { name: 'リスト' }).click();
     await expect(page).toHaveURL(
       `/library?view=list&month=${monthKey(today)}&day=${today}&listPage=1&dayPage=1`,
     );

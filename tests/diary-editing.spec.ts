@@ -131,7 +131,11 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
   await expect(diary).not.toHaveAttribute('aria-label');
   const updatedBody = '😀'.repeat(1000);
-  await page.getByLabel('日付', { exact: true }).fill('2026-01-02');
+  await page.getByLabel('日付', { exact: true }).click();
+  const dateDialog = page.getByRole('dialog');
+  await expect(dateDialog).toBeVisible();
+  await dateDialog.getByRole('button', { name: '2026年1月2日', exact: true }).click();
+  await expect(dateDialog).toBeHidden();
   await diary.fill(updatedBody);
   await expect(page.getByText('1000 / 1,000', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '保存', exact: true }).click();
@@ -409,6 +413,42 @@ test('ホームで既知の旧漫画と状態取得失敗を別々に案内す�
     .locator('.entry-history-card')
     .filter({ hasText: '状態確認に失敗した記録です。' });
   await expect(unavailableCard).toContainText('状態を確認できません');
+});
+
+test('ホームは旧漫画を表示しながら最新の生成失敗を案内する', async ({ page }) => {
+  const today = jstToday();
+  const oldSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const latestFailureId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const latestFailure = generationFixtures(entryId, latestFailureId, 2).failed;
+  const todayEntry: Entry = {
+    ...draftEntryDetailFixture,
+    diaryDate: today,
+    revision: 2,
+    latestGenerationId: latestFailure.id,
+  };
+  const detail: EntryDetail = {
+    ...todayEntry,
+    latestGeneration: latestFailure,
+    lastSuccessfulGeneration: oldSuccess,
+  };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [todayEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto('/');
+  const todaySection = page.getByRole('region', { name: '今日の記録' });
+  await expect(todaySection.getByText('編集前の漫画を表示しています。')).toBeVisible();
+  await expect(todaySection.getByText('新しい漫画を生成できませんでした。')).toBeVisible();
+  await expect(todaySection.locator('img.entry-thumbnail-image')).toHaveAttribute(
+    'src',
+    '/sample-comic.svg',
+  );
 });
 
 test('編集後の旧generationが失敗済みなら一覧に編集済みと表示する', async ({ page }) => {
@@ -1179,7 +1219,8 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
   expect(generationReads).toBeGreaterThanOrEqual(2);
 });
 
-test('未来日は保存せず、日付と本文を保持する', async ({ page }) => {
+test('未来日を選べず、編集中の日付と本文を保持する', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-06T03:00:00.000Z') });
   let patchCount = 0;
   await configureDetail(page);
   await page.route(`**/api/v1/entries/${entryId}`, (route) => {
@@ -1189,18 +1230,28 @@ test('未来日は保存せず、日付と本文を保持する', async ({ page 
   await page.goto(`/entries/${entryId}`);
   await clickEntryMenuItem(page, '日記を編集');
   const date = page.getByLabel('日付', { exact: true });
-  const today = (await date.getAttribute('max')) ?? '2026-11-03';
-  const future = nextDate(today);
-  await date.fill(future);
+  const originalDate = await date.locator('time').getAttribute('datetime');
   const draft = '未来の日付では保存しない架空の日記';
-  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(draft);
-  await page.getByRole('button', { name: '保存', exact: true }).click();
-
-  await expect(date).toHaveValue(future);
-  expect(await date.evaluate((element: HTMLInputElement) => element.validity.rangeOverflow)).toBe(
-    true,
-  );
-  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveValue(draft);
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diary.fill(draft);
+  await date.click();
+  const dateDialog = page.getByRole('dialog');
+  for (let month = 0; month < 10; month++) {
+    await dateDialog.getByRole('button', { name: '次の月' }).click();
+  }
+  await expect(dateDialog.getByRole('heading', { name: '2026年11月' })).toBeVisible();
+  const today = '2026-11-06';
+  const future = nextDate(today);
+  const [year, month, day] = future.split('-').map(Number);
+  const futureButton = dateDialog.getByRole('button', {
+    name: `${year}年${month}月${day}日`,
+    exact: true,
+  });
+  await expect(futureButton).toBeDisabled();
+  await futureButton.evaluate((button: HTMLButtonElement) => button.click());
+  await expect(date.locator('time')).toHaveAttribute('datetime', originalDate ?? '');
+  await expect(diary).toHaveValue(draft);
+  await dateDialog.getByRole('button', { name: '閉じる' }).click();
   expect(patchCount).toBe(0);
 });
 

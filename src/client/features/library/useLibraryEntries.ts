@@ -73,6 +73,9 @@ export function useLibraryEntries(initialMonth: string) {
           targetMonth,
           () => requestIsActive(request),
           request.controller.signal,
+          (items, cursor) => {
+            if (requestIsActive(request)) syncEntries(items, cursor);
+          },
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
@@ -99,6 +102,9 @@ export function useLibraryEntries(initialMonth: string) {
           targetMonth,
           () => requestIsActive(request),
           request.controller.signal,
+          (items, cursor) => {
+            if (requestIsActive(request)) syncEntries(items, cursor);
+          },
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);

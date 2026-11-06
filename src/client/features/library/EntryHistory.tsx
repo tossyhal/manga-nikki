@@ -33,8 +33,6 @@ function generationLabel(status: Generation['status']) {
       return '生成待ち';
     case 'running':
       return '生成中';
-    case 'succeeded':
-      return '4コマ漫画';
     case 'failed':
       return '生成失敗';
     case 'unknown':

@@ -331,10 +331,6 @@ function DetailContent({
   const hasUnresolvedRequest = Boolean(
     entry && !generationForCurrentRevision && hasGenerationRequest(entry),
   );
-  const showQuotaStatus = Boolean(
-    quota &&
-    (quota.remainingToday === 0 || !quota.generationAvailable || quota.activeGenerationId !== null),
-  );
   const comicFromPreviousRevision = Boolean(
     displayedGeneration && displayedGeneration.entryRevision < (entry?.revision ?? 0),
   );
@@ -390,6 +386,7 @@ function DetailContent({
     statusView && 'is-status',
     statusView && statusKind && `is-${statusKind}`,
     statusView && displayedGeneration && 'has-saved-comic',
+    !editing && displayedGeneration && 'has-comic',
     !statusView &&
       (draftSavedConfirmation ||
         (displayedGeneration?.id === generation?.id && generationForCurrentRevision)) &&
@@ -767,7 +764,12 @@ function DetailContent({
                   </output>
                 )}
                 <div className="date-row">
-                  <DiaryDateField id="edit-date" value={draftDate} onChange={setDraftDate} />
+                  <DiaryDateField
+                    id="edit-date"
+                    value={draftDate}
+                    onChange={setDraftDate}
+                    disabled={busy || pending}
+                  />
                 </div>
                 <DiaryBodyField
                   id="edit-body"
@@ -814,6 +816,7 @@ function DetailContent({
               {displayedGeneration && (
                 <SavedComic
                   key={displayedGeneration.id}
+                  generationId={displayedGeneration.id}
                   comic={displayedGeneration.comic}
                   hideTitle={displayedGeneration.entryRevision === entry.revision}
                 />
@@ -944,16 +947,13 @@ function DetailContent({
             <p className="detail-revision-note">編集前の日記から生成された漫画です。</p>
           )}
           {quota && !pending && !unknownGeneration && (
-            <div className={showQuotaStatus ? 'detail-quota-card' : 'sr-only'}>
-              <GenerationQuotaStatus
-                quota={quota}
-                activeGeneration={activeGeneration}
-                currentEntryId={entry.id}
-                currentGenerationId={generation?.id ?? entry.latestGenerationId}
-                onRefresh={showQuotaStatus ? () => void refreshQuota() : undefined}
-                refreshing={refreshing}
-              />
-            </div>
+            <GenerationQuotaStatus
+              quota={quota}
+              activeGeneration={activeGeneration}
+              currentEntryId={entry.id}
+              currentGenerationId={generation?.id ?? entry.latestGenerationId}
+              generationAvailable={config.generationAvailable}
+            />
           )}
           {(quotaState === 'session-required' || quotaState === 'unavailable') &&
             !pending &&
@@ -962,7 +962,7 @@ function DetailContent({
                 <p>
                   {quotaState === 'session-required'
                     ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
-                    : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
+                    : '漫画の受付状態を取得できないため、受付を停止しています。日記の閲覧と保存は続けられます。'}
                 </p>
                 <button
                   className="button-text"
@@ -970,28 +970,27 @@ function DetailContent({
                   disabled={refreshing}
                   onClick={() => void refreshQuota()}
                 >
-                  {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+                  再試行
                 </button>
               </div>
             )}
         </>
       )}
       {entry && editing && quota && (
-        <div className="sr-only">
-          <GenerationQuotaStatus
-            quota={quota}
-            activeGeneration={activeGeneration}
-            currentEntryId={entry.id}
-            currentGenerationId={generation?.id ?? entry.latestGenerationId}
-          />
-        </div>
+        <GenerationQuotaStatus
+          quota={quota}
+          activeGeneration={activeGeneration}
+          currentEntryId={entry.id}
+          currentGenerationId={generation?.id ?? entry.latestGenerationId}
+          generationAvailable={config.generationAvailable}
+        />
       )}
       {entry && editing && (quotaState === 'session-required' || quotaState === 'unavailable') && (
         <div className="inline-alert" role="alert">
           <p>
             {quotaState === 'session-required'
               ? '保存済みの匿名セッションを確認できないため、漫画の受付を停止しています。別の匿名アカウントは自動で作成しません。'
-              : '利用枠を確認できないため、漫画の受付を停止しています。日記の閲覧と保存は続けられます。'}
+              : '漫画の受付状態を取得できないため、受付を停止しています。日記の閲覧と保存は続けられます。'}
           </p>
           <button
             className="button-text"
@@ -999,7 +998,7 @@ function DetailContent({
             disabled={refreshing}
             onClick={() => void refreshQuota()}
           >
-            {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
+            再試行
           </button>
         </div>
       )}
@@ -1007,16 +1006,6 @@ function DetailContent({
         <div className="primary-action-dock detail-action-dock">
           {showExternalAiPolicy && (
             <p className="policy-note">※漫画の生成時に、日記の内容を外部AIへ送信します。</p>
-          )}
-          {quota && !showQuotaStatus && !pending && !unknownGeneration && (
-            <button
-              className="button-text quota-refresh-action"
-              disabled={busy || refreshing}
-              type="button"
-              onClick={() => void refreshQuota()}
-            >
-              {refreshing ? '利用枠を確認しています…' : '利用枠を再確認'}
-            </button>
           )}
           {pending && (
             <Link className="button button-primary" to={backTo}>
@@ -1078,23 +1067,17 @@ function DetailContent({
             >
               {busy
                 ? '受付しています…'
-                : !config.generationAvailable
-                  ? '漫画の受付を停止しています'
-                  : quotaState === 'loading'
-                    ? '利用枠を確認しています…'
-                    : quotaState === 'unavailable' || quotaState === 'session-required'
-                      ? '利用枠を確認できません'
-                      : quota?.remainingToday === 0
-                        ? '本日の生成上限に達しています'
-                        : quota?.generationAvailable === false
-                          ? '漫画の受付を停止しています'
-                          : quota?.activeGenerationId
-                            ? '進行中の漫画を確認してください'
-                            : !config.generationAvailable
-                              ? '漫画の受付を停止しています'
-                              : config.dataMode === 'live' && !siteKey
-                                ? '生成用の確認を利用できません'
-                                : '4コマにする'}
+                : quotaState === 'loading'
+                  ? '準備しています…'
+                  : quota?.remainingToday === 0
+                    ? '4コマにする'
+                    : !config.generationAvailable || quota?.generationAvailable === false
+                      ? '漫画の受付を停止しています'
+                      : quota?.activeGenerationId
+                        ? '進行中の漫画を確認してください'
+                        : config.dataMode === 'live' && !siteKey
+                          ? '生成用の確認を利用できません'
+                          : '4コマにする'}
             </button>
           )}
         </div>

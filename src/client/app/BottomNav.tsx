@@ -36,7 +36,7 @@ export function BottomNav() {
         aria-current={active === 'write' ? 'page' : undefined}
       >
         <span className="bottom-nav-icon" aria-hidden="true">
-          <Icon name="plus" size={28} />
+          <Icon name="plus" />
         </span>
         <span className="bottom-nav-label" aria-hidden={active !== 'write'}>
           書く

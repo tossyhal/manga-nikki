@@ -44,10 +44,14 @@ for (const [kind, template] of [
     await page.goto(`/entries/${entryId}`);
     await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
     if (comic.visual.kind === 'page') {
-      await page.getByText('4コマの内容を読む', { exact: true }).click();
+      await expect(page.getByText('4コマの内容を読む', { exact: true })).toHaveCount(0);
+      const transcript = page.locator('.comic-transcript > ol.sr-only');
+      await expect(transcript).toContainText(comic.panels[0].caption);
+      await expect(transcript).toContainText('「波がきれい」');
+    } else {
+      await expect(page.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
+      await expect(page.getByText('「波がきれい」')).toBeVisible();
     }
-    await expect(page.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
-    await expect(page.getByText('「波がきれい」')).toBeVisible();
     const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
     await expect(page.locator('.comic img')).toHaveCount(ids.length);
     for (const [index, id] of ids.entries()) {

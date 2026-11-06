@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
 
-function ComicTranscript({ comic }: { comic: ComicDocument }) {
+function ComicTranscript({ comic, className }: { comic: ComicDocument; className?: string }) {
   return (
-    <ol>
+    <ol className={className}>
       {comic.panels.map((panel) => (
         <li key={panel.index}>
           <p>{panel.scene}</p>
@@ -48,6 +48,7 @@ export function Comic({
   onImageError,
   titleAs: Title = 'h2',
   hideTitle = false,
+  hideTranscriptDisclosure = false,
 }: {
   comic: ComicDocument;
   images: Record<string, string>;
@@ -63,6 +64,8 @@ export function Comic({
   titleAs?: 'h2' | 'h3';
   /** 周囲に同じ漫画タイトルの見出しがある場合は重複を避ける */
   hideTitle?: boolean;
+  /** 元の日記を読める画面では、通常時の脚本はスクリーンリーダー向けに残す */
+  hideTranscriptDisclosure?: boolean;
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
   const [zoomed, setZoomed] = useState<{ assetId: string; alt: string } | null>(null);
@@ -111,6 +114,7 @@ export function Comic({
                 >
                   <img
                     src={src}
+                    referrerPolicy="no-referrer"
                     loading="lazy"
                     decoding="async"
                     alt={alt}
@@ -172,19 +176,23 @@ export function Comic({
             {anyImageFailed ? '漫画の画像を表示できません。' : ''}
           </p>
           {!hideTitle && <Title className="comic-title sr-only">{comic.title}</Title>}
-          {comic.visual.kind === 'page' && comic.visual.textMode === 'external' && (
-            <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
-              <summary>
-                {pageImageFailed
-                  ? '漫画の画像を表示できません。4コマの内容を読む'
-                  : '4コマの内容を読む'}
-              </summary>
-              <ComicTranscript comic={comic} />
-              {pageImageFailed && (
-                <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
-              )}
-            </details>
-          )}
+          {comic.visual.kind === 'page' &&
+            comic.visual.textMode === 'external' &&
+            (hideTranscriptDisclosure && !pageImageFailed ? (
+              <ComicTranscript comic={comic} className="sr-only" />
+            ) : (
+              <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
+                <summary>
+                  {pageImageFailed
+                    ? '漫画の画像を表示できません。4コマの内容を読む'
+                    : '4コマの内容を読む'}
+                </summary>
+                <ComicTranscript comic={comic} />
+                {pageImageFailed && (
+                  <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
+                )}
+              </details>
+            ))}
           {comic.visual.kind === 'page' && comic.visual.textMode === 'embedded' && (
             <>
               {!pageImageFailed && (
@@ -245,6 +253,7 @@ export function Comic({
             ) : images[zoomed.assetId] ? (
               <img
                 src={images[zoomed.assetId]}
+                referrerPolicy="no-referrer"
                 alt={zoomed.alt}
                 onError={() => {
                   if (onImageError?.(zoomed.assetId)) return;

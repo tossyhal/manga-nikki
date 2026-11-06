@@ -41,6 +41,7 @@ test('production previewは公開用静的ファイルだけをcacheし、offlin
   expect(cachedPaths).toContain('/manifest.webmanifest');
   expect(cachedPaths).toContain('/icon-192.png');
   expect(cachedPaths).toContain('/icon-512.png');
+  expect(cachedPaths).toContain('/cat-mascot.png');
   expect(cachedPaths).toContain('/sample-comic.svg');
   expect(cachedPaths.some((path) => /^\/assets\/.+\.js$/.test(path))).toBe(true);
   expect(cachedPaths.some((path) => /^\/assets\/.+\.css$/.test(path))).toBe(true);
@@ -52,6 +53,7 @@ test('production previewは公開用静的ファイルだけをcacheし、offlin
           '/manifest.webmanifest',
           '/icon-192.png',
           '/icon-512.png',
+          '/cat-mascot.png',
           '/sample-comic.svg',
         ].includes(path) || /^\/assets\/.+\.(?:js|css)$/.test(path),
     ),

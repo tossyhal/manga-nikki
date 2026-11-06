@@ -50,7 +50,6 @@ export function Library() {
     setSessionUnavailable,
     loadThroughMonth,
     loadThroughListPage,
-    refreshEntries,
     mountedRef,
   } = useLibraryEntries(searchState.month);
   const { view, month: visibleMonth, day: selectedDate, listPage, dayPage } = searchState;
@@ -226,12 +225,6 @@ export function Library() {
     }
   }
 
-  function refresh() {
-    attemptedListRestoreRef.current = null;
-    updateSearch({ listPage: 1, dayPage: 1 });
-    void refreshEntries(visibleMonth);
-  }
-
   const selectedLabel = (() => {
     const { month, day } = dateParts(selectedDate);
     return `${month}月${day}日`;
@@ -287,15 +280,6 @@ export function Library() {
 
       <div className="library-view-toolbar">
         <LibraryViewTabs view={view} onChange={(view) => updateSearch({ view })} />
-        <button
-          type="button"
-          className="library-refresh-button"
-          aria-label="記録を再読み込み"
-          aria-busy={busy}
-          onClick={refresh}
-        >
-          <Icon name="refresh" size={20} />
-        </button>
       </div>
 
       <div

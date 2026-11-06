@@ -28,7 +28,14 @@ describe('lazy authentication SDK', () => {
   it('initializes one client when session checks start concurrently', async () => {
     const getSession = vi
       .fn()
-      .mockResolvedValue({ data: { session: { access_token: 'synthetic.jwt' } }, error: null });
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'synthetic.jwt' } },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: { session: { access_token: 'refreshed.synthetic.jwt' } },
+        error: null,
+      });
     const signInAnonymously = vi.fn();
     const createClient = vi.fn().mockReturnValue({ auth: { getSession, signInAnonymously } });
     vi.doMock('@supabase/supabase-js', () => ({ createClient }));
@@ -39,6 +46,9 @@ describe('lazy authentication SDK', () => {
       'synthetic.jwt',
     ]);
     expect(createClient).toHaveBeenCalledOnce();
+    expect(getSession).toHaveBeenCalledOnce();
+
+    await expect(getLiveAccessToken()).resolves.toBe('refreshed.synthetic.jwt');
     expect(getSession).toHaveBeenCalledTimes(2);
     expect(signInAnonymously).not.toHaveBeenCalled();
   });

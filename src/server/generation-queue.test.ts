@@ -86,6 +86,7 @@ function rpcFetcherForOpenAI(
   calls: { name: string; body: Record<string, unknown> }[],
 ) {
   return rpcFetcher((name, body) => {
+    if (name === 'parallel_image_generation_ready') return true;
     if (name === 'claim_generation') return generation;
     if (name === 'begin_provider_attempt')
       return {
@@ -96,6 +97,15 @@ function rpcFetcherForOpenAI(
         mode: 'provider',
         is_mock: false,
       };
+    if (name === 'begin_parallel_image_attempts')
+      return [2, 3, 4].map((callIndex) => ({
+        attempt_id: crypto.randomUUID(),
+        generation_id: generation.generation_id,
+        stage: 'images',
+        call_index: callIndex,
+        mode: 'provider',
+        is_mock: false,
+      }));
     if (name === 'finish_provider_attempt')
       return {
         attempt_id: body.p_attempt_id,
@@ -117,7 +127,7 @@ function rpcFetcherForOpenAI(
   }, calls);
 }
 
-function successfulOpenAIProviders() {
+function successfulOpenAIProviders(parallelImages = true) {
   const script = scriptSchema.parse(structuredClone(scriptSample));
   const png = Uint8Array.from(
     atob(
@@ -151,8 +161,16 @@ function successfulOpenAIProviders() {
   const imageProvider: ImageProvider = {
     render: async (_script, options) => {
       const panels: RenderedPanel[] = [];
-      for (let callIndex = 1; callIndex <= 4; callIndex++) {
-        const attemptId = await options.attemptHooks!.begin('images', callIndex);
+      const firstAttemptId = await options.attemptHooks!.begin('images', 1);
+      const firstMetadata = metadataFor('images', 1, openaiImageModelProfile.modelId);
+      await options.attemptHooks!.finish('images', 1, firstAttemptId, {
+        state: 'succeeded',
+        requestId: firstMetadata.requestId,
+        metadata: firstMetadata,
+      });
+      panels.push({ index: 1, mediaType: 'image/png', data: png });
+
+      const finishPanel = async (callIndex: number, attemptId: string) => {
         const metadata = metadataFor('images', callIndex, openaiImageModelProfile.modelId);
         await options.attemptHooks!.finish('images', callIndex, attemptId, {
           state: 'succeeded',
@@ -164,6 +182,15 @@ function successfulOpenAIProviders() {
           mediaType: 'image/png',
           data: png,
         });
+      };
+      if (parallelImages) {
+        const attempts = await options.attemptHooks!.beginBatch!('images', [2, 3, 4]);
+        for (const { callIndex, attemptId } of attempts) await finishPanel(callIndex, attemptId);
+      } else {
+        for (const callIndex of [2, 3, 4]) {
+          const attemptId = await options.attemptHooks!.begin('images', callIndex);
+          await finishPanel(callIndex, attemptId);
+        }
       }
       return {
         kind: 'panels' as const,
@@ -434,6 +461,7 @@ describe('generation queue consumer', () => {
     const generation = openAIClaim();
     const providers = successfulOpenAIProviders();
     const fetcher = rpcFetcher((name, body) => {
+      if (name === 'parallel_image_generation_ready') return true;
       if (name === 'claim_generation') return generation;
       if (name === 'begin_provider_attempt')
         return {
@@ -444,6 +472,15 @@ describe('generation queue consumer', () => {
           mode: 'provider',
           is_mock: false,
         };
+      if (name === 'begin_parallel_image_attempts')
+        return [2, 3, 4].map((callIndex) => ({
+          attempt_id: crypto.randomUUID(),
+          generation_id: generationId,
+          stage: 'images',
+          call_index: callIndex,
+          mode: 'provider',
+          is_mock: false,
+        }));
       if (name === 'finish_provider_attempt')
         return {
           attempt_id: body.p_attempt_id,
@@ -497,15 +534,14 @@ describe('generation queue consumer', () => {
     expect(saveGeneratedComic).toHaveBeenCalledOnce();
     expect(calls.map((call) => call.name)).toEqual([
       'claim_generation',
+      'parallel_image_generation_ready',
       'begin_provider_attempt',
       'finish_provider_attempt',
       'begin_provider_attempt',
       'finish_provider_attempt',
-      'begin_provider_attempt',
+      'begin_parallel_image_attempts',
       'finish_provider_attempt',
-      'begin_provider_attempt',
       'finish_provider_attempt',
-      'begin_provider_attempt',
       'finish_provider_attempt',
       'mark_generation_saving',
     ]);
@@ -519,14 +555,149 @@ describe('generation queue consumer', () => {
         p_call_index: 1,
         p_generation_enabled: true,
       },
-      ...[1, 2, 3, 4].map((callIndex) => ({
+      {
         p_generation_id: generationId,
         p_claim_token: claimToken,
         p_stage: 'images',
-        p_call_index: callIndex,
+        p_call_index: 1,
         p_generation_enabled: true,
-      })),
+      },
     ]);
+    expect(calls.find((call) => call.name === 'begin_parallel_image_attempts')?.body).toEqual({
+      p_generation_id: generationId,
+      p_claim_token: claimToken,
+      p_generation_enabled: true,
+    });
+  });
+
+  it('falls back to serial image attempts when the database has not applied the batch migration', async () => {
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const queue = { send: vi.fn(async () => undefined) };
+    const liveDemo: Environment = {
+      ...environment(queue),
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+      OPENAI_API_KEY: 'provider-key-for-test-only',
+    };
+    const generation = openAIClaim();
+    const providers = successfulOpenAIProviders(false);
+    const rpcFetcher = rpcFetcherForOpenAI(generation, calls);
+    let readinessCalls = 0;
+    const fetcher: typeof fetch = async (input, init) => {
+      const requestUrl = input instanceof Request ? input.url : String(input);
+      if (requestUrl.endsWith('/rpc/parallel_image_generation_ready')) {
+        readinessCalls += 1;
+        return Response.json(
+          { code: 'PGRST202', message: 'function was not present in the schema cache' },
+          { status: 404 },
+        );
+      }
+      return rpcFetcher(input, init);
+    };
+    const saveGeneratedComic = vi.fn<SaveGeneratedComic>(async () => ({
+      generationId,
+      status: 'succeeded',
+    }));
+
+    const outcome = await processGenerationMessage(liveDemo, generationId, fetcher, {
+      saveGeneratedComic,
+      recoverGeneratedComic: async (requestedId) => ({
+        generationId: requestedId,
+        status: 'pending',
+      }),
+      createScriptProvider: () => providers.scriptProvider,
+      createImageProvider: () => providers.imageProvider,
+    });
+
+    expect(outcome).toBe('handed-off');
+    expect(readinessCalls).toBe(1);
+    expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+    expect(calls.some((call) => call.name === 'begin_parallel_image_attempts')).toBe(false);
+    expect(saveGeneratedComic).toHaveBeenCalledOnce();
+  });
+
+  it('stops before an AI attempt when readiness fails for a reason other than a missing function', async () => {
+    const liveDemo: Environment = {
+      ...environment({ send: vi.fn(async () => undefined) }),
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+      OPENAI_API_KEY: 'provider-key-for-test-only',
+    };
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ code: 'PGRST000', message: 'temporary database error' }, { status: 500 }),
+    );
+    const createScriptProvider = vi.fn();
+    const createImageProvider = vi.fn();
+
+    await expect(
+      runOpenAIGeneration(liveDemo, fetcher, openAIClaim(), {
+        saveGeneratedComic: vi.fn<SaveGeneratedComic>(),
+        recoverGeneratedComic: vi.fn<RecoverGeneratedComic>(),
+        createScriptProvider,
+        createImageProvider,
+      }),
+    ).rejects.toThrow('PARALLEL_IMAGE_READINESS_FAILED');
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(createScriptProvider).not.toHaveBeenCalled();
+    expect(createImageProvider).not.toHaveBeenCalled();
+  });
+
+  it('releases a claimed generation when readiness fails before any provider attempt', async () => {
+    const queue = { send: vi.fn(async () => undefined) };
+    const liveDemo: Environment = {
+      ...environment(queue),
+      AI_MODE: 'live',
+      GENERATION_ENABLED: 'true',
+      OPENAI_API_KEY: 'provider-key-for-test-only',
+    };
+    const generation = openAIClaim();
+    const calls: { name: string; body: Record<string, unknown> }[] = [];
+    const failureResult = {
+      generation_id: generationId,
+      status: 'failed',
+      reservation_state: 'released',
+      released: true,
+    };
+    const fetcher: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const name = new URL(request.url).pathname.split('/').at(-1) ?? '';
+      const body = (await request.json()) as Record<string, unknown>;
+      calls.push({ name, body });
+      if (name === 'claim_generation') return Response.json(generation);
+      if (name === 'parallel_image_generation_ready')
+        return Response.json(
+          { code: 'PGRST000', message: 'temporary database error' },
+          { status: 500 },
+        );
+      if (name === 'fail_or_hold_generation') return Response.json(failureResult);
+      throw new Error(`unexpected RPC: ${name}`);
+    };
+    const createScriptProvider = vi.fn();
+    const createImageProvider = vi.fn();
+
+    await expect(
+      processGenerationMessage(liveDemo, generationId, fetcher, {
+        saveGeneratedComic: vi.fn<SaveGeneratedComic>(),
+        recoverGeneratedComic: vi.fn<RecoverGeneratedComic>(),
+        createScriptProvider,
+        createImageProvider,
+      }),
+    ).resolves.toBe('failed');
+
+    expect(calls.map((call) => call.name)).toEqual([
+      'claim_generation',
+      'parallel_image_generation_ready',
+      'fail_or_hold_generation',
+    ]);
+    expect(calls[2]?.body).toEqual({
+      p_generation_id: generationId,
+      p_claim_token: claimToken,
+      p_terminal_status: 'failed',
+    });
+    expect(failureResult).toMatchObject({ status: 'failed', reservation_state: 'released' });
+    expect(createScriptProvider).not.toHaveBeenCalled();
+    expect(createImageProvider).not.toHaveBeenCalled();
   });
 
   it.each([0, 408, 429, 503])(
@@ -576,7 +747,8 @@ describe('generation queue consumer', () => {
 
       expect(outcome).toBe('handed-off');
       expect(markCalls).toBe(2);
-      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(2);
+      expect(calls.filter((call) => call.name === 'begin_parallel_image_attempts')).toHaveLength(1);
       expect(calls.filter((call) => call.name === 'finish_provider_attempt')).toHaveLength(5);
       expect(calls.filter((call) => call.name === 'mark_generation_saving')).toHaveLength(1);
       expect(calls.some((call) => call.name === 'fail_or_hold_generation')).toBe(false);
@@ -619,7 +791,8 @@ describe('generation queue consumer', () => {
 
     expect(outcome).toBe('failed');
     expect(markCalls).toBe(1);
-    expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+    expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(2);
+    expect(calls.filter((call) => call.name === 'begin_parallel_image_attempts')).toHaveLength(1);
     expect(calls.filter((call) => call.name === 'finish_provider_attempt')).toHaveLength(5);
     expect(calls.filter((call) => call.name === 'fail_or_hold_generation')).toHaveLength(1);
     expect(saveGeneratedComic).not.toHaveBeenCalled();
@@ -670,7 +843,8 @@ describe('generation queue consumer', () => {
       ).rejects.toMatchObject({ name: 'TimeoutError' });
 
       expect(markCalls).toBe(1);
-      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(5);
+      expect(calls.filter((call) => call.name === 'begin_provider_attempt')).toHaveLength(2);
+      expect(calls.filter((call) => call.name === 'begin_parallel_image_attempts')).toHaveLength(1);
       expect(saveGeneratedComic).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -741,6 +915,7 @@ describe('generation queue consumer', () => {
       const providers = successfulOpenAIProviders();
       let stage: 'running' | 'saving' = 'running';
       const fetcher = rpcFetcher((name, body) => {
+        if (name === 'parallel_image_generation_ready') return true;
         if (name === 'claim_generation') return generation;
         if (name === 'begin_provider_attempt')
           return {
@@ -751,6 +926,15 @@ describe('generation queue consumer', () => {
             mode: 'provider',
             is_mock: false,
           };
+        if (name === 'begin_parallel_image_attempts')
+          return [2, 3, 4].map((callIndex) => ({
+            attempt_id: crypto.randomUUID(),
+            generation_id: generationId,
+            stage: 'images',
+            call_index: callIndex,
+            mode: 'provider',
+            is_mock: false,
+          }));
         if (name === 'finish_provider_attempt')
           return {
             attempt_id: body.p_attempt_id,
@@ -810,10 +994,15 @@ describe('generation queue consumer', () => {
       expect(createImageProvider).toHaveBeenCalledTimes(imageFactoryCalls);
       expect(calls.map((call) => call.name)).toEqual([
         'claim_generation',
-        ...Array.from({ length: 5 }, () => [
+        'parallel_image_generation_ready',
+        ...Array.from({ length: 2 }, () => [
           'begin_provider_attempt',
           'finish_provider_attempt',
         ]).flat(),
+        'begin_parallel_image_attempts',
+        'finish_provider_attempt',
+        'finish_provider_attempt',
+        'finish_provider_attempt',
         'mark_generation_saving',
         'list_generation_reconcile_candidates_v2',
         'begin_generation_save_recovery',
@@ -868,6 +1057,7 @@ describe('generation queue consumer', () => {
     const attemptId = crypto.randomUUID();
     let claims = 0;
     const fetcher = rpcFetcher((name, body) => {
+      if (name === 'parallel_image_generation_ready') return true;
       if (name === 'claim_generation') return claims++ === 0 ? generation : null;
       if (name === 'begin_provider_attempt')
         return {
@@ -934,12 +1124,13 @@ describe('generation queue consumer', () => {
     expect(saveGeneratedComic).not.toHaveBeenCalled();
     expect(calls.map((call) => call.name)).toEqual([
       'claim_generation',
+      'parallel_image_generation_ready',
       'begin_provider_attempt',
       'finish_provider_attempt',
       'fail_or_hold_generation',
       'claim_generation',
     ]);
-    expect(calls[3]?.body).toEqual({
+    expect(calls[4]?.body).toEqual({
       p_generation_id: generationId,
       p_claim_token: claimToken,
       p_terminal_status: 'failed',

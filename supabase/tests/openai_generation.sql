@@ -301,6 +301,10 @@ delete from private.quota_counters where scope = 'global_total'
 select test.assert(has_function_privilege('service_role',
   'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and has_function_privilege('service_role',
+    'public.parallel_image_generation_ready()', 'EXECUTE')
+  and has_function_privilege('service_role',
+    'public.begin_parallel_image_attempts(uuid,uuid,boolean)', 'EXECUTE')
+  and has_function_privilege('service_role',
     'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
   and has_function_privilege('service_role',
     'public.begin_generation_save_recovery(uuid)', 'EXECUTE')
@@ -310,6 +314,14 @@ select test.assert(has_function_privilege('service_role',
     'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
   and not has_function_privilege('authenticated',
     'public.reserve_openai_generation(uuid,uuid,integer,uuid,boolean)', 'EXECUTE')
+  and not has_function_privilege('anon',
+    'public.parallel_image_generation_ready()', 'EXECUTE')
+  and not has_function_privilege('authenticated',
+    'public.parallel_image_generation_ready()', 'EXECUTE')
+  and not has_function_privilege('anon',
+    'public.begin_parallel_image_attempts(uuid,uuid,boolean)', 'EXECUTE')
+  and not has_function_privilege('authenticated',
+    'public.begin_parallel_image_attempts(uuid,uuid,boolean)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.mark_generation_saving(uuid,uuid)', 'EXECUTE')
   and not has_function_privilege('anon',
@@ -321,6 +333,8 @@ select test.assert(has_function_privilege('service_role',
   and not has_function_privilege('authenticated',
     'public.list_generation_reconcile_candidates_v2(integer)', 'EXECUTE'),
   'OpenAI予約とsaving移行RPCはservice_role専用');
+select test.assert(public.parallel_image_generation_ready(),
+  '新しいDBは並列画像attemptをサポートする');
 select test.assert(not exists (
     select 1 from pg_catalog.pg_class table_row
     cross join lateral pg_catalog.aclexplode(table_row.relacl) grant_row
@@ -501,22 +515,65 @@ select (public.begin_provider_attempt(:'generation_id'::uuid, :'claim_token'::uu
   'script', 1, true) ->> 'attempt_id') as script_attempt \gset
 select public.finish_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   :'script_attempt'::uuid, 'succeeded', 'fictional-script-request');
+select test.expect_error(format('select public.begin_parallel_image_attempts(%L,%L,true)',
+  :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'ATTEMPT_STAGE_INCOMPLETE');
 select (public.begin_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   'images', 1, true) ->> 'attempt_id') as image_attempt_1 \gset
 select public.finish_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   :'image_attempt_1'::uuid, 'succeeded', 'fictional-image-request-1');
+select test.expect_error(format('select public.begin_parallel_image_attempts(%L,%L,false)',
+  :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'GENERATION_DISABLED');
+reset role;
+update public.generations set cancel_requested = true where id = :'generation_id'::uuid;
+set local role service_role;
+select test.expect_error(format('select public.begin_parallel_image_attempts(%L,%L,true)',
+  :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'GENERATION_CANCELLED');
+reset role;
+update public.generations set cancel_requested = false,
+  deadline_at = pg_catalog.clock_timestamp() - interval '1 second'
+where id = :'generation_id'::uuid;
+set local role service_role;
+select test.expect_error(format('select public.begin_parallel_image_attempts(%L,%L,true)',
+  :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'CLAIM_EXPIRED');
+reset role;
+update public.generations set deadline_at = pg_catalog.clock_timestamp() + interval '15 minutes'
+where id = :'generation_id'::uuid;
+set local role service_role;
+select test.assert(not exists (select 1 from private.provider_attempts
+  where generation_id = :'generation_id'::uuid and stage = 'images' and call_index between 2 and 4),
+  '入力flag・削除要求・期限切れはbatch attemptを記録しない');
+reset role;
+update private.generation_policy set enabled = false where id = 1;
+set local role service_role;
+select test.expect_error(format('select public.begin_parallel_image_attempts(%L,%L,true)',
+  :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'GENERATION_DISABLED');
+select test.assert(not exists (select 1 from private.provider_attempts
+  where generation_id = :'generation_id'::uuid and stage = 'images' and call_index between 2 and 4),
+  'DB停止中の並列attempt予約は追加行を作らない');
+reset role;
+update private.generation_policy set enabled = true where id = 1;
+set local role service_role;
+select public.begin_parallel_image_attempts(:'generation_id'::uuid, :'claim_token'::uuid, true)
+  as parallel_image_attempts \gset
+select test.assert(pg_catalog.jsonb_array_length(:'parallel_image_attempts'::jsonb) = 3
+  and array(select (item ->> 'call_index')::integer
+    from pg_catalog.jsonb_array_elements(:'parallel_image_attempts'::jsonb) item
+    order by (item ->> 'call_index')::integer) = array[2, 3, 4]
+  and (select count(*) = 3 and bool_and(state = 'dispatched')
+    from private.provider_attempts where generation_id = :'generation_id'::uuid
+      and stage = 'images' and call_index between 2 and 4),
+  'image 1成功後に2〜4を単一RPCでdispatchedとして予約する');
+select test.expect_error(format('select public.begin_provider_attempt(%L,%L,%L,2,true)',
+  :'generation_id'::uuid, :'claim_token'::uuid, 'images'), 'P0001', 'ATTEMPT_UNRESOLVED');
 select test.expect_error(format('select public.mark_generation_saving(%L,%L)',
   :'generation_id'::uuid, :'claim_token'::uuid), 'P0001', 'ATTEMPT_STAGE_INCOMPLETE');
-select (public.begin_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
-  'images', 2, true) ->> 'attempt_id') as image_attempt_2 \gset
+select (:'parallel_image_attempts'::jsonb -> 0 ->> 'attempt_id') as image_attempt_2 \gset
+select (:'parallel_image_attempts'::jsonb -> 1 ->> 'attempt_id') as image_attempt_3 \gset
+select (:'parallel_image_attempts'::jsonb -> 2 ->> 'attempt_id') as image_attempt_4 \gset
 select public.finish_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   :'image_attempt_2'::uuid, 'succeeded', 'fictional-image-request-2');
-select (public.begin_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
-  'images', 3, true) ->> 'attempt_id') as image_attempt_3 \gset
 select public.finish_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   :'image_attempt_3'::uuid, 'succeeded', 'fictional-image-request-3');
-select (public.begin_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
-  'images', 4, true) ->> 'attempt_id') as image_attempt_4 \gset
 select public.finish_provider_attempt(:'generation_id'::uuid, :'claim_token'::uuid,
   :'image_attempt_4'::uuid, 'succeeded', 'fictional-image-request-4');
 select public.mark_generation_saving(:'generation_id'::uuid, :'claim_token'::uuid) as saving \gset

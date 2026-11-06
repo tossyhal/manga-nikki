@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Entry } from '../../../shared/schemas';
-import { getEntries } from '../../lib/api';
-import { getLiveAccessToken } from '../../lib/auth';
+import { ApiClientError, getEntries } from '../../lib/api';
 import type { ClientConfig } from '../../lib/config';
 import { useOnlineStatus } from '../../lib/useOnlineStatus';
 
@@ -10,6 +9,15 @@ type HomeRecords =
   | { status: 'sample' }
   | { status: 'ready'; entries: Entry[] }
   | { status: 'error'; message: string };
+
+function isMissingLocalSession(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    error.status === 401 &&
+    error.code === 'AUTH_REQUIRED' &&
+    error.requestId === null
+  );
+}
 
 export function useHomeRecords(
   config: ClientConfig | null,
@@ -40,16 +48,6 @@ export function useHomeRecords(
     let active = true;
     async function loadEntries() {
       try {
-        if (currentConfig.dataMode === 'live' && !(await getLiveAccessToken())) {
-          if (active)
-            setLoaded({
-              config: currentConfig,
-              configError,
-              retryKey,
-              records: { status: 'sample' },
-            });
-          return;
-        }
         const result = await getEntries({ limit: 20 });
         if (active)
           setLoaded({
@@ -64,12 +62,14 @@ export function useHomeRecords(
             config: currentConfig,
             configError,
             retryKey,
-            records: !navigator.onLine
-              ? { status: 'sample' }
-              : {
-                  status: 'error',
-                  message: failure instanceof Error ? failure.message : '通信を確認してください。',
-                },
+            records:
+              isMissingLocalSession(failure) || !navigator.onLine
+                ? { status: 'sample' }
+                : {
+                    status: 'error',
+                    message:
+                      failure instanceof Error ? failure.message : '通信を確認してください。',
+                  },
           });
       }
     }

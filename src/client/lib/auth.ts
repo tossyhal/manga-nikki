@@ -16,6 +16,7 @@ const configUnavailableMessage =
 
 let supabaseClientPromise: Promise<SupabaseClient> | null = null;
 let registrationInFlight: Promise<string> | null = null;
+let sessionReadInFlight: Promise<{ accessToken: string } | null> | null = null;
 
 async function getSupabaseClient(): Promise<SupabaseClient> {
   const url = import.meta.env.VITE_SUPABASE_URL?.trim();
@@ -48,7 +49,7 @@ async function assertLiveMode(): Promise<void> {
   }
 }
 
-async function readCurrentSession(): Promise<{ accessToken: string } | null> {
+async function loadCurrentSession(): Promise<{ accessToken: string } | null> {
   await assertLiveMode();
   let result: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>;
   try {
@@ -61,6 +62,17 @@ async function readCurrentSession(): Promise<{ accessToken: string } | null> {
   if (result.error) throw new ClientAuthError(sessionUnavailableMessage);
   const token = result.data.session?.access_token;
   return token ? { accessToken: token } : null;
+}
+
+function readCurrentSession(): Promise<{ accessToken: string } | null> {
+  if (sessionReadInFlight) return sessionReadInFlight;
+
+  const request = loadCurrentSession();
+  const sharedRequest = request.finally(() => {
+    if (sessionReadInFlight === sharedRequest) sessionReadInFlight = null;
+  });
+  sessionReadInFlight = sharedRequest;
+  return sharedRequest;
 }
 
 export async function getLiveAccessToken(): Promise<string | null> {
