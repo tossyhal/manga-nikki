@@ -17,6 +17,45 @@ export const PRODUCTION_CONNECTED_PROFILE: SampleDeploymentProfile<'production'>
   connected: true,
 });
 
+export const PRODUCTION_GENERATION_QUEUE = 'manga-nikki-generations-production';
+
+export function selectProductionConnectedProfile(
+  infrastructureEnabled?: string,
+  generationEnabled?: string,
+): SampleDeploymentProfile<'production'> {
+  if (infrastructureEnabled && !['true', 'false'].includes(infrastructureEnabled)) {
+    throw new ProductionConnectedDeploymentFailure('INPUT_PUBLIC_CONFIGURATION_INVALID');
+  }
+  if (generationEnabled && !['true', 'false'].includes(generationEnabled)) {
+    throw new ProductionConnectedDeploymentFailure('INPUT_PUBLIC_CONFIGURATION_INVALID');
+  }
+  if (generationEnabled === 'true' && infrastructureEnabled !== 'true') {
+    throw new ProductionConnectedDeploymentFailure('INPUT_PUBLIC_CONFIGURATION_INVALID');
+  }
+  if (infrastructureEnabled !== 'true') return PRODUCTION_CONNECTED_PROFILE;
+  return Object.freeze({
+    ...PRODUCTION_CONNECTED_PROFILE,
+    generationEnabled: generationEnabled === 'true',
+    queueName: PRODUCTION_GENERATION_QUEUE,
+    crons: ['* * * * *', '0 15 * * *'],
+    requiredSecretBindings: [
+      'SUPABASE_SECRET_KEY',
+      'TURNSTILE_SECRET_KEY',
+      'OPENAI_API_KEY',
+      'GENERATION_ALLOWED_OWNER_ID',
+    ],
+  });
+}
+
+export function productionGenerationQueueConfiguration(queue: string) {
+  return {
+    producers: [{ binding: 'GENERATION_QUEUE', queue }],
+    consumers: [
+      { queue, max_batch_size: 1, max_batch_timeout: 0, max_retries: 3, max_concurrency: 2 },
+    ],
+  };
+}
+
 export type ProductionReleasePublicValues = Readonly<{
   VITE_SUPABASE_URL?: string;
   VITE_SUPABASE_PUBLISHABLE_KEY?: string;
@@ -26,6 +65,8 @@ export type ProductionReleasePublicValues = Readonly<{
 export type ProductionWorkerSecrets = Readonly<{
   SUPABASE_SECRET_KEY: string;
   TURNSTILE_SECRET_KEY: string;
+  OPENAI_API_KEY?: string;
+  GENERATION_ALLOWED_OWNER_ID?: string;
 }>;
 
 export const PRODUCTION_PUBLIC_ENV_FILE = '.env.production.local';
@@ -173,6 +214,7 @@ function isLegacyServiceRoleJwt(value: string): boolean {
 
 export function validateProductionWorkerSecrets(
   values: Partial<ProductionWorkerSecrets>,
+  profile = PRODUCTION_CONNECTED_PROFILE,
 ): ProductionWorkerSecrets {
   const supabaseSecretKey = assertSingleLineSecret(values.SUPABASE_SECRET_KEY);
   if (
@@ -189,7 +231,29 @@ export function validateProductionWorkerSecrets(
     throw new ProductionConnectedDeploymentFailure('INPUT_PRIVATE_SECRET_INVALID');
   }
 
+  const openaiRequired = profile.requiredSecretBindings?.includes('OPENAI_API_KEY');
+  let openaiKey: string | undefined;
+  let allowedOwner: string | undefined;
+  if (openaiRequired) {
+    allowedOwner = assertSingleLineSecret(values.GENERATION_ALLOWED_OWNER_ID);
+    if (
+      allowedOwner !== 'all' &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(allowedOwner)
+    ) {
+      throw new ProductionConnectedDeploymentFailure('INPUT_PRIVATE_SECRET_INVALID');
+    }
+    openaiKey = assertSingleLineSecret(values.OPENAI_API_KEY);
+    if (!/^sk-[A-Za-z0-9_-]+$/.test(openaiKey)) {
+      throw new ProductionConnectedDeploymentFailure('INPUT_PRIVATE_SECRET_INVALID');
+    }
+  } else if (
+    values.OPENAI_API_KEY !== undefined ||
+    values.GENERATION_ALLOWED_OWNER_ID !== undefined
+  ) {
+    throw new ProductionConnectedDeploymentFailure('INPUT_PRIVATE_SECRET_INVALID');
+  }
   return {
+    ...(openaiKey ? { OPENAI_API_KEY: openaiKey, GENERATION_ALLOWED_OWNER_ID: allowedOwner } : {}),
     SUPABASE_SECRET_KEY: supabaseSecretKey,
     TURNSTILE_SECRET_KEY: turnstileSecretKey,
   };

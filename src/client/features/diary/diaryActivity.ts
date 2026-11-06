@@ -3,4 +3,8 @@ export type DiaryActivity = {
   busy: boolean;
   failed: boolean;
   entrySaveStarted?: boolean;
+  generationNavigation?: {
+    stage: 'saving' | 'unrequested' | 'requesting' | 'accepted';
+    entryId: string | null;
+  };
 };

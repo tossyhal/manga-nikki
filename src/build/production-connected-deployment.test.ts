@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  selectProductionConnectedProfile,
+  productionGenerationQueueConfiguration,
   ProductionConnectedDeploymentFailure,
   PRODUCTION_PUBLIC_ENV_FILE,
   validateProductionReleasePublicValues,
@@ -274,41 +276,52 @@ describe('production connected release artifact', () => {
 });
 
 describe('production connected Wrangler deploy', () => {
-  it('passes one atomic secrets-file deploy with only the Cloudflare credential in child env and cleans up', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'manga-nikki-production-secret-test-'));
-    temporaryDirectories.push(root);
-    const observed: {
-      args?: string[];
-      options?: WranglerExecutionOptions;
-      fileContents?: string;
-      mode?: number;
-    } = {};
-    await runWranglerProductionConnectedDeploy(
-      '/tmp/wrangler.json',
-      'cf-token-sentinel',
-      privateValues,
-      {
-        temporaryRoot: root,
-        async executor(_file, args, options) {
-          observed.args = args;
-          observed.options = options;
-          const secretsFile = args[args.indexOf('--secrets-file') + 1]!;
-          observed.fileContents = await readFile(secretsFile, 'utf8');
-          observed.mode = (await stat(secretsFile)).mode & 0o777;
-          return { stdout: 'do-not-print', stderr: 'private-output' };
+  it.each([false, true])(
+    'passes one atomic secrets-file deploy and cleans up (generation profile=%s)',
+    async (infra) => {
+      const profile = selectProductionConnectedProfile(infra ? 'true' : 'false');
+      const secrets = {
+        ...privateValues,
+        ...(infra
+          ? { OPENAI_API_KEY: 'sk-project-private-sentinel', GENERATION_ALLOWED_OWNER_ID: 'all' }
+          : {}),
+      };
+      const root = await mkdtemp(path.join(os.tmpdir(), 'manga-nikki-production-secret-test-'));
+      temporaryDirectories.push(root);
+      const observed: {
+        args?: string[];
+        options?: WranglerExecutionOptions;
+        fileContents?: string;
+        mode?: number;
+      } = {};
+      await runWranglerProductionConnectedDeploy(
+        '/tmp/wrangler.json',
+        'cf-token-sentinel',
+        secrets,
+        {
+          temporaryRoot: root,
+          async executor(_file, args, options) {
+            observed.args = args;
+            observed.options = options;
+            const secretsFile = args[args.indexOf('--secrets-file') + 1]!;
+            observed.fileContents = await readFile(secretsFile, 'utf8');
+            observed.mode = (await stat(secretsFile)).mode & 0o777;
+            return { stdout: 'do-not-print', stderr: 'private-output' };
+          },
         },
-      },
-    );
-    expect(observed.args).toContain('--secrets-file');
-    expect(observed.mode).toBe(0o600);
-    expect(JSON.parse(observed.fileContents!)).toEqual(privateValues);
-    expect(observed.options?.env.CLOUDFLARE_API_TOKEN).toBe('cf-token-sentinel');
-    expect(observed.options?.env.SUPABASE_SECRET_KEY).toBeUndefined();
-    expect(observed.options?.env.TURNSTILE_SECRET_KEY).toBeUndefined();
-    expect(observed.options?.env.OPENAI_API_KEY).toBeUndefined();
-    expect(observed.options?.env.BWS_ACCESS_TOKEN).toBeUndefined();
-    expect(await (await import('node:fs/promises')).readdir(root)).toEqual([]);
-  });
+        profile,
+      );
+      expect(observed.args).toContain('--secrets-file');
+      expect(observed.mode).toBe(0o600);
+      expect(JSON.parse(observed.fileContents!)).toEqual(secrets);
+      expect(observed.options?.env.CLOUDFLARE_API_TOKEN).toBe('cf-token-sentinel');
+      expect(observed.options?.env.SUPABASE_SECRET_KEY).toBeUndefined();
+      expect(observed.options?.env.TURNSTILE_SECRET_KEY).toBeUndefined();
+      expect(observed.options?.env.OPENAI_API_KEY).toBeUndefined();
+      expect(observed.options?.env.BWS_ACCESS_TOKEN).toBeUndefined();
+      expect(await (await import('node:fs/promises')).readdir(root)).toEqual([]);
+    },
+  );
 
   it('cleans the private secrets file after a failed deploy and suppresses child error text', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'manga-nikki-production-secret-failure-'));
@@ -328,4 +341,108 @@ describe('production connected Wrangler deploy', () => {
     ).rejects.toMatchObject({ code: 'WRANGLER_DEPLOY_FAILED' });
     expect(await (await import('node:fs/promises')).readdir(root)).toEqual([]);
   });
+});
+
+describe('production generation deployment profile', () => {
+  it('keeps diary-only defaults and rejects implicit or invalid activation', () => {
+    expect(selectProductionConnectedProfile().queueName).toBeUndefined();
+    expect(selectProductionConnectedProfile('false', 'false').generationEnabled).toBeUndefined();
+    expect(() => selectProductionConnectedProfile(undefined, 'true')).toThrow();
+    expect(() => selectProductionConnectedProfile('yes')).toThrow();
+    expect(() => selectProductionConnectedProfile('true', 'yes')).toThrow();
+  });
+
+  it('requires the OpenAI secret only with infrastructure enabled', () => {
+    const profile = selectProductionConnectedProfile('true', 'false');
+    expect(profile.generationEnabled).toBe(false);
+    expect(() => validateProductionWorkerSecrets(privateValues, profile)).toThrow();
+    expect(() =>
+      validateProductionWorkerSecrets({
+        ...privateValues,
+        OPENAI_API_KEY: 'sk-project-sentinel',
+        GENERATION_ALLOWED_OWNER_ID: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).toThrow();
+    expect(
+      validateProductionWorkerSecrets(
+        {
+          ...privateValues,
+          OPENAI_API_KEY: 'sk-project-sentinel',
+          GENERATION_ALLOWED_OWNER_ID: '11111111-1111-4111-8111-111111111111',
+        },
+        profile,
+      ),
+    ).toMatchObject({
+      OPENAI_API_KEY: 'sk-project-sentinel',
+      GENERATION_ALLOWED_OWNER_ID: '11111111-1111-4111-8111-111111111111',
+    });
+  });
+
+  it.each([undefined, '', 'owner-name', ' all', 'ALL', '11111111-1111-4111-8111-111111111111\n'])(
+    'rejects invalid private owner gate without exposing it (%s)',
+    (owner) => {
+      expect(() =>
+        validateProductionWorkerSecrets(
+          {
+            ...privateValues,
+            OPENAI_API_KEY: 'sk-project-sentinel',
+            GENERATION_ALLOWED_OWNER_ID: owner,
+          },
+          selectProductionConnectedProfile('true'),
+        ),
+      ).toThrow('INPUT_PRIVATE_SECRET_INVALID');
+    },
+  );
+
+  it.each(['false', 'true'])(
+    'accepts only the dedicated queue and exact profile artifact with generation=%s',
+    async (enabled) => {
+      const profile = selectProductionConnectedProfile('true', enabled);
+      const queues = productionGenerationQueueConfiguration(profile.queueName!);
+      const root = await createArtifact({
+        vars: {
+          APP_ENV: 'production',
+          DATA_MODE: 'live',
+          AI_MODE: 'live',
+          GENERATION_ENABLED: enabled,
+          ...workerPublicVars,
+        },
+        triggers: { crons: ['* * * * *', '0 15 * * *'] },
+        queues,
+        secrets: {
+          required: [
+            'SUPABASE_SECRET_KEY',
+            'TURNSTILE_SECRET_KEY',
+            'OPENAI_API_KEY',
+            'GENERATION_ALLOWED_OWNER_ID',
+          ],
+        },
+      });
+      await expect(
+        prepareProductionConnectedReleaseArtifact(
+          commit,
+          workerPublicVars,
+          publicValues,
+          root,
+          profile,
+        ),
+      ).resolves.toHaveProperty('configPath');
+      await expect(
+        prepareProductionConnectedReleaseArtifact(commit, workerPublicVars, publicValues, root),
+      ).rejects.toMatchObject({ code: 'ARTIFACT_CONFIG_UNSAFE' });
+      const configPath = path.join(root, 'dist/server/wrangler.json');
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      config.queues.consumers[0].queue = 'other-queue';
+      await writeFile(configPath, JSON.stringify(config));
+      await expect(
+        prepareProductionConnectedReleaseArtifact(
+          commit,
+          workerPublicVars,
+          publicValues,
+          root,
+          profile,
+        ),
+      ).rejects.toMatchObject({ code: 'ARTIFACT_CONFIG_UNSAFE' });
+    },
+  );
 });

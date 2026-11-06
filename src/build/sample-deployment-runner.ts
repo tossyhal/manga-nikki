@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+import { productionGenerationQueueConfiguration } from './production-connected-deployment.ts';
 import { execFile } from 'node:child_process';
 import { lstat, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -195,7 +197,11 @@ function assertNoBindings(
   for (const key of emptyOptionalBindingKeys) assertAbsentOrEmpty(config[key]);
 
   const queues = config.queues;
-  if (queues !== undefined) {
+  if (profile.queueName) {
+    if (!isDeepStrictEqual(queues, productionGenerationQueueConfiguration(profile.queueName))) {
+      fail('ARTIFACT_CONFIG_UNSAFE');
+    }
+  } else if (queues !== undefined) {
     if (!isRecord(queues)) fail('ARTIFACT_CONFIG_UNSAFE');
     assertEmptyArray(queues.producers);
     assertEmptyArray(queues.consumers);
@@ -268,7 +274,7 @@ function assertExpectedConfiguration(
     APP_ENV: profile.appEnvironment,
     DATA_MODE: profile.dataMode ?? 'sample',
     AI_MODE: profile.aiMode ?? 'mock',
-    GENERATION_ENABLED: 'false',
+    GENERATION_ENABLED: String(profile.generationEnabled ?? false),
     ...workerPublicVars,
   };
   if (

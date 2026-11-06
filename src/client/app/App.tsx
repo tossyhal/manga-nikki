@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Outlet, useBlocker, useLocation, type BlockerFunction } from 'react-router';
+import { Link, Outlet, useBlocker, useLocation, type BlockerFunction } from 'react-router';
 import type { DiaryActivity } from '../features/diary/diaryActivity';
 import { getClientConfig, type ClientConfig } from '../lib/config';
 import type { AppContext } from './AppContext';
@@ -27,11 +27,9 @@ export function App() {
     busy: false,
     failed: false,
   });
+  const [generationNotice, setGenerationNotice] =
+    useState<DiaryActivity['generationNavigation']>(undefined);
   const diaryActivityRef = useRef(diaryActivity);
-  const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
-    diaryActivityRef.current = activity;
-    setDiaryActivity(activity);
-  }, []);
   const retryConfig = useCallback(() => {
     setConfig(null);
     setConfigError(false);
@@ -54,6 +52,18 @@ export function App() {
   );
   const blockerStateRef = useRef(blocker.state);
   const leaveConfirmedRef = useRef(false);
+  const reportDiaryActivity = useCallback((activity: DiaryActivity) => {
+    diaryActivityRef.current = activity;
+    setDiaryActivity(activity);
+    if (
+      !activity.dirty &&
+      !activity.busy &&
+      !activity.failed &&
+      activity.generationNavigation &&
+      blockerStateRef.current !== 'unblocked'
+    )
+      setGenerationNotice(activity.generationNavigation);
+  }, []);
   const hasBlockedNavigation = useCallback(() => blockerStateRef.current !== 'unblocked', []);
   const hasConfirmedExit = useCallback(() => leaveConfirmedRef.current, []);
   useEffect(() => {
@@ -86,6 +96,12 @@ export function App() {
     if (diaryActivity.dirty || diaryActivity.busy) return;
     blocker.proceed();
   }, [blocker, diaryActivity.busy, diaryActivity.dirty, diaryActivity.failed]);
+  if (
+    generationNotice?.entryId &&
+    blocker.state === 'unblocked' &&
+    location.pathname === `/entries/${generationNotice.entryId}`
+  )
+    setGenerationNotice(undefined);
   useLayoutEffect(() => {
     if (!diaryActivity.dirty && !diaryActivity.busy) return;
     const preventUnloading = (event: BeforeUnloadEvent) => {
@@ -113,6 +129,35 @@ export function App() {
         本文へ移動
       </a>
       <div className="app-notices">
+        {generationNotice && (
+          <output className="pwa-notice" aria-live="polite">
+            <p>
+              {generationNotice.stage === 'accepted'
+                ? '日記を保存し、漫画を受け付けました。生成状況は保存した記録で確認できます。'
+                : generationNotice.stage === 'unrequested'
+                  ? '日記を保存しました。漫画はまだ受け付けていません。保存した記録から受付を続けられます。'
+                  : generationNotice.stage === 'requesting'
+                    ? '漫画の受付結果が未確定です。保存した記録で最新の状態を確認してください。'
+                    : '日記の保存結果が未確定です。漫画はまだ受け付けていません。記録で保存結果を確認してください。'}
+            </p>
+            <div className="pwa-notice-actions">
+              <Link
+                className="button button-secondary"
+                to={generationNotice.entryId ? `/entries/${generationNotice.entryId}` : '/library'}
+                state={generationNotice.stage === 'unrequested' ? { startGeneration: true } : null}
+              >
+                {generationNotice.stage === 'unrequested' ? '漫画の受付を続ける' : '記録で確認する'}
+              </Link>
+              <button
+                className="button-text"
+                type="button"
+                onClick={() => setGenerationNotice(undefined)}
+              >
+                閉じる
+              </button>
+            </div>
+          </output>
+        )}
         <PwaNotice
           diaryDirty={diaryActivity.dirty}
           diaryBusy={diaryActivity.busy}
@@ -147,6 +192,12 @@ export function App() {
             blocker.state === 'blocked' &&
             !(diaryActivityRef.current.failed && !diaryActivityRef.current.dirty)
           ) {
+            if (
+              diaryActivityRef.current.generationNavigation &&
+              (diaryActivityRef.current.generationNavigation.stage !== 'saving' ||
+                diaryActivityRef.current.entrySaveStarted)
+            )
+              setGenerationNotice(diaryActivityRef.current.generationNavigation);
             if (!blockedBusy) leaveConfirmedRef.current = true;
             blocker.proceed();
           }

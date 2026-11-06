@@ -2,6 +2,7 @@ import { generationRowSchema, parseGenerationRow } from './generation-row';
 import { z } from 'zod';
 import { comicSchema, type Entry, type Generation } from '../shared/schemas';
 import type { Environment } from './mode';
+import { generationOwnerAllowed } from './generation-owner';
 import {
   createServerAssetMetadataClient,
   createServerRpcClient,
@@ -313,6 +314,7 @@ export async function reserveLiveOpenAIGeneration(
   if (existing) return existing;
 
   if (
+    !generationOwnerAllowed(context.environment, context.owner) ||
     !openAIGenerationIngressConfigured(context.environment, saveHandlerReady, recoveryHandlerReady)
   )
     throw new LiveGenerationError(503, 'GENERATION_DISABLED');
@@ -370,6 +372,7 @@ export async function getLiveGenerationQuota(
     resetAt: new Date(parsed.data.reset_at).toISOString(),
     generationAvailable:
       capableEnvironment &&
+      (expectedProfileIsMock || generationOwnerAllowed(context.environment, context.owner)) &&
       parsed.data.generation_available &&
       parsed.data.profile_is_mock === expectedProfileIsMock,
   };

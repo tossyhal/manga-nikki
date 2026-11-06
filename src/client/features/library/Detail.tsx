@@ -131,6 +131,8 @@ function DetailContent({
   const [generationCaptchaRetry, setGenerationCaptchaRetry] = useState(false);
   const [generationCaptchaAttempt, setGenerationCaptchaAttempt] = useState(0);
   const [generationRequestSending, setGenerationRequestSending] = useState(false);
+  const [generationNavigation, setGenerationNavigation] =
+    useState<DiaryActivity['generationNavigation']>(undefined);
   const [receiptUncertain, setReceiptUncertain] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [journalExpanded, setJournalExpanded] = useState(false);
@@ -219,6 +221,7 @@ function DetailContent({
     setOperationFailed: setForegroundActionFailed,
     readLatestEntry,
     onBeginEdit: () => {
+      setGenerationNavigation(undefined);
       setDraftSavedEntryId(null);
       autoGenerationRequestedRef.current = false;
       if (generationFlowRef.current) {
@@ -259,8 +262,14 @@ function DetailContent({
 
   useLayoutEffect(() => {
     if (activeRef.current)
-      onActivityChange({ dirty: draftDirty, busy, failed: foregroundActionFailed });
-  }, [busy, draftDirty, foregroundActionFailed, onActivityChange]);
+      onActivityChange({
+        dirty: draftDirty,
+        busy,
+        failed: foregroundActionFailed,
+        generationNavigation:
+          generationNavigation?.entryId === id ? generationNavigation : undefined,
+      });
+  }, [busy, draftDirty, foregroundActionFailed, generationNavigation, id, onActivityChange]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => void refreshQuota(), 0);
@@ -482,6 +491,7 @@ function DetailContent({
 
   async function receiveGenerationReceipt(receipt: Awaited<ReturnType<typeof generate>>) {
     if (!activeRef.current) return;
+    setGenerationNavigation({ stage: 'accepted', entryId: id ?? null });
     setGenerationCaptchaOpen(false);
     try {
       const latest = await readLatestEntry();
@@ -573,6 +583,7 @@ function DetailContent({
       return;
     }
     generationRequestRef.current = true;
+    setGenerationNavigation({ stage: 'requesting', entryId: entry.id });
     generationFlowRef.current = true;
     actionInFlightRef.current = true;
     setDraftSavedEntryId(null);
@@ -602,6 +613,7 @@ function DetailContent({
 
   async function checkGenerationReceipt() {
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
+    setGenerationNavigation({ stage: 'requesting', entryId: entry.id });
     actionInFlightRef.current = true;
     setBusy(true);
     setForegroundActionFailed(false);
@@ -624,6 +636,7 @@ function DetailContent({
 
   async function refreshGenerationStatus() {
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
+    setGenerationNavigation(undefined);
     actionInFlightRef.current = true;
     setBusy(true);
     setForegroundActionFailed(false);
@@ -660,6 +673,7 @@ function DetailContent({
 
   async function removeEntry() {
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
+    setGenerationNavigation(undefined);
     actionInFlightRef.current = true;
     setBusy(true);
     setForegroundActionFailed(false);
