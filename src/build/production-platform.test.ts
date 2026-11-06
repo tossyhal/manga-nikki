@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   gateProductionPlatform,
   PRODUCTION_PLATFORM,
@@ -49,12 +49,14 @@ function fetcher(queues: unknown[] = [{ queue_name: PRODUCTION_PLATFORM.queueNam
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(console, 'log').mockImplementation(() => {});
   mocks.getBucket.mockResolvedValue({ data: bucket, error: null });
   mocks.createBucket.mockResolvedValue({ data: { name: 'comics' }, error: null });
   mocks.createClient.mockReturnValue({
     storage: { getBucket: mocks.getBucket, createBucket: mocks.createBucket },
   });
 });
+afterEach(() => vi.restoreAllMocks());
 describe('owner/main gate', () => {
   it('最新mainを検証する', async () => {
     await expect(
@@ -110,6 +112,57 @@ describe('固定resource', () => {
       bucket: 'private-present',
     });
     expect(mocks.getBucket).toHaveBeenCalled();
+  });
+  it('Queue成功後のSchedule権限不足を区別しbucketへ進まない', async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok([{ queue_name: PRODUCTION_PLATFORM.queueName }]))
+      .mockResolvedValueOnce(new Response('private-response-body', { status: 403 }));
+    await expect(runProductionPlatform(input, request)).rejects.toThrow(
+      'WORKER_SCHEDULE_PERMISSION_REQUIRED',
+    );
+    expect(console.log).toHaveBeenNthCalledWith(1, 'production-platform-api: QUEUE_GET 200');
+    expect(console.log).toHaveBeenNthCalledWith(
+      2,
+      'production-platform-api: WORKER_SCHEDULES_GET 403',
+    );
+    expect(console.log).toHaveBeenCalledTimes(2);
+    expect(mocks.getBucket).not.toHaveBeenCalled();
+  });
+  it('Queue権限不足とbucket検査到達を固定stageだけで記録する', async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('private-response-body', { status: 403 }))
+      .mockResolvedValueOnce(ok({ schedules: [{ cron: '0 15 * * *' }] }));
+    await expect(runProductionPlatform(input, request)).resolves.toMatchObject({
+      queue: 'permission-required',
+    });
+    expect(console.log).toHaveBeenNthCalledWith(1, 'production-platform-api: QUEUE_GET 403');
+    expect(console.log).toHaveBeenNthCalledWith(
+      2,
+      'production-platform-api: WORKER_SCHEDULES_GET 200',
+    );
+    expect(console.log).toHaveBeenNthCalledWith(
+      3,
+      'production-platform-api: STORAGE_BUCKET_CHECK REACHED',
+    );
+    expect(console.log).toHaveBeenCalledTimes(3);
+    const output = JSON.stringify(vi.mocked(console.log).mock.calls);
+    for (const value of [
+      'private-response-body',
+      input.cloudflareToken,
+      input.supabaseSecretKey,
+      'https://',
+    ])
+      expect(output).not.toContain(value);
+  });
+  it('通信失敗にもraw errorを含めずstageを記録する', async () => {
+    await expect(
+      runProductionPlatform(input, vi.fn().mockRejectedValue(new Error('private-secret'))),
+    ).rejects.toThrow('PLATFORM_REQUEST_FAILED');
+    expect(console.log).toHaveBeenCalledExactlyOnceWith(
+      'production-platform-api: QUEUE_GET NO_RESPONSE',
+    );
   });
   it('checkで不足Queueを自動作成しない', async () => {
     await expect(runProductionPlatform(input, fetcher([]))).resolves.toMatchObject({
