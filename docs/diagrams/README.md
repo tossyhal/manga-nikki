@@ -7,12 +7,16 @@
 利用者のスマートフォンから、Cloudflare Workerでの受付、Queueを介した非同期生成、OpenAIの呼び出し、Supabaseへの保存までを1枚に示します。
 
 - 青い実線：日記から漫画を生成する主経路
-- 灰色の実線：認証、読み取り、署名URL、定期処理
-- 灰色の破線：デプロイ時の関係
+- 灰色の実線：画面取得、認証、読み取り、署名URL、定期処理
+- 灰色の破線：デプロイと手動実行のmigration
 
 ## 図の読み方
 
-画面配信、Hono API、Queue Consumer、Cronは1つのWorkerで動きます。図では役割ごとにノードを分け、`Worker`の枠で同一デプロイであることを示しています。画面の静的ファイルはWorkerのassetsから配信し、`/api/*`だけをHonoへ渡します。
+図はQueueとOpenAIの実生成を有効にした構成を示します。Hono API、Queue Consumer、Scheduled Handlerは1つのWorkerのハンドラーです。Cron Triggersは外側からScheduled Handlerを起動します。
+
+画面の静的ファイルはStatic Assetsが配信し、`/api/*`だけをHonoへ渡します。Static AssetsはWorkerと同じデプロイに含まれますが、Honoを経由しないため`Worker`の枠の外に描いています。
+
+OpenAIはConsumerから呼び出し、脚本と4コマ分の画像を別々に生成して結果を受け取ります。DB migrationはGitHub Actionsの手動実行で、デプロイのたびには適用されません。
 
 ブラウザからSupabaseへ直接通信するのは、匿名サインインと署名URLでの画像取得です。日記の読み書きや生成枠の予約はHono APIを経由し、読み取りは利用者JWTとRLS、書き込みはサーバー専用RPCを使います。
 
@@ -23,7 +27,7 @@
 - CronからStorageへの期限削除の通信
 - Workerの動作モードと、生成を有効にする条件
 - stagingなど環境ごとの差分
-- Bitwarden以外の秘密情報の配置
+- 秘密情報の管理
 
 環境別の構成は[ARCHITECTURE](../ARCHITECTURE.md)、[PRODUCTION_DEPLOYMENT](https://github.com/tossyhal/manga-nikki/blob/develop/docs/PRODUCTION_DEPLOYMENT.md)を参照してください。
 
@@ -45,14 +49,14 @@ uv run --no-project --with playwright==1.64.1 python \
 
 ## 構成の参照元
 
-参照コミットは`origin/develop`の`5929b65`です。主な照合先は`wrangler.jsonc`、`src/server/index.ts`、`src/server/live-generations.ts`、`src/server/generation-queue.ts`、`src/server/scheduled-handler.ts`、`src/client/lib/auth.ts`、`src/build/production-connected-deployment.ts`、`.github/workflows/ci.yml`、`.github/workflows/database-migrate.yml`です。
+参照コミットは`origin/develop`の`5929b65`です。主な照合先は`wrangler.jsonc`、`src/server/index.ts`、`src/server/live-generations.ts`、`src/server/generation-queue.ts`、`src/server/scheduled-handler.ts`、`src/client/lib/auth.ts`、`src/build/production-connected-deployment.ts`、`.github/workflows/ci.yml`、`.github/workflows/database-migrate.yml`、`docs/PRODUCTION_DEPLOYMENT.md`です。
 
 ## 出典とライセンス
 
 - テンプレートと描画：[caru-ini/stack-diagram](https://github.com/caru-ini/stack-diagram/tree/1ed53e3e9525364ae5d82e0430f2bb3f7ef4c838/skills/stack-diagram)、[MITライセンス](licenses/stack-diagram.txt)
-- React、Hono、Cloudflare、Supabase、PostgreSQL、OpenAI、Bitwardenのロゴ：[svgl](https://svgl.app/)
+- React、Hono、Cloudflare、Supabase、PostgreSQL、OpenAIのロゴ：[svgl](https://svgl.app/)
 - GitHub Actionsのロゴ：[gilbarbara/logos](https://github.com/gilbarbara/logos)
-- 利用者、Cron、Consumerの図記号：[Lucide](https://lucide.dev/)、[ISCライセンス](licenses/lucide.txt)
+- 利用者、Scheduled Handler、Consumerの図記号：[Lucide](https://lucide.dev/)、[ISCライセンス](licenses/lucide.txt)
 - 埋め込みフォント：[GeistのOFL](licenses/OFL-Geist.txt)、[JetBrains MonoのOFL](licenses/OFL-JetBrainsMono.txt)
 
 各ロゴの権利は各所有者に帰属します。
