@@ -6,6 +6,7 @@ import {
   readTrialPolicyStatus,
   assertTrialPolicyChangeAllowed,
   writeTrialPolicy,
+  renderTrialPolicyStatus,
 } from '../src/build/production-trial-policy.ts';
 
 async function summary(content: string): Promise<void> {
@@ -20,6 +21,7 @@ try {
   if (args[0] !== '--gate-only') {
     const password = process.env.SUPABASE_DB_PASSWORD ?? '';
     let status = await readTrialPolicyStatus(password);
+    console.log(`production-trial-policy: PRECHECK ${renderTrialPolicyStatus(status)}`);
     await summary(
       [
         '## 初回漫画生成試験policy',
@@ -46,6 +48,7 @@ try {
       );
       write = 'transaction-committed';
       status = await readTrialPolicyStatus(password);
+      console.log(`production-trial-policy: POSTCHECK ${renderTrialPolicyStatus(status)}`);
       if (
         operation === 'stop'
           ? status.enabled
@@ -72,6 +75,10 @@ try {
       ? error.code
       : 'INTERNAL_ERROR';
   console.error(`production-trial-policy: ${code}`);
+  if (error instanceof TrialPolicyFailure && error.writeCause) {
+    console.error(`production-trial-policy: WRITE_FAILURE_CAUSE=${error.writeCause}`);
+    await summary(`- Write failure cause: \`${error.writeCause}\`\n`).catch(() => undefined);
+  }
   await summary(`- Result code: \`${code}\`\n`).catch(() => undefined);
   process.exitCode = 1;
 }

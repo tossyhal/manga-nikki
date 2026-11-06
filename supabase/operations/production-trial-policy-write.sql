@@ -1,4 +1,5 @@
-BEGIN;
+BEGIN READ WRITE;
+-- TRIAL_POLICY_SETTINGS
 SET LOCAL statement_timeout='15s';
 SET LOCAL lock_timeout='5s';
 SET LOCAL search_path=pg_catalog;
