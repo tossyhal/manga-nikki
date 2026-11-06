@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { generationFixtures, panelsComic } from '../src/shared/fixtures';
+import { generationFixtures, pageComic, panelsComic } from '../src/shared/fixtures';
 import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
 import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
@@ -567,6 +567,7 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     latestGenerationId: panelGeneration.id,
     latestGeneration: panelGeneration,
   };
+  let displayedEntry = panelEntry;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/me/quota', (route) =>
     route.fulfill({
@@ -578,32 +579,120 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
       },
     }),
   );
-  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: panelEntry }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({ json: displayedEntry }),
+  );
   await page.route('**/api/v1/assets/*/url', (route) =>
     route.fulfill({
       json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00.000Z' },
     }),
   );
 
-  await page.setViewportSize({ width: 1280, height: 900 });
+  const comicViewports = [
+    { width: 1920, height: 900 },
+    { width: 1440, height: 900 },
+    { width: 1280, height: 900 },
+    { width: 960, height: 540 },
+    { width: 768, height: 844 },
+    { width: 390, height: 844 },
+  ];
+  await page.setViewportSize({ width: 1920, height: 900 });
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.detail-page')).toHaveClass(/has-comic/);
   await expect(page.locator('.app-main')).toHaveCSS('padding-bottom', '104px');
-  const detail = await page.locator('.detail-page').boundingBox();
-  const comic = await page.locator('.detail-page > .comic').boundingBox();
-  const comicActions = await page.locator('.detail-page > .comic-actions').boundingBox();
-  expect(detail?.width).toBeGreaterThanOrEqual(1000);
-  expect((comic?.x ?? 0) + (comic?.width ?? 0)).toBeLessThan(comicActions?.x ?? 0);
   await expect(page.locator('.comic.is-panels .comic-panel-card')).toHaveCount(4);
-  const panelGrid = await page
-    .locator('.comic.is-panels .comic-images')
-    .evaluate(
-      (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
-    );
-  expect(panelGrid).toBe(2);
+  for (const viewport of comicViewports) {
+    await page.setViewportSize(viewport);
+    const panelGrid = await page
+      .locator('.comic.is-panels .comic-images')
+      .evaluate(
+        (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+      );
+    expect(panelGrid).toBe(viewport.width >= 960 ? 2 : 1);
+
+    const cardPositions = await page
+      .locator('.comic.is-panels .comic-panel-card')
+      .evaluateAll((cards) =>
+        cards.map((card) => {
+          const image = card.querySelector('.comic-panel-image-frame');
+          const caption = card.querySelector('.comic-panel-caption');
+          if (!image || !caption) throw new Error('コマの画像または説明がありません');
+          const cardBounds = card.getBoundingClientRect();
+          const imageBounds = image.getBoundingClientRect();
+          const captionBounds = caption.getBoundingClientRect();
+          return {
+            x: cardBounds.x,
+            y: cardBounds.y,
+            right: cardBounds.right,
+            imageRight: imageBounds.right,
+            imageBottom: imageBounds.bottom,
+            captionX: captionBounds.x,
+            captionY: captionBounds.y,
+            captionRight: captionBounds.right,
+          };
+        }),
+      );
+    expect(cardPositions).toHaveLength(4);
+    if (viewport.width >= 960) {
+      const detail = await page.locator('.detail-page').boundingBox();
+      const comic = await page.locator('.detail-page > .comic').boundingBox();
+      const comicActions = await page.locator('.detail-page > .comic-actions').boundingBox();
+      expect(detail?.width).toBeGreaterThanOrEqual(800);
+      expect(comic?.width).toBeCloseTo(detail?.width ?? 0, 0);
+      expect(comicActions?.y ?? 0).toBeGreaterThanOrEqual(
+        (comic?.y ?? 0) + (comic?.height ?? 0) - 1,
+      );
+      expect(cardPositions[1]?.x).toBeGreaterThan(cardPositions[0]?.x ?? 0);
+      expect(cardPositions[2]?.x).toBeLessThan(cardPositions[3]?.x ?? 0);
+      expect(cardPositions[2]?.y).toBeGreaterThan(cardPositions[0]?.y ?? 0);
+      for (const position of cardPositions) {
+        expect(position.captionX).toBeGreaterThan(position.imageRight);
+        expect(position.captionRight).toBeLessThanOrEqual(position.right);
+      }
+    } else {
+      expect(cardPositions[1]?.x).toBeCloseTo(cardPositions[0]?.x ?? 0, 0);
+      expect(cardPositions[1]?.y).toBeGreaterThan(cardPositions[0]?.y ?? 0);
+      for (const position of cardPositions) {
+        expect(position.captionY).toBeGreaterThanOrEqual(position.imageBottom - 1);
+        expect(position.captionRight).toBeLessThanOrEqual(position.right);
+      }
+    }
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+      .toBeLessThanOrEqual(viewport.width);
+  }
+
+  const pageGeneration: Generation = {
+    ...generationFixtures(entryId, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc').succeeded,
+    comic: pageComic,
+  };
+  displayedEntry = {
+    ...detailFixture,
+    latestGenerationId: pageGeneration.id,
+    latestGeneration: pageGeneration,
+  };
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.comic.is-page .comic-panel-card')).toHaveCount(1);
+  const pageImage = page.locator('.comic.is-page .comic-panel-card img');
   await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
-    .toBeLessThanOrEqual(1280);
+    .poll(() =>
+      pageImage.evaluate(
+        (image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
+  const pageImageMetrics = await pageImage.evaluate((image) => {
+    if (!(image instanceof HTMLImageElement)) throw new Error('page形式の画像がありません');
+    const bounds = image.getBoundingClientRect();
+    return {
+      displayedAspectRatio: bounds.width / bounds.height,
+      sourceAspectRatio: image.naturalWidth / image.naturalHeight,
+      width: bounds.width,
+    };
+  });
+  expect(pageImageMetrics.displayedAspectRatio).toBeCloseTo(pageImageMetrics.sourceAspectRatio, 3);
+  expect(pageImageMetrics.width).toBeLessThanOrEqual(760);
 });
 
 test('短いデスクトップ画面の記録ビューは本文領域に収まる', async ({ page }) => {

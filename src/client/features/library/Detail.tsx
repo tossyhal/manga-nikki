@@ -388,6 +388,7 @@ function DetailContent({
     statusView && statusKind && `is-${statusKind}`,
     statusView && displayedGeneration && 'has-saved-comic',
     !editing && displayedGeneration && 'has-comic',
+    !editing && displayedGeneration?.comic.visual.kind === 'panels' && 'has-panel-comic',
     !statusView &&
       (draftSavedConfirmation ||
         (displayedGeneration?.id === generation?.id && generationForCurrentRevision)) &&

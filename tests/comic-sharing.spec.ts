@@ -195,9 +195,58 @@ test('4枚のコマ画像と外付けの文章を1枚のPNGにまとめる', asy
   await page.route(`**/api/v1/shared/${token}`, (route) =>
     route.fulfill({ json: { comic: panelsComic, images } }),
   );
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/shared/${token}`);
   await expect(page.getByRole('heading', { name: panelsComic.title, exact: true })).toBeVisible();
   await expect(page.locator('.comic-panel-card')).toHaveCount(4);
+  const sharedPageBounds = await page.locator('.shared-comic-page').boundingBox();
+  const sharedComicBounds = await page.locator('.shared-comic-page > .comic').boundingBox();
+  const sharedActionsBounds = await page
+    .locator('.shared-comic-page > .comic-actions')
+    .boundingBox();
+  const sharedGridColumns = await page
+    .locator('.shared-comic-page .comic-images')
+    .evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+  expect(sharedComicBounds?.width).toBeGreaterThan(720);
+  expect(sharedGridColumns).toBe(2);
+  expect(sharedComicBounds?.x).toBeGreaterThanOrEqual(sharedPageBounds?.x ?? 0);
+  expect((sharedComicBounds?.x ?? 0) + (sharedComicBounds?.width ?? 0)).toBeLessThanOrEqual(
+    (sharedPageBounds?.x ?? 0) + (sharedPageBounds?.width ?? 0),
+  );
+  expect(sharedActionsBounds?.x).toBeGreaterThanOrEqual(sharedPageBounds?.x ?? 0);
+  expect((sharedActionsBounds?.x ?? 0) + (sharedActionsBounds?.width ?? 0)).toBeLessThanOrEqual(
+    (sharedPageBounds?.x ?? 0) + (sharedPageBounds?.width ?? 0),
+  );
+  const sharedCardPositions = await page
+    .locator('.shared-comic-page .comic-panel-card')
+    .evaluateAll((cards) =>
+      cards.map((card) => {
+        const image = card.querySelector('.comic-panel-image-frame');
+        const caption = card.querySelector('.comic-panel-caption');
+        if (!image || !caption) throw new Error('共有漫画のコマ説明がありません');
+        return {
+          x: card.getBoundingClientRect().x,
+          y: card.getBoundingClientRect().y,
+          right: card.getBoundingClientRect().right,
+          imageRight: image.getBoundingClientRect().right,
+          captionX: caption.getBoundingClientRect().x,
+          captionRight: caption.getBoundingClientRect().right,
+        };
+      }),
+    );
+  expect(sharedCardPositions[1]?.x).toBeGreaterThan(sharedCardPositions[0]?.x ?? 0);
+  expect(sharedCardPositions[2]?.x).toBeLessThan(sharedCardPositions[3]?.x ?? 0);
+  expect(sharedCardPositions[2]?.y).toBeGreaterThan(sharedCardPositions[0]?.y ?? 0);
+  for (const position of sharedCardPositions) {
+    expect(position.captionX).toBeGreaterThan(position.imageRight);
+    expect(position.captionRight).toBeLessThanOrEqual(position.right);
+  }
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1440);
+
   const pending = page.waitForEvent('download');
   await page.getByRole('button', { name: '画像を保存', exact: true }).click();
   const downloaded = await pending;
