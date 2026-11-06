@@ -1,4 +1,4 @@
-import { Link, useOutletContext, type RouteObject } from 'react-router';
+import { Link, useLocation, useOutletContext, type RouteObject } from 'react-router';
 import { App } from './App';
 import type { AppContext } from './AppContext';
 import { AppStateCard, configUnavailableMessage } from './AppStateCard';
@@ -12,12 +12,14 @@ function HomeRoute() {
   return <Home config={config} configError={configError} retryConfig={retryConfig} />;
 }
 function NewEntryRoute() {
+  const location = useLocation();
   const {
     config,
     configError,
     personalDataAvailable,
     onActivityChange,
     hasBlockedNavigation,
+    hasConfirmedExit,
     retryConfig,
   } = useOutletContext<AppContext>();
   if (!config && !configError)
@@ -45,9 +47,11 @@ function NewEntryRoute() {
   if (personalDataAvailable && config)
     return (
       <NewEntry
+        key={`${location.pathname}${location.search}`}
         config={config}
         onActivityChange={onActivityChange}
         hasBlockedNavigation={hasBlockedNavigation}
+        hasConfirmedExit={hasConfirmedExit}
       />
     );
   return (

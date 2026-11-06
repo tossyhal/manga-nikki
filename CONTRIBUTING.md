@@ -135,7 +135,7 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 ### 環境別ビルド
 
-staging / productionのsample buildと隔離demo buildは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+staging sample、production connected、隔離demo buildは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
 
 ```sh
 pnpm build:staging
@@ -143,15 +143,15 @@ pnpm build:production
 pnpm build:demo
 ```
 
-staging / productionは引き続き`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。production targetの固定Worker名は`manga-nikki`で、Cron / Queue bindingはありません。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
+stagingは`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`を維持します。production targetの固定Worker名は`manga-nikki`で、`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`、期限削除Cronだけを使い、Queue bindingはありません。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
 
-staging / productionの公開値は`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして設定します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
+staging / productionのローカルbuildでは`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして公開3値を設定します。CI production connected buildは固定Supabase URLとBWSから得たpublishable key・Turnstile site keyで一時ファイルを作り、build後に削除します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
 
-`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けません。production sample CDは別jobで、main・owner actor・CI成功が揃ったjobで起動します。production Environment variable`PRODUCTION_SAMPLE_CD_ENABLED`が`true`でない場合は成功skipし、既定では無効です。公開承認後の有効化・実行条件・失敗時の確認は[PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md)を参照してください。
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けません。production connected CDは別jobで、main・owner actor・CI成功が揃ったjobで起動します。production Environment variable`PRODUCTION_CONNECTED_CD_ENABLED`が`true`でない場合は成功skipし、現在は`false`です。旧sample flagは参照しません。公開前の確認・実行条件・失敗時の対応は[PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md)を参照してください。
 
 DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
 
-初期設定専用workflowは退役済みです。staging sample CDは架空データだけを公開し、Supabase/Auth/Turnstile・実AIを使いません。production sample CDも同じ架空データだけを配信し、別のowner専用・無効既定のjobとして運用します。
+初期設定専用workflowは退役済みです。staging sample CDは架空データだけを公開し、Supabase/Auth/Turnstile・実AIを使いません。production connected CDはowner専用・無効既定で、日記CRUD/Auth/Turnstileへ接続し、実AI・Queueは使いません。
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 
@@ -227,6 +227,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、private画像保存・署名URL・保存復旧runtimeを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境のStorage API、実AI課金と品質、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AI受付は保存handlerと復旧callbackをdefault Workerへ注入済みですが、staging/productionの`sample` / `mock` / `GENERATION_ENABLED=false`とQueue未設定は維持しています。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、private画像保存・署名URL・保存復旧runtimeを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。production DB migration 10本は適用済み(run `42211812661`)ですが、実Turnstile・実Cloudflare Queue / Cron・公開環境Storage API・実AI課金と品質・iPhone Safari HTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AI受付は保存handlerと復旧callbackをdefault Workerへ注入済みですが、stagingは`sample` / `mock`、productionは`live` / `live`・`GENERATION_ENABLED=false`でQueue未設定です。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
 - `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

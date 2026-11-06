@@ -2,7 +2,7 @@
 
 > 2026-10-27に採用した実装方針です。全体の構成・共通型・公開条件を先に揃え、通常の開発はモックで進めます。
 
-PR#29までの変更は`main`へ統合済みです。現在のbranchではlive-demo用のOpenAI白黒profile、原子的予約、attempt ledger、Queue runner、private Storage保存・assets登録・成功確定RPC・復旧runtimeをdefault Workerへ接続しています。共有DBへのmigration適用と実AI/クラウド環境の検証は未実施です。詳細は[PLAN](PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。現在のbranchではlive-demo用のOpenAI白黒profile、原子的予約、attempt ledger、Queue runner、private Storage保存・assets登録・成功確定RPC・復旧runtimeをdefault Workerへ接続しています。production projectには10 migration適用済み(run `42211812661`)ですが、実AI/公開Workerの検証は未実施です。詳細は[PLAN](PLAN.md)を参照してください。
 
 ---
 
@@ -49,7 +49,7 @@ supabase/
 ### 実装コードの責務境界
 
 - 運用資格情報の保管にはBitwarden Secrets Managerを使います。staging Environmentの`BWS_ACCESS_TOKEN`はdev project全体をread-onlyで読めるmachine accountのtokenで、既存の開発用Supabase secret等にも権限があります。workflowは`BWS_CLOUDFLARE_SECRET_ID`で指定したstaging Worker専用Cloudflare token 1件だけをActionへ要求し、production secretはdev projectに保存しません。初期作成用tokenと旧Secret IDは退役済みです。詳細は[デプロイ基盤](DEPLOYMENT.md)に記載します。
-- チームの開発ブランチへのpushとPR作成は維持し、mainのmerge・production操作は所有者に限定します。staging sample CDはRepository variableで明示有効化した後、保護された`develop`へのpushからCI成功後にだけ動きます。既存Worker以外を作成せず、架空sampleだけを公開します。
+- チームの開発ブランチへのpushとPR作成は維持し、mainのmerge・production操作は所有者に限定します。staging sample CDはRepository variableで明示有効化した後、保護された`develop`へのpushからCI成功後にだけ動きます。既存Worker以外を作成せず、架空sampleだけを公開します。production connected CDはowner限定・Environment flag無効既定で、実Auth/CRUD接続版を配信する際も生成は停止します。
 - `client/app/App.tsx`はアプリ共通枠・設定取得・画面離脱保護、`app/routes.tsx`はルートと利用可否の表示を担当します。ホーム固有の取得・表示は`features/home/`に置きます。
 - 日記の新規作成と編集では`DiaryDateField`・`DiaryBodyField`と日付書式を共有します。利用枠は`useGenerationQuota`で取得し、新規画面だけ再取得時にloadingへ戻す差を明示します。
 - 記録のURL状態は`librarySearch.ts`、日付計算は`libraryCalendar.ts`、取得範囲の走査は`libraryCoverage.ts`、取得中の状態とキャンセルは`useLibraryEntries.ts`が担当します。表示のページ数とAPIのcursorは別に扱います。
@@ -107,7 +107,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 <a id="mode-matrix"></a>
 
-設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳・private画像保存・assets登録・保存復旧・実Storage署名URLを接続しています。`/assets/:id/url`は固定mockに公開サンプル画像を返し、実assetには所有者・有効なentry・成功済みgeneration・comic参照を照合して署名URLを返します。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。staging/productionはsample/offでQueueも未設定のため、実生成は受付されません。`demo` Wrangler targetはlive-demo用設定を準備していますが、Queue・Secrets・共有DB migration・deployは未実施です。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は新しい実AI呼出しの許可で、mock生成や既存saving taskの復旧には不要です。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
+設定検証、local-mock、preview-sample、liveモードのJWT検証と日記CRUD接続は実装済みです。local-connectedとlive-demoでは日記一覧・詳細・作成・編集・論理削除をSupabase DBへ接続します。local-connectedはgeneration受付・quota・status読取・Queue・未配送再送・期限照合を固定mockで実行します。live-demoには固定OpenAI profileの予約・Queue Consumer・attempt台帳・private画像保存・assets登録・保存復旧・実Storage署名URLを接続しています。`/assets/:id/url`は固定mockに公開サンプル画像を返し、実assetには所有者・有効なentry・成功済みgeneration・comic参照を照合して署名URLを返します。期限削除serviceを日次Scheduled handlerへ接続しました。`local-connected`と`live-demo`は実行対象、`sample`・malformed modeは個人DB/Storageへ接続しません。stagingはsample/offを維持します。production targetは`live` / `live` / `GENERATION_ENABLED=false`で日記CRUD/Authへ接続しますが、公開Workerの配信・匿名Auth・実保存は未確認です。生成受付はQueueとOpenAI keyがなく停止しています。production projectの10 migrationはrun `42211812661`で適用済みです。`demo` Wrangler targetはlive-demo用設定を準備していますが、Queue・Secrets・deployは未実施です。`APP_ENV`は実行環境、`DATA_MODE`は保存・認証の方式、`AI_MODE`は生成adapterを選びます。`GENERATION_ENABLED`は新しい実AI呼出しの許可で、mock生成や既存saving taskの復旧には不要です。preview-sampleでは生成受付を無効にします。過去の一部ローカル結合確認と未確認項目は[README](../README.md)を参照してください。
 
 | モード | APP_ENV | DATA_MODE | AI_MODE | GENERATION_ENABLED | 挙動 |
 |---|---|---|---|---|---|
@@ -118,7 +118,7 @@ AIによる漫画生成は時間がかかるため、HTTPリクエスト内で�
 
 - この表の組み合わせだけを許可し、不正な列挙値・未設定のモード変数は初回リクエスト時に拒否します。未設定の`GENERATION_ENABLED`は`false`として扱い、`true`/`false`以外の文字列は拒否します。
 - `DATA_MODE=mock`の認証はVite開発ビルドかつlocalhost/127.0.0.1/::1でだけ許可します。本番ビルドでは開発用の許可を除去し、hostnameやAPP_ENVを偽装してもモック認証を拒否します。liveモードではSupabase SDKの`auth.getClaims(jwt)`で署名・期限を検証し、issuer・audience・UUID形式の`sub`を確認した後、`auth.getUser(jwt)`でAuthの現在のユーザーを確認します。読み取りは利用者JWT + RLS、書き込みはサーバー専用RPCを使います。実際のDB接続は別途stagingで検証してください。
-- 実AIは`live-demo`で`GENERATION_ENABLED=true`とDBの`enabled`が両方有効、固定profile・予算・quota・認証・Turnstile・Queue・OpenAI key・保存handler・復旧callback等がすべて整う場合だけ呼びます。default Workerには保存・復旧handlerを注入済みですが、現在のstaging/productionはsample/off・Queue未設定のため無効です。他モードでの`GENERATION_ENABLED=true`は拒否します。
+- 実AIは`live-demo`で`GENERATION_ENABLED=true`とDBの`enabled`が両方有効、固定profile・予算・quota・認証・Turnstile・Queue・OpenAI key・保存handler・復旧callback等がすべて整う場合だけ呼びます。default Workerには保存・復旧handlerを注入済みですが、productionは`GENERATION_ENABLED=false`でQueueとOpenAI keyも未設定のため新規生成は停止しています。他モードでの`GENERATION_ENABLED=true`は拒否します。
 - local-connectedのmock予約は`reserve_mock_generation`だけで行い、DB policyが有効かつmock profileのときに限ります。実profileはこの経路から予約できません。
 - Queueには`{ generationId }`だけを送ります。Worker Consumerはlocal-connectedのmock profileまたはlive-demoのOpenAI profileを実行し、重複配信はclaim RPCで抑止します。1分ごとの照合ではDBが取消・削除・期限切れjob、復旧可能なOpenAI saving job、未配送queued jobの順に候補を選びます。Runtimeは候補を通常精算→enqueue→保存復旧の順に実行し、queue送信のための枠を確保します。保存復旧はcallbackがあれば新規生成flagやOpenAI keyなしで動作し、最大3件/cron、各120秒、元claim deadlineから24時間以内に限り、AIを再実行しません。`unknown`を自動再実行しません。
 - モードと公開可否はサーバー設定で固定し、ブラウザから変更させません。`.dev.vars.example`は`local-mock`、`dev.vars.local-connected.example`はSupabase接続を設定する開発用見本です。共有DBへのmigration適用前にlocal-connectedを有効なDBへ接続しないでください。

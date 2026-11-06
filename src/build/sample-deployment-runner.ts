@@ -184,7 +184,10 @@ function assertAbsentOrEmpty(value: unknown): void {
   }
 }
 
-function assertNoBindings(config: Record<string, unknown>): void {
+function assertNoBindings(
+  config: Record<string, unknown>,
+  profile: SampleDeploymentProfile<SampleDeploymentEnvironment>,
+): void {
   if ([...Object.keys(config)].some((key) => !allowedGeneratedConfigKeys.has(key))) {
     fail('ARTIFACT_CONFIG_UNSAFE');
   }
@@ -201,7 +204,18 @@ function assertNoBindings(config: Record<string, unknown>): void {
   const secrets = config.secrets;
   if (secrets !== undefined) {
     if (!isRecord(secrets)) fail('ARTIFACT_CONFIG_UNSAFE');
-    assertEmptyArray(secrets.required);
+    const expectedSecrets = profile.requiredSecretBindings ?? [];
+    const requiredSecrets = secrets.required;
+    if (expectedSecrets.length === 0) assertEmptyArray(requiredSecrets);
+    else if (!Array.isArray(requiredSecrets)) fail('ARTIFACT_CONFIG_UNSAFE');
+    else if (
+      requiredSecrets.length !== expectedSecrets.length ||
+      !expectedSecrets.every((name) => requiredSecrets.includes(name))
+    ) {
+      fail('ARTIFACT_CONFIG_UNSAFE');
+    }
+  } else if ((profile.requiredSecretBindings?.length ?? 0) > 0) {
+    fail('ARTIFACT_CONFIG_UNSAFE');
   }
 
   const durableObjects = config.durable_objects;
@@ -232,6 +246,7 @@ function assertNoBindings(config: Record<string, unknown>): void {
 function assertExpectedConfiguration(
   profile: SampleDeploymentProfile<SampleDeploymentEnvironment>,
   config: Record<string, unknown>,
+  workerPublicVars: Readonly<Record<string, string>>,
 ): void {
   if (
     config.name !== profile.workerName ||
@@ -251,9 +266,10 @@ function assertExpectedConfiguration(
   const vars = config.vars;
   const expectedVars = {
     APP_ENV: profile.appEnvironment,
-    DATA_MODE: 'sample',
-    AI_MODE: 'mock',
+    DATA_MODE: profile.dataMode ?? 'sample',
+    AI_MODE: profile.aiMode ?? 'mock',
     GENERATION_ENABLED: 'false',
+    ...workerPublicVars,
   };
   if (
     !isRecord(vars) ||
@@ -264,9 +280,16 @@ function assertExpectedConfiguration(
   }
 
   const triggers = config.triggers;
-  if (!isRecord(triggers) || !Array.isArray(triggers.crons) || triggers.crons.length !== 0) {
+  const expectedCrons = profile.crons ?? [];
+  if (!isRecord(triggers) || !Array.isArray(triggers.crons)) {
     fail('ARTIFACT_CONFIG_UNSAFE');
   }
+  const cronEntries = triggers.crons;
+  if (
+    cronEntries.length !== expectedCrons.length ||
+    !expectedCrons.every((cron, index) => cronEntries[index] === cron)
+  )
+    fail('ARTIFACT_CONFIG_UNSAFE');
 
   const assets = config.assets;
   if (!isRecord(assets) || typeof assets.directory !== 'string' || assets.directory.trim() === '') {
@@ -277,7 +300,7 @@ function assertExpectedConfiguration(
     fail('ARTIFACT_CONFIG_UNSAFE');
   }
 
-  assertNoBindings(config);
+  assertNoBindings(config, profile);
   if (!isRecord(config.observability) || config.observability.enabled !== false) {
     fail('ARTIFACT_CONFIG_UNSAFE');
   }
@@ -298,6 +321,24 @@ async function assertNoDevVars(directory: string): Promise<void> {
   }
 }
 
+async function collectRegularFiles(directory: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return fail('ARTIFACT_CONFIG_UNSAFE');
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isSymbolicLink()) return fail('ARTIFACT_CONFIG_UNSAFE');
+    if (entry.isDirectory()) files.push(...(await collectRegularFiles(entryPath)));
+    else if (entry.isFile()) files.push(entryPath);
+    else return fail('ARTIFACT_CONFIG_UNSAFE');
+  }
+  return files;
+}
+
 async function readJsonFile(path: string): Promise<Record<string, unknown>> {
   let parsed: unknown;
   try {
@@ -313,6 +354,8 @@ export async function prepareSampleReleaseArtifact<E extends SampleDeploymentEnv
   profile: SampleDeploymentProfile<E>,
   commit: string,
   projectRoot = repositoryRoot,
+  workerPublicVars: Readonly<Record<string, string>> = {},
+  releasePublicValues: Readonly<Record<string, string>> = {},
 ): Promise<{ configPath: string }> {
   if (!/^[0-9a-f]{40}$/i.test(commit)) {
     throw new SampleDeploymentFailure('INPUT_SHA_INVALID');
@@ -351,7 +394,7 @@ export async function prepareSampleReleaseArtifact<E extends SampleDeploymentEnv
   }
 
   const config = await readJsonFile(configPathReal);
-  assertExpectedConfiguration(profile, config);
+  assertExpectedConfiguration(profile, config, workerPublicVars);
 
   if (typeof config.main !== 'string') return fail('ARTIFACT_CONFIG_UNSAFE');
   try {
@@ -391,6 +434,30 @@ export async function prepareSampleReleaseArtifact<E extends SampleDeploymentEnv
 
   await assertNoDevVars(distRealPath);
 
+  if (profile.connected) {
+    const clientFiles = await collectRegularFiles(clientRealPath);
+    const clientContents = await Promise.all(clientFiles.map((file) => readFile(file)));
+    const browserText = Buffer.concat(clientContents).toString('utf8');
+    if (
+      !Object.entries(releasePublicValues).every(([name, value]) => {
+        const expectedName = name as
+          | 'VITE_SUPABASE_URL'
+          | 'VITE_SUPABASE_PUBLISHABLE_KEY'
+          | 'VITE_TURNSTILE_SITE_KEY';
+        return (
+          [
+            'VITE_SUPABASE_URL',
+            'VITE_SUPABASE_PUBLISHABLE_KEY',
+            'VITE_TURNSTILE_SITE_KEY',
+          ].includes(expectedName) && browserText.includes(value)
+        );
+      }) ||
+      Object.keys(releasePublicValues).length !== 3
+    ) {
+      fail('ARTIFACT_CONFIG_UNSAFE');
+    }
+  }
+
   const markerPath = join(clientRealPath, '__deployment.json');
   try {
     try {
@@ -402,7 +469,7 @@ export async function prepareSampleReleaseArtifact<E extends SampleDeploymentEnv
     }
     await writeFile(
       markerPath,
-      `${JSON.stringify({ environment: profile.environment, commit, dataMode: 'sample' })}\n`,
+      `${JSON.stringify({ environment: profile.environment, commit, dataMode: profile.dataMode ?? 'sample' })}\n`,
       { encoding: 'utf8', mode: 0o600 },
     );
   } catch (error) {

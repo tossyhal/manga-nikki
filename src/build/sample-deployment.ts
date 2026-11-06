@@ -12,6 +12,11 @@ export type SampleDeploymentProfile<E extends SampleDeploymentEnvironment> = Rea
   workerName: string;
   workerUrl: string;
   appEnvironment: E;
+  dataMode?: 'sample' | 'live';
+  aiMode?: 'mock' | 'live';
+  crons?: readonly string[];
+  requiredSecretBindings?: readonly string[];
+  connected?: boolean;
   authorizedActorId?: string;
   triggeringActor?: string;
 }>;
@@ -44,6 +49,9 @@ export type SampleDeploymentErrorCode =
   | 'INPUT_CLOUDFLARE_TOKEN_MISSING'
   | 'INPUT_CLOUDFLARE_TOKEN_INVALID'
   | 'INPUT_WORKER_URL_INVALID'
+  | 'INPUT_WORKER_PUBLIC_VARS_INVALID'
+  | 'INPUT_PUBLIC_CONFIGURATION_INVALID'
+  | 'INPUT_PRIVATE_SECRET_INVALID'
   | 'GITHUB_REQUEST_FAILED'
   | 'GITHUB_RESPONSE_INVALID'
   | 'GITHUB_API_FAILED'
@@ -59,6 +67,7 @@ export type SampleDeploymentErrorCode =
   | 'WORKER_BINDINGS_PRESENT'
   | 'WRANGLER_RUNNER_MISSING'
   | 'WRANGLER_DEPLOY_FAILED'
+  | 'SUPABASE_PROBE_FAILED'
   | 'WORKER_PUBLIC_URL_SETTINGS_INVALID'
   | 'WORKER_PUBLIC_URL_DISABLED'
   | 'WORKER_PREVIEW_URL_ENABLED'
@@ -96,6 +105,8 @@ export type SampleDeploymentContext = {
   githubToken?: string;
   cloudflareApiToken?: string;
   workerUrl?: string;
+  workerPublicVars?: Readonly<Record<string, string>>;
+  releasePublicValues?: Readonly<Record<string, string>>;
 };
 
 export type SampleDeploymentProgress<E extends SampleDeploymentEnvironment> = {
@@ -114,14 +125,26 @@ export type SampleDeploymentDependencies<E extends SampleDeploymentEnvironment> 
   githubFetcher?: (input: string, init: RequestInit) => Promise<Response>;
   cloudflareFetcher?: (input: string, init: RequestInit) => Promise<Response>;
   publicFetcher?: (input: string, init: RequestInit) => Promise<Response>;
-  prepareArtifact?: (commit: string) => Promise<{ configPath: string }>;
+  prepareArtifact?: (
+    commit: string,
+    workerPublicVars?: Readonly<Record<string, string>>,
+    releasePublicValues?: Readonly<Record<string, string>>,
+  ) => Promise<{ configPath: string }>;
   deploy?: (configPath: string) => Promise<void>;
   sleep?: (milliseconds: number) => Promise<void>;
+  beforeDeploy?: () => Promise<void>;
   onProgress?: (progress: SampleDeploymentProgress<E>) => void;
 };
 
 type JsonRecord = Record<string, unknown>;
 type ApiEnvelope = JsonRecord & { success?: unknown; errors?: unknown; result?: unknown };
+
+function containsControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
 
 const MAX_API_RESPONSE_BYTES = 32 * 1024;
 const MAX_SMOKE_RESPONSE_BYTES = 16 * 1024;
@@ -129,12 +152,14 @@ const SMOKE_ATTEMPTS = 5;
 const SMOKE_RETRY_DELAY_MS = 3_000;
 function expectedWorkerVars<E extends SampleDeploymentEnvironment>(
   profile: SampleDeploymentProfile<E>,
+  publicWorkerVars: Readonly<Record<string, string>> = {},
 ) {
   return {
     APP_ENV: profile.appEnvironment,
-    DATA_MODE: 'sample',
-    AI_MODE: 'mock',
+    DATA_MODE: profile.dataMode ?? 'sample',
+    AI_MODE: profile.aiMode ?? 'mock',
     GENERATION_ENABLED: 'false',
+    ...publicWorkerVars,
   } as const;
 }
 
@@ -158,6 +183,8 @@ function validateContext<E extends SampleDeploymentEnvironment>(
   commit: string;
   githubToken: string;
   workerUrl: string;
+  workerPublicVars: Readonly<Record<string, string>>;
+  releasePublicValues: Readonly<Record<string, string>>;
 } {
   if (
     context.githubActions !== 'true' ||
@@ -180,7 +207,34 @@ function validateContext<E extends SampleDeploymentEnvironment>(
   }
 
   if (context.workerUrl !== profile.workerUrl) return fail('INPUT_WORKER_URL_INVALID');
-  return { commit, githubToken, workerUrl: profile.workerUrl };
+  const workerPublicVars = context.workerPublicVars ?? {};
+  const releasePublicValues = context.releasePublicValues ?? {};
+  if (
+    profile.connected &&
+    (Object.keys(workerPublicVars).sort().join(',') !==
+      ['SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_URL', 'TURNSTILE_ALLOWED_HOSTNAMES']
+        .sort()
+        .join(',') ||
+      Object.keys(releasePublicValues).sort().join(',') !==
+        ['VITE_SUPABASE_PUBLISHABLE_KEY', 'VITE_SUPABASE_URL', 'VITE_TURNSTILE_SITE_KEY']
+          .sort()
+          .join(',') ||
+      Object.values(workerPublicVars).some(
+        (value) => !value || value.trim() !== value || containsControlCharacters(value),
+      ) ||
+      Object.values(releasePublicValues).some(
+        (value) => !value || value.trim() !== value || containsControlCharacters(value),
+      ))
+  ) {
+    return fail('INPUT_WORKER_PUBLIC_VARS_INVALID');
+  }
+  return {
+    commit,
+    githubToken,
+    workerUrl: profile.workerUrl,
+    workerPublicVars,
+    releasePublicValues,
+  };
 }
 
 function validateCloudflareToken(value: string | undefined): string {
@@ -339,7 +393,8 @@ async function readWorkerSettingsAllowMissingAware(
     SampleDeploymentDependencies<SampleDeploymentEnvironment>['cloudflareFetcher']
   >,
   token: string,
-  requireSampleVars: boolean,
+  requireTargetBindings: boolean,
+  workerPublicVars: Readonly<Record<string, string>>,
 ): Promise<void> {
   let response: Response;
   try {
@@ -375,7 +430,15 @@ async function readWorkerSettingsAllowMissingAware(
 
   const bindings = body.result.bindings;
   if (!Array.isArray(bindings)) return fail('CLOUDFLARE_RESPONSE_INVALID');
-  const seenVars = new Set<string>();
+  const expectedVars = expectedWorkerVars(profile, workerPublicVars);
+  const legacySampleVars = {
+    APP_ENV: 'production',
+    DATA_MODE: 'sample',
+    AI_MODE: 'mock',
+    GENERATION_ENABLED: 'false',
+  };
+  const seenVars = new Map<string, string>();
+  const seenSecrets = new Set<string>();
   let assetsBindingCount = 0;
   for (const binding of bindings) {
     if (!isRecord(binding)) return fail('WORKER_BINDINGS_PRESENT');
@@ -384,24 +447,54 @@ async function readWorkerSettingsAllowMissingAware(
       continue;
     }
     if (binding.type === 'plain_text' && typeof binding.name === 'string') {
-      const expectedVars = expectedWorkerVars(profile);
       const expectedValue = expectedVars[binding.name as keyof typeof expectedVars];
+      const legacyValue =
+        profile.connected && !requireTargetBindings
+          ? legacySampleVars[binding.name as keyof typeof legacySampleVars]
+          : undefined;
       if (
-        expectedValue !== undefined &&
-        binding.text === expectedValue &&
+        (expectedValue !== undefined || legacyValue !== undefined) &&
+        typeof binding.text === 'string' &&
+        (binding.text === expectedValue || binding.text === legacyValue) &&
         !seenVars.has(binding.name)
       ) {
-        seenVars.add(binding.name);
+        seenVars.set(binding.name, binding.text as string);
         continue;
       }
     }
+    if (
+      profile.connected &&
+      binding.type === 'secret_text' &&
+      typeof binding.name === 'string' &&
+      profile.requiredSecretBindings?.includes(binding.name) &&
+      !seenSecrets.has(binding.name)
+    ) {
+      seenSecrets.add(binding.name);
+      continue;
+    }
     return fail('WORKER_BINDINGS_PRESENT');
   }
-  if (assetsBindingCount > 1 || (seenVars.size !== 0 && seenVars.size !== 4)) {
+  if (assetsBindingCount > 1) {
     return fail('WORKER_BINDINGS_PRESENT');
   }
-  if (requireSampleVars && seenVars.size !== 4) {
-    return fail('WORKER_BINDINGS_PRESENT');
+
+  if (profile.connected) {
+    const varsMatch = (expected: Readonly<Record<string, string>>) =>
+      seenVars.size === Object.keys(expected).length &&
+      Object.entries(expected).every(([key, value]) => seenVars.get(key) === value);
+    const noVars = seenVars.size === 0;
+    if (
+      requireTargetBindings
+        ? !varsMatch(expectedVars) ||
+          seenSecrets.size !== (profile.requiredSecretBindings?.length ?? 0) ||
+          !(profile.requiredSecretBindings ?? []).every((name) => seenSecrets.has(name))
+        : !(noVars || varsMatch(expectedVars) || varsMatch(legacySampleVars))
+    ) {
+      return fail('WORKER_BINDINGS_PRESENT');
+    }
+  } else {
+    if (seenVars.size !== 0 && seenVars.size !== 4) return fail('WORKER_BINDINGS_PRESENT');
+    if (requireTargetBindings && seenVars.size !== 4) return fail('WORKER_BINDINGS_PRESENT');
   }
 }
 
@@ -482,6 +575,7 @@ async function verifyPublicSmoke(
   commit: string,
   sleeper: (milliseconds: number) => Promise<void>,
 ): Promise<void> {
+  const expectedDataMode = profile.dataMode ?? 'sample';
   const health = await withSmokeRetry(async () => {
     const body = await readSmokeJson(fetcher, `${workerUrl}/api/v1/health`);
     if (body.status !== 'ok') return fail('SMOKE_HEALTH_INVALID');
@@ -491,12 +585,12 @@ async function verifyPublicSmoke(
 
   const config = await withSmokeRetry(async () => {
     const body = await readSmokeJson(fetcher, `${workerUrl}/api/v1/config`);
-    if (body.dataMode !== 'sample' || body.generationAvailable !== false) {
+    if (body.dataMode !== expectedDataMode || body.generationAvailable !== false) {
       return fail('SMOKE_CONFIG_INVALID');
     }
     return body;
   }, sleeper);
-  if (config.dataMode !== 'sample' || config.generationAvailable !== false) {
+  if (config.dataMode !== expectedDataMode || config.generationAvailable !== false) {
     return fail('SMOKE_CONFIG_INVALID');
   }
 
@@ -504,7 +598,7 @@ async function verifyPublicSmoke(
     const body = await readSmokeJson(fetcher, `${workerUrl}/__deployment.json`);
     if (
       body.environment !== profile.environment ||
-      body.dataMode !== 'sample' ||
+      body.dataMode !== expectedDataMode ||
       typeof body.commit !== 'string'
     ) {
       return fail('SMOKE_DEPLOYMENT_INVALID');
@@ -559,7 +653,11 @@ export async function runSampleDeployment<E extends SampleDeploymentEnvironment>
   if (!dependencies.prepareArtifact) return fail('ARTIFACT_PREPARATION_FAILED');
   let artifact: { configPath: string };
   try {
-    artifact = await dependencies.prepareArtifact(validated.commit);
+    artifact = await dependencies.prepareArtifact(
+      validated.commit,
+      validated.workerPublicVars,
+      validated.releasePublicValues,
+    );
   } catch (error) {
     if (error instanceof SampleDeploymentFailure) throw error;
     return fail('ARTIFACT_PREPARATION_FAILED');
@@ -569,8 +667,22 @@ export async function runSampleDeployment<E extends SampleDeploymentEnvironment>
   }
 
   const cloudflareFetcher = dependencies.cloudflareFetcher ?? fetch;
-  await readWorkerSettingsAllowMissingAware(profile, cloudflareFetcher, cloudflareToken, false);
+  await readWorkerSettingsAllowMissingAware(
+    profile,
+    cloudflareFetcher,
+    cloudflareToken,
+    false,
+    validated.workerPublicVars,
+  );
   if (!dependencies.deploy) return fail('WRANGLER_RUNNER_MISSING');
+
+  if (dependencies.beforeDeploy) {
+    try {
+      await dependencies.beforeDeploy();
+    } catch {
+      return fail('SUPABASE_PROBE_FAILED');
+    }
+  }
 
   const deployHeadSha = await readBranchHead(profile, githubFetcher, validated.githubToken);
   if (deployHeadSha !== validated.commit) {
@@ -586,7 +698,13 @@ export async function runSampleDeployment<E extends SampleDeploymentEnvironment>
   }
   report({ deployment: 'succeeded' });
 
-  await readWorkerSettingsAllowMissingAware(profile, cloudflareFetcher, cloudflareToken, true);
+  await readWorkerSettingsAllowMissingAware(
+    profile,
+    cloudflareFetcher,
+    cloudflareToken,
+    true,
+    validated.workerPublicVars,
+  );
   await verifyPublicUrlSettings(profile, cloudflareFetcher, cloudflareToken);
 
   report({ smoke: 'failed' });
@@ -615,6 +733,9 @@ export function renderSampleDeploymentSummary<E extends SampleDeploymentEnvironm
     'INPUT_CLOUDFLARE_TOKEN_MISSING',
     'INPUT_CLOUDFLARE_TOKEN_INVALID',
     'INPUT_WORKER_URL_INVALID',
+    'INPUT_WORKER_PUBLIC_VARS_INVALID',
+    'INPUT_PUBLIC_CONFIGURATION_INVALID',
+    'INPUT_PRIVATE_SECRET_INVALID',
     'GITHUB_REQUEST_FAILED',
     'GITHUB_RESPONSE_INVALID',
     'GITHUB_API_FAILED',
@@ -630,6 +751,7 @@ export function renderSampleDeploymentSummary<E extends SampleDeploymentEnvironm
     'WORKER_BINDINGS_PRESENT',
     'WRANGLER_RUNNER_MISSING',
     'WRANGLER_DEPLOY_FAILED',
+    'SUPABASE_PROBE_FAILED',
     'WORKER_PUBLIC_URL_SETTINGS_INVALID',
     'WORKER_PUBLIC_URL_DISABLED',
     'WORKER_PREVIEW_URL_ENABLED',
@@ -662,7 +784,7 @@ export function renderSampleDeploymentSummary<E extends SampleDeploymentEnvironm
     : undefined;
 
   return [
-    `## ${profile.environment === 'production' ? 'Production' : 'Staging'} sample CD`,
+    `## ${profile.environment === 'production' ? `Production ${profile.connected ? 'connected' : 'sample'}` : 'Staging sample'} CD`,
     '',
     `- Environment: \`${profile.environment}\``,
     `- Commit: \`${safeCommit}\``,
