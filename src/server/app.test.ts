@@ -188,17 +188,50 @@ describe('local mock API', () => {
     );
     expect(new Set(generated.map((x) => x.generationId)).size).toBe(1);
     expect((await (await request('/me/quota')).json()).remainingToday).toBe(1);
-    const secondGeneration = await request(
+    const replayedGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': key },
+    );
+    expect(replayedGeneration.status).toBe(202);
+    expect(await replayedGeneration.json()).toMatchObject({
+      generationId: generated[0].generationId,
+    });
+    const secondSameRevision = await request(
       `/entries/${id}/generations`,
       'POST',
       { expectedRevision: 1, captchaToken: '' },
       { 'Idempotency-Key': crypto.randomUUID() },
     );
+    expect(secondSameRevision.status).toBe(409);
+    expect((await secondSameRevision.json()).error).toMatchObject({
+      code: 'REVISION_ALREADY_GENERATED',
+      message: 'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
+    });
+    const revised = await request(`/entries/${id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: jstToday(),
+      body: '改訂後の日記',
+    });
+    expect((await revised.json()).revision).toBe(2);
+    const secondGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 2, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
     expect(secondGeneration.status).toBe(202);
+    const revisedAgain = await request(`/entries/${id}`, 'PATCH', {
+      expectedRevision: 2,
+      diaryDate: jstToday(),
+      body: '再改訂後の日記',
+    });
+    expect((await revisedAgain.json()).revision).toBe(3);
     const limited = await request(
       `/entries/${id}/generations`,
       'POST',
-      { expectedRevision: 1, captchaToken: '' },
+      { expectedRevision: 3, captchaToken: '' },
       { 'Idempotency-Key': crypto.randomUUID() },
     );
     expect(limited.status).toBe(429);

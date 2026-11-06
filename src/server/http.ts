@@ -12,6 +12,8 @@ export const messages: Record<string, string> = {
   CONSENT_REQUIRED: '利用への同意を確認してください。',
   NOT_FOUND: '記録が見つかりません。',
   REVISION_CONFLICT: '記録が更新されています。再読み込みしてください。',
+  REVISION_ALREADY_GENERATED:
+    'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
   ENTRY_BUSY: '生成中の記録は編集できません。',
   IDEMPOTENCY_CONFLICT: '同じ操作IDで異なる内容は送信できません。',
   INPUT_TOO_LARGE: '入力サイズが大きすぎます。',

@@ -151,6 +151,33 @@ describe('API error guidance', () => {
     });
   });
 
+  it('guides stale tabs to load an already generated revision', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(() =>
+        Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: 'REVISION_ALREADY_GENERATED',
+                message: 'private server detail',
+                requestId: 'generated-revision-request',
+                retryable: false,
+              },
+            },
+            { status: 409 },
+          ),
+        ),
+      ),
+    );
+
+    await expect(api('/entries/entry-id/generations')).rejects.toMatchObject({
+      status: 409,
+      code: 'REVISION_ALREADY_GENERATED',
+      message: 'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
+    });
+  });
+
   it('explains entry creation rate and retention limits without exposing backend details', async () => {
     for (const [code, message] of [
       [
