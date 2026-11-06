@@ -363,10 +363,40 @@ try {
   );
 
   succeeded(await sql(await readFile(join(root, 'supabase/tests/bootstrap.sql'), 'utf8')));
+  async function checkProductionPolicySchema(expectedReady) {
+    succeeded(await sql('CREATE ROLE postgres NOLOGIN SUPERUSER;'));
+    try {
+      const checkSource = await readFile(
+        join(root, 'supabase/operations/production-trial-policy-check.sql'),
+        'utf8',
+      );
+      const metadata = JSON.parse(succeeded(await sql(`SET ROLE postgres;\n${checkSource}`)));
+      assert.equal(metadata.identityOk, true);
+      assert.equal(metadata.readOnly, true);
+      assert.equal(metadata.public80SchemaReady, expectedReady);
+      assert.equal(metadata.public80Ready, false);
+      assert.equal(metadata.public80Prepared, false);
+      assert.equal(typeof metadata.initialPolicy, 'boolean');
+      assert.equal(typeof metadata.trialPrepared, 'boolean');
+      const stopSource = (
+        await readFile(join(root, 'supabase/operations/production-trial-policy-write.sql'), 'utf8')
+      ).replace('-- TRIAL_POLICY_SETTINGS', "SET LOCAL manga_nikki.trial_policy_operation='stop';");
+      assert.equal(
+        succeeded(await sql(`SET ROLE postgres;\n${stopSource}`)),
+        'TRIAL_POLICY_TRANSACTION_COMMITTED',
+      );
+    } finally {
+      succeeded(await sql('DROP ROLE postgres;'));
+    }
+  }
   for (const file of (await readdir(join(root, 'supabase/migrations')))
     .filter((name) => name.endsWith('.sql'))
     .sort()) {
+    if (file === '20261107010000_public_generation_budget_policy.sql')
+      await checkProductionPolicySchema(false);
     succeeded(await sql(await readFile(join(root, 'supabase/migrations', file), 'utf8')));
+    if (file === '20261107010000_public_generation_budget_policy.sql')
+      await checkProductionPolicySchema(true);
   }
   succeeded(await sql(await readFile(join(root, 'supabase/tests/diary.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
@@ -374,6 +404,34 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_storage.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/entry_write_limits.sql'), 'utf8')));
+  succeeded(
+    await sql(
+      await readFile(join(root, 'supabase/tests/public_generation_budget_policy.sql'), 'utf8'),
+    ),
+  );
+  console.log('成功: 任意全体件数cap・JST通常3枠・private日次例外・例外込み累積予算・権限');
+  const public80Activation = await readFile(
+    join(root, 'supabase/operations/production-public80-policy-write.sql'),
+    'utf8',
+  );
+  const public80ActivationBody = public80Activation.match(/^DO \$\$\n([\s\S]*?)\n\$\$;/m)?.[1];
+  assert.ok(public80ActivationBody, '80USD有効化の固定DO本文が存在する');
+  const public80OperationTest = await readFile(
+    join(root, 'supabase/tests/production_public80_policy.sql'),
+    'utf8',
+  );
+  assert.equal(public80OperationTest.split('-- PUBLIC80_ACTIVATION_FUNCTION').length, 2);
+  succeeded(
+    await sql(
+      public80OperationTest.replace(
+        '-- PUBLIC80_ACTIVATION_FUNCTION',
+        () =>
+          `CREATE FUNCTION pg_temp.activate_public80() RETURNS void LANGUAGE plpgsql AS $activation$\n${public80ActivationBody}\n$activation$;`,
+      ),
+    ),
+  );
+  console.log('成功: 初回成功履歴を保持した80USD policy有効化・owner自動選定・不確定状態拒否');
+
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
   console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
@@ -1350,6 +1408,86 @@ select :'race_generation' || '|' || :'race_claim';`;
     [openAiQuotaBefore[0] + 1, openAiQuotaBefore[1] + 19],
   );
   console.log('成功: OpenAI wrapperの同一キー6並列予約はjob・reservation・予算計上が各1件');
+
+  const budgetRaceActors = Array.from({ length: 6 }, () => randomUUID());
+  const budgetRacePolicy = succeeded(
+    await sql('select to_jsonb(p) from private.generation_policy p where id = 1;'),
+  );
+  const budgetRaceBefore = succeeded(
+    await sql(`select count || ':' || committed_micro_usd
+      from private.quota_counters where scope = 'global_total';`),
+  )
+    .split(':')
+    .map(Number);
+  succeeded(
+    await sql(`insert into auth.users(id) values ${budgetRaceActors.map((id) => `('${id}')`).join(',')};
+      update private.generation_policy set enabled = true, user_daily_limit = 0,
+        global_daily_limit = null, global_total_limit = null,
+        daily_limit_exempt_owners = array[${budgetRaceActors.map((id) => `'${id}'`).join(',')}]::uuid[],
+        budget_micro_usd = ${budgetRaceBefore[1] + 7},
+        model_profile_json = '{"profile_id":"budget-race-fictional-v1","is_mock":true,"max_cost_micro_usd":7}'::jsonb
+      where id = 1;`),
+  );
+  const budgetRaceEntries = [];
+  for (const actorId of budgetRaceActors) {
+    budgetRaceEntries.push(
+      succeeded(
+        await sql(`set role service_role;
+      select (public.create_entry('${actorId}',gen_random_uuid(),
+        (statement_timestamp() at time zone 'Asia/Tokyo')::date,'予算最終枠の架空日記','v1')).id;`),
+      ),
+    );
+  }
+  const budgetFinalSlot = await runBehindLock({
+    holderName: 'mn-db-budget-null-caps-holder',
+    lockSql: 'select pg_catalog.pg_advisory_xact_lock(20261103, 10001)',
+    waiterPrefix: 'mn-db-budget-null-caps-',
+    queries: budgetRaceActors.map(
+      (actorId, index) =>
+        `set role service_role; select public.reserve_mock_generation(
+        '${actorId}','${budgetRaceEntries[index]}',1,'${randomUUID()}');`,
+    ),
+  });
+  assert.equal(budgetFinalSlot.filter((result) => result.code === 0).length, 1);
+  assert.equal(
+    budgetFinalSlot.filter(
+      (result) => result.code !== 0 && result.stderr.includes('GLOBAL_LIMIT_REACHED'),
+    ).length,
+    5,
+  );
+  assert.deepEqual(
+    succeeded(
+      await sql(`select count || ':' || committed_micro_usd
+    from private.quota_counters where scope = 'global_total';`),
+    )
+      .split(':')
+      .map(Number),
+    [budgetRaceBefore[0] + 1, budgetRaceBefore[1] + 7],
+  );
+  assert.equal(
+    succeeded(
+      await sql(`select
+    (select count(*) from public.generations where owner_id = any(array[${budgetRaceActors.map((id) => `'${id}'`).join(',')}]::uuid[])) || ':' ||
+    (select count(*) from private.reservations where owner_id = any(array[${budgetRaceActors.map((id) => `'${id}'`).join(',')}]::uuid[]));`),
+    ),
+    '1:1',
+  );
+  const budgetPolicyColumns = [
+    'enabled',
+    'user_daily_limit',
+    'global_daily_limit',
+    'global_total_limit',
+    'daily_limit_exempt_owners',
+    'budget_micro_usd',
+    'model_profile_json',
+  ];
+  succeeded(
+    await sql(`update private.generation_policy set
+    (${budgetPolicyColumns.join(',')}) = (select ${budgetPolicyColumns.map((column) => `saved.${column}`).join(',')}
+      from jsonb_populate_record(null::private.generation_policy,
+        '${budgetRacePolicy.replaceAll("'", "''")}'::jsonb) saved) where id = 1;`),
+  );
+  console.log('成功: 全体件数capなし・全員日次例外でも予算最終枠の6並列受付は1件だけ');
 
   const writeLimitOwner = 'e1010101-0101-4101-8101-010101010101';
   const ownerDailyKeys = Array.from({ length: 6 }, () => randomUUID());

@@ -99,3 +99,13 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GEN
 - [42235181419](https://github.com/tossyhal/manga-nikki/actions/runs/42235181419)のreadbackはenabled=false、trialPrepared=true、historyEmpty=true、policyTriggerPresent=trueです。[42237804661](https://github.com/tossyhal/manga-nikki/actions/runs/42237804661)ではsource 0572d938a679ec3afdc5e78eebbf5973943bae58を、生成OFFのままQueue・OpenAI key・Cron付きで配信し、検査が成功しました。
 - ownerはiPhoneのホーム画面PWAで、架空日記の保存・再起動後の保持・削除の成功を報告しました。続く試験用配信後に実AIの4コマ表示・再読み込みの成功も報告しました。別匿名ユーザーによる日記所有者分離、実CAPTCHA失効/再利用拒否、実Cron実行結果、モデル品質の詳細評価・実費は未検証です。
 - ownerは実請求を厳密に1USDで停止できない条件を確認し、架空日記1件だけの試験を追認しました。`provider_cost_verified`はこの試験の費用条件を確認・承認した操作入力であり、厳密なprovider請求capの証明ではありません。承認内容は`docs/OPERATIONS.md`に記録します。
+
+## 80USD公開設定
+
+2026-11-07 JSTにownerが累積80USD・全体の固定回数capなし・通常3回/JST日・ownerデバッグの日次例外を承認しました。操作は`production-generation-trial-policy.yml`の`activate-public80`、確認文字列`ENABLE_PUBLIC_80USD_3_PER_JST_DAY_OWNER_DEBUG`、費用条件確認`provider_cost_verified=true`です。入力名は既存互換のため維持し、providerの厳密な請求capの証明とは扱いません。
+
+先に11本目のmigrationをmainからplanし、表示されたmanifest SHA-256を指定したapplyで適用します。migrationは件数capのNULL対応と非公開の日次例外一覧だけを追加し、予算・公開・例外ownerを有効化しません。公開設定は旧停止済みtrial policy・唯一の成功生成・5成功attempt・消費予約とcounterの整合を再確認し、1transactionで80,000,000 micro USD、通常3回、global caps NULLへ変更します。デバッグownerはその成功生成のownerをDB内で選定し、UUIDをログやGitへ出しません。不確定状態や保存中のtaskがあれば停止します。既存消費は保持し、重複適用で予算を加算しません。
+
+現在の1生成あたり予約額は1USDです。80USDは実費ベースの残高計ではなく予約額ベースの制限であり、未使用差額を再利用しない既存運用を維持します。日次例外も同じ予算と同時実行1件・認証・CAPTCHA・二重実行防止の対象です。匿名認証のため3回制限はブラウザのアカウント単位で、別ブラウザやログアウト後の新規アカウントを同一人物とは判定しません。
+
+適用後はread-only checkで`public80SchemaReady=true`、`public80Prepared=true`、有効状態と既存累積予約額の保持を確認し、`PRODUCTION_GENERATION_ENABLED=true`を指定してmain CIから配信します。エージェントは画像生成を実行せず、確認はDB・API設定・公開configの読み取りだけにします。緊急停止は引き続き`stop`でenabled=falseにし、既存予約・消費・unknownを解放しません。
