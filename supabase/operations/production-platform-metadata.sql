@@ -8,6 +8,14 @@ WITH relations AS (
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
   WHERE n.nspname='storage' AND c.relname IN ('buckets', 'objects')
+), delegation AS (
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM pg_catalog.pg_settings
+    WHERE name='supautils.policy_grants' AND context='sighup' AND vartype='string'
+  ) THEN COALESCE(
+    pg_catalog.current_setting('supautils.policy_grants',true)::jsonb -> 'postgres'
+      @> '["storage.buckets","storage.objects"]'::jsonb,false)
+  ELSE false END AS granted
 ), policies AS (
   SELECT p.*, r.relname,
     pg_catalog.regexp_replace(pg_catalog.pg_get_expr(p.polqual,p.polrelid),'[[:space:]()]','','g') AS qual,
@@ -23,6 +31,7 @@ SELECT pg_catalog.json_build_object(
   'identityOk',current_user='postgres' AND pg_catalog.current_database()='postgres',
   'readOnly',pg_catalog.current_setting('transaction_read_only')='on',
   'storageRlsOk',(SELECT count(*)=2 AND bool_and(relrowsecurity AND NOT relforcerowsecurity) FROM relations),
+  'storagePolicyDelegated',current_user='postgres' AND (SELECT granted FROM delegation),
   'storageOwnerPrivilege',(SELECT count(*)=2 AND bool_and(pg_catalog.pg_has_role(current_user,relowner,'USAGE')) FROM relations),
   'storageOwnerSetPrivilege',(SELECT count(*)=2 AND bool_and(pg_catalog.pg_has_role(current_user,relowner,'SET')) FROM relations),
   'sameStorageOwner',(SELECT count(*)=2 AND count(DISTINCT relowner)=1 FROM relations),
