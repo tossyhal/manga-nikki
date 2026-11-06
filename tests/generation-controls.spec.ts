@@ -1845,6 +1845,9 @@ test('生成処理中の連打と離脱を確認し、遅れた応答では画�
   await clickAppDialogButton(page, '処理中です', '移動する');
   await navigation;
   await expectDefaultLibraryLocation(page);
+  await expect(page.locator('.app-notices').getByRole('status')).toContainText(
+    '漫画の受付結果が未確定です。保存した記録で最新の状態を確認してください。',
+  );
 
   const responseWait = page.waitForResponse((response) => {
     const request = response.request();
@@ -2647,3 +2650,95 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
     },
   ]);
 });
+
+for (const exitDuringSave of [false, true]) {
+  test(`漫画用の日記保存中の移動で${exitDuringSave ? '明示離脱したら保存未確定を通知する' : '保存後の未受付を通知し本人操作で一度だけ続行する'}`, async ({
+    page,
+  }) => {
+    await installLiveSession(page);
+    await installTurnstileFake(page);
+    let releaseSave!: () => void;
+    let notifySave!: () => void;
+    const saveRequested = new Promise<void>((resolve) => {
+      notifySave = resolve;
+    });
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let generationPosts = 0;
+    let entryPosts = 0;
+    const generation = generationFixtures(entryId, generationId).queued;
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
+    );
+    await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+    await page.route('**/api/v1/entries', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      entryPosts++;
+      notifySave();
+      await saveGate;
+      return route.fulfill({ status: 201, json: draftEntryDetailFixture });
+    });
+    await page.route('**/api/v1/entries?*', (route) =>
+      route.fulfill({ json: { items: [draftEntryDetailFixture], nextCursor: null } }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+      route.fulfill({
+        json: {
+          ...draftEntryDetailFixture,
+          latestGenerationId: generationPosts ? generationId : null,
+          latestGeneration: generationPosts ? generation : null,
+        },
+      }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+      generationPosts++;
+      return route.fulfill({
+        status: 202,
+        json: { generationId, status: 'queued', statusUrl: `/api/v1/generations/${generationId}` },
+      });
+    });
+    await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+      route.fulfill({ json: generation }),
+    );
+    await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
+
+    await page.goto('/new');
+    await page
+      .getByLabel('今日はどんな日だった？', { exact: true })
+      .fill('画面遷移を検証する架空の日記');
+    await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+    await saveRequested;
+    await page.getByRole('link', { name: '記録', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+    if (exitDuringSave) {
+      await clickAppDialogButton(page, '処理中です', '移動する');
+      await expectDefaultLibraryLocation(page);
+      await expect(page.locator('.app-notices').getByRole('status')).toContainText(
+        '日記の保存結果が未確定です。漫画はまだ受け付けていません。',
+      );
+      releaseSave();
+      await expect(page.getByRole('link', { name: '漫画の受付を続ける' })).toHaveCount(0);
+    } else {
+      releaseSave();
+      await expectDefaultLibraryLocation(page);
+      const notice = page
+        .locator('.app-notices')
+        .getByRole('status')
+        .filter({ hasText: '漫画はまだ受け付けていません' });
+      await expect(notice).toContainText('日記を保存しました。');
+      expect(generationPosts).toBe(0);
+      expect(await generationCaptchaExecutions(page)).toBe(0);
+      await notice.getByRole('link', { name: '漫画の受付を続ける' }).click();
+      await expect(page).toHaveURL(`/entries/${entryId}`);
+      await expect.poll(() => generationPosts).toBe(1);
+      expect(await generationCaptchaExecutions(page)).toBe(1);
+      await expect(page.getByText('漫画はまだ受け付けていません', { exact: false })).toHaveCount(0);
+      await page.reload();
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      expect(generationPosts).toBe(1);
+    }
+    expect(entryPosts).toBe(1);
+    if (exitDuringSave) expect(generationPosts).toBe(0);
+  });
+}

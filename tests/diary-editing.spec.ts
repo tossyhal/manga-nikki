@@ -1940,3 +1940,79 @@ test('削除応答後に別記録を編集中なら新しい画面の状態を�
   await expect(page).toHaveURL(new RegExp(`/entries/${secondId}$`));
   await expect(diary).toHaveValue(editedBody);
 });
+
+for (const leaveBeforeReceipt of [false, true]) {
+  test(`漫画受付中の移動で${leaveBeforeReceipt ? '結果未確定を通知し再受付を促さない' : '受付済みを通知して保存した記録へ案内する'}`, async ({
+    page,
+  }) => {
+    let releaseGeneration!: () => void;
+    let notifyGeneration!: () => void;
+    const generationRequested = new Promise<void>((resolve) => {
+      notifyGeneration = resolve;
+    });
+    const generationGate = new Promise<void>((resolve) => {
+      releaseGeneration = resolve;
+    });
+    let generationPosts = 0;
+    const generation = generationFixtures(entryId, generationId).queued;
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: mockClientConfigFixture }),
+    );
+    await page.route('**/api/v1/entries', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({ status: 201, json: draftEntryDetailFixture })
+        : route.continue(),
+    );
+    await page.route('**/api/v1/entries?*', (route) =>
+      route.fulfill({ json: { items: [draftEntryDetailFixture], nextCursor: null } }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+      route.fulfill({
+        json: {
+          ...draftEntryDetailFixture,
+          latestGenerationId: generationId,
+          latestGeneration: generation,
+        },
+      }),
+    );
+    await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+      route.fulfill({ json: generation }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
+      generationPosts++;
+      notifyGeneration();
+      await generationGate;
+      return route.fulfill({
+        status: 202,
+        json: { generationId, status: 'queued', statusUrl: `/api/v1/generations/${generationId}` },
+      });
+    });
+    await page.goto('/new');
+    await page
+      .getByLabel('今日はどんな日だった？', { exact: true })
+      .fill('受付結果の通知を確認する架空の日記');
+    await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+    await generationRequested;
+    await page.getByRole('link', { name: '記録', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+    if (leaveBeforeReceipt) {
+      await clickAppDialogButton(page, '処理中です', '移動する');
+      await expectDefaultLibraryLocation(page);
+      await expect(page.locator('.app-notices').getByRole('status')).toContainText(
+        '漫画の受付結果が未確定です。',
+      );
+      releaseGeneration();
+    } else {
+      releaseGeneration();
+      await expectDefaultLibraryLocation(page);
+      await expect(page.locator('.app-notices').getByRole('status')).toContainText(
+        '日記を保存し、漫画を受け付けました。',
+      );
+    }
+    await expect(page.getByRole('link', { name: '漫画の受付を続ける' })).toHaveCount(0);
+    await page.getByRole('link', { name: '記録で確認する' }).click();
+    await expect(page).toHaveURL(`/entries/${entryId}`);
+    await expect(page.getByRole('heading', { name: '受付済み', exact: true })).toBeVisible();
+    expect(generationPosts).toBe(1);
+  });
+}

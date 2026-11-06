@@ -1,7 +1,7 @@
 import { useGenerationQuota, quotaAllowsGeneration } from './useGenerationQuota';
 import { DiaryDateField } from './DiaryDateField';
 import { DiaryBodyField } from './DiaryBodyField';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { createEntrySchema, type Entry } from '../../../shared/schemas';
 import { jstToday } from '../../../shared/date';
@@ -33,6 +33,12 @@ export function NewEntry({
   const location = useLocation();
   const requestId = useRef(crypto.randomUUID());
   const activeRef = useRef(true);
+  const generationNavigationRef = useRef<DiaryActivity['generationNavigation']>(undefined);
+  const reportActivity = useCallback(
+    (activity: DiaryActivity) =>
+      onActivityChange({ ...activity, generationNavigation: generationNavigationRef.current }),
+    [onActivityChange],
+  );
   const actionInFlightRef = useRef(false);
   const registrationPendingRef = useRef(false);
   const focusBodyAfterCaptchaCancelRef = useRef(false);
@@ -94,13 +100,13 @@ export function NewEntry({
 
   useLayoutEffect(() => {
     if (activeRef.current)
-      onActivityChange({
+      reportActivity({
         dirty,
         busy: busy || pendingSave !== null,
         failed: Boolean(error),
         entrySaveStarted,
       });
-  }, [busy, dirty, entrySaveStarted, error, onActivityChange, pendingSave]);
+  }, [busy, dirty, entrySaveStarted, error, reportActivity, pendingSave]);
 
   useLayoutEffect(() => {
     activeRef.current = true;
@@ -173,7 +179,7 @@ export function NewEntry({
             if (!activeRef.current || hasConfirmedExit())
               throw new DOMException('Entry save cancelled', 'AbortError');
             setEntrySaveStarted(true);
-            onActivityChange({ dirty, busy: true, failed: false, entrySaveStarted: true });
+            reportActivity({ dirty, busy: true, failed: false, entrySaveStarted: true });
           },
         });
       } catch (failure) {
@@ -182,10 +188,11 @@ export function NewEntry({
       }
       if (!activeRef.current) return;
       setSaved(entry);
-      onActivityChange({ dirty: false, busy: true, failed: false });
+      if (makeComic) generationNavigationRef.current = { stage: 'unrequested', entryId: entry.id };
+      reportActivity({ dirty: false, busy: true, failed: false });
     }
     if (!makeComic) {
-      onActivityChange({ dirty: false, busy: false, failed: false });
+      reportActivity({ dirty: false, busy: false, failed: false });
       if (!hasBlockedNavigation())
         navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
       return;
@@ -194,7 +201,7 @@ export function NewEntry({
       refreshOnlineStatus();
       setError('日記は保存しました。オフラインのため漫画の受付はしていません。');
       setGenerationFailureEntry(entry);
-      onActivityChange({ dirty: false, busy: false, failed: true });
+      reportActivity({ dirty: false, busy: false, failed: true });
       if (!hasBlockedNavigation())
         navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
       return;
@@ -211,13 +218,16 @@ export function NewEntry({
               : '利用枠を確認できないため、漫画の受付を停止しています。日記は保存しました。',
         );
         setGenerationFailureEntry(entry);
-        onActivityChange({ dirty: false, busy: false, failed: true });
+        reportActivity({ dirty: false, busy: false, failed: true });
         if (!hasBlockedNavigation())
           navigate(`/entries/${encodeURIComponent(entry.id)}`, { state: { draftSaved: true } });
         return;
       }
       try {
+        generationNavigationRef.current = { stage: 'requesting', entryId: entry.id };
+        reportActivity({ dirty: false, busy: true, failed: false });
         await generate(entry);
+        generationNavigationRef.current = { stage: 'accepted', entryId: entry.id };
       } catch (failure) {
         if (activeRef.current) setGenerationFailureEntry(entry);
         if (
@@ -232,7 +242,7 @@ export function NewEntry({
       }
     }
     if (!activeRef.current) return;
-    onActivityChange({ dirty: false, busy: false, failed: false });
+    reportActivity({ dirty: false, busy: false, failed: false });
     if (!hasBlockedNavigation())
       navigate(`/entries/${entry.id}`, {
         state: makeComic && config.dataMode === 'live' ? { startGeneration: true } : null,
@@ -258,6 +268,7 @@ export function NewEntry({
     }
     setSaveErrorIntent(null);
     setError('');
+    generationNavigationRef.current = makeComic ? { stage: 'saving', entryId: null } : undefined;
     setEntrySaveStarted(false);
     actionInFlightRef.current = true;
     setBusy(true);
@@ -331,7 +342,8 @@ export function NewEntry({
     try {
       await recheckGeneration(generationCheckEntry);
       if (activeRef.current) {
-        onActivityChange({ dirty: false, busy: false, failed: false });
+        generationNavigationRef.current = { stage: 'accepted', entryId: generationCheckEntry.id };
+        reportActivity({ dirty: false, busy: false, failed: false });
         if (!hasBlockedNavigation()) navigate(`/entries/${generationCheckEntry.id}`);
       }
     } catch (failure) {
