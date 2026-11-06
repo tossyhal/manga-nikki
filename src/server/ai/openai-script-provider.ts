@@ -7,6 +7,7 @@ import type {
   ScriptResult,
 } from './script-provider.ts';
 import { providerFailureOutcome, providerResponseMetadata } from './openai-attempt-result.ts';
+import { isOpenAIQuotaErrorCode } from './openai-quota-error.ts';
 
 export const openaiScriptModelProfile = {
   provider: 'openai',
@@ -126,18 +127,7 @@ export class OpenAIScriptProvider implements ScriptProvider {
       if (attemptId && options.attemptHooks)
         await options.attemptHooks.finish('script', options.callIndex, attemptId, outcome);
       const detail = error as { status?: unknown; code?: unknown; type?: unknown } | null;
-      const quota = [
-        'insufficient_quota',
-        'credit_balance_exhausted',
-        'billing_hard_limit_reached',
-        'organization_usage_limit_exceeded',
-        'organization_spend_limit_exceeded',
-        'project_spend_limit_exceeded',
-        'project_usage_limit_exceeded',
-      ];
-      const exhausted = [detail?.code, detail?.type].some(
-        (value) => typeof value === 'string' && quota.includes(value),
-      );
+      const exhausted = [detail?.code, detail?.type].some(isOpenAIQuotaErrorCode);
       throw new OpenAIScriptError(
         exhausted
           ? 'OPENAI_QUOTA_EXCEEDED'

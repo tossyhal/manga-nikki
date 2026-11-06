@@ -1,16 +1,16 @@
 # Stagingデプロイ運用
 
-この文書はstaging Workerの初期作成と、架空sample専用CDの運用を記録します。初期作成用資格情報は退役済みです。開発Supabaseのowner専用・読み取り確認は[開発DBの接続確認](DEV_DATABASE.md)を参照してください。Supabaseへのmigration適用や本番Workerの作成・配信は扱いません。
+この文書はstaging Workerの初期作成と、架空sample専用CDの運用を記録します。初期作成用資格情報は退役扱いです（確認範囲は下記の状態を参照）。開発Supabaseのowner専用・読み取り確認は[開発DBの接続確認](DEV_DATABASE.md)を参照してください。Supabaseへのmigration適用や本番Workerの作成・配信は扱いません。
 
 ## 2026-11-06時点の状態
 
-- `manga-nikki-staging` Workerは初期作成済みです。初期作成用Cloudflare tokenの失効とBitwarden上の`CLOUDFLARE_BOOTSTRAP_API_TOKEN`削除、GitHubの`BWS_BOOTSTRAP_SECRET_ID`削除はownerから完了報告を受けています。Cloudflare APIによる失効監査は行っていません。
+- `manga-nikki-staging` Workerは初期作成・初回配信済みです。初期作成用Cloudflare tokenの失効とBitwarden上の`CLOUDFLARE_BOOTSTRAP_API_TOKEN`削除はownerから完了報告を受けています。GitHubの`BWS_BOOTSTRAP_SECRET_ID`削除はGitHub APIのreadbackで確認済みです。Cloudflare APIによる失効監査は行っていません。
 - staging Environmentの`BWS_ACCESS_TOKEN`、`BWS_CLOUDFLARE_SECRET_ID`、`STAGING_WORKER_URL`は通常CD用です。Secret IDの実値はGitHubだけに置き、この文書やworkflowへ記載しません。
-- 公開先は`https://manga-nikki-staging.tossyhal.workers.dev`です。Repository variable`STAGING_SAMPLE_CD_ENABLED`は未設定のため、sample CDは現在無効です。
-- staging Environmentの許可branchを`develop`だけに切り替えるまでは、通常CDを有効化しないでください。
+- 公開先は`https://manga-nikki-staging.tossyhal.workers.dev`です。Repository variable`STAGING_SAMPLE_CD_ENABLED=true`でsample CDは有効です。
+- `develop`はPR必須で、必須checkは`database`と`check`です。staging Environmentの許可branchは`develop`だけです。
 - 旧`bootstrap-staging.yml`は初期作成記録として残しています。`BWS_BOOTSTRAP_SECRET_ID`を削除済みのため退役扱いとし、再実行しません。
 
-## 通常staging sample CDの有効化
+## 通常staging sample CDの運用
 
 このworkflowは公開の架空sampleだけを配信します。Cloudflare Accessを設定せず、閲覧者がアクセスできるworkers.dev URLに公開します。日記本文・個人DB・Supabase/Auth/Turnstile・AI秘密情報は使いません。実AI生成、Queue、Cron、production配信は行いません。
 
@@ -19,21 +19,23 @@
 | 設定場所 | 名前 | 内容 |
 | --- | --- | --- |
 | GitHub staging Environment Secret | `BWS_ACCESS_TOKEN` | `manga-nikki-dev-cd`のBitwarden machine account token |
-| GitHub staging Environment Variable | `BWS_CLOUDFLARE_SECRET_ID` | Bitwardenにあるstaging Worker専用Cloudflare API tokenのSecret ID（UUID） |
+| GitHub staging Environment Variable | `BWS_CLOUDFLARE_SECRET_ID` | Bitwardenにあるstaging Worker用Cloudflare API tokenのSecret ID（UUID）。対象scopeの独立監査は未実施 |
 | GitHub staging Environment Variable | `STAGING_WORKER_URL` | `https://manga-nikki-staging.tossyhal.workers.dev` |
-| GitHub Repository Variable | `STAGING_SAMPLE_CD_ENABLED` | ownerが全条件確認後に`true`へ設定。未設定・他の値は無効 |
+| GitHub Repository Variable | `STAGING_SAMPLE_CD_ENABLED` | `true`で有効。未設定・他の値は無効（2026-11-06時点で`true`） |
 
 Bitwarden machine accountは`manga-nikki-dev` project全体をread-onlyで読めるため、project内にある既存の開発用Supabase secret等も読める権限です。sample CDのworkflowは`BWS_CLOUDFLARE_SECRET_ID`に指定されたCloudflare token 1件だけをActionへ要求し、Supabase secretやAI secretを取得するstepはありません。本番用secretはこのdev projectへ保存しないでください。通常のCloudflare API token自体は既存`manga-nikki-staging`だけを更新できるscopeにします。
 
-### 有効化前チェック
+### 初回有効化の手順と履歴
 
-1. このPRをownerがレビューし、`main`へMerge commitで取り込みます。
-2. 初期作成用Cloudflare tokenが失効済みで、Bitwardenからも削除済みであることを確認します。GitHubの`BWS_BOOTSTRAP_SECRET_ID`が残っていないことも確認します。
-3. `develop`を`main`のHEADから作成します。`develop`のRulesetでPR必須、直接更新・force push・削除を禁止し、必須checkを`database`と`check`に設定します。checkの提供元はGitHub Actions app（ID `15368`）に固定します。
-4. GitHubの`staging` EnvironmentのDeployment branches and tagsをselected branchesにし、`develop`だけを許可します。ここで上記の通常CD用secretとvariablesを確認します。
-5. Ownerが公開URL・Worker名・token scope・ruleset・Environment branch制限を確認してから、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`を明示設定します。
+以下は初回導入の履歴です。再有効化時は既存の`develop`等を再作成せず、保護設定・Environment・変数を確認してください。
 
-variableの設定だけでは新しいworkflow runを起動しません。初回配信は[CI workflow](https://github.com/tossyhal/manga-nikki/actions/workflows/ci.yml)を開き、**Run workflow**でbranch`develop`を選んで実行します。`database`と`check`が成功し、最後に`staging-deploy`が配信・smoke確認を完了したことを確認してください。`main`へのmergeだけではsample公開は始まりません。
+1. [実装PR#45](https://github.com/tossyhal/manga-nikki/pull/45)を`main`へMerge commitで取り込みました。
+2. 初期作成用Cloudflare tokenの失効とBitwardenからの削除はownerから報告を受けました。GitHubの`BWS_BOOTSTRAP_SECRET_ID`削除はGitHub APIのreadbackで確認しました。
+3. `develop`を`main`のHEADから作成しました。RulesetでPRを必須とし、直接更新・force push・削除を禁止しました。必須checkを`database`と`check`に設定し、提供元をGitHub Actions app（ID `15368`）に固定しました。
+4. GitHubの`staging` EnvironmentはDeployment branches and tagsをselected branchesに設定し、`develop`だけを許可しました。通常CD用secretとvariablesを設定しました。
+5. Repository variable`STAGING_SAMPLE_CD_ENABLED=true`を設定しました。tokenの対象scopeが他Workerを拒否することは独立監査していません。
+
+再有効化後の配信は、手動実行または次のdevelop pushで開始します。variableの設定だけでは新しいworkflow runを起動しません。手動実行は[CI workflow](https://github.com/tossyhal/manga-nikki/actions/workflows/ci.yml)を開き、**Run workflow**でbranch`develop`を選びます。`database`と`check`が成功し、最後に`staging-deploy`が配信・smoke確認を完了したことを確認してください。`main`へのmergeだけではsample公開は始まりません。
 
 以後は`develop`へのpush後、`database`と`check`の両方が成功した場合だけstaging jobへ進みます。手動実行も`develop`からに限ります。PR、`main`、他branchではBitwarden/Cloudflare credentialsを取得しません。staging jobは`manga-nikki-deploy-staging`で直列化し、最大100件までpending runを待機させます。待機はConcurrency groupへ入った順のFIFOですがSHA順ではありません。各jobはdeploy直前に`develop` HEADを再確認し、実行SHAが最新HEADと異なればskipします。queueが100件で埋まると追加runはcancelされるため、その場合はqueue解消後に最新版を手動実行します。
 
@@ -52,6 +54,14 @@ variableの設定だけでは新しいworkflow runを起動しません。初回
 - 最新のcommitを配信し直す場合は[CI workflow](https://github.com/tossyhal/manga-nikki/actions/workflows/ci.yml)を開き、**Run workflow**から`develop`を選びます。古いrunの再実行はHEAD guardによりskipされることがあります。
 - rollbackが必要な場合は、最後に正常確認したversion IDへCloudflare管理画面の別操作で戻します。自動rollbackはありません。
 
+## 初回配信記録（2026-11-06）
+
+- ユーザーの一般公開承認を受け、架空sample専用のstaging Workerを公開しました。[成功したActions実行](https://github.com/tossyhal/manga-nikki/actions/runs/42173608290)ではdatabase、E2E/PWAを含むcheck、staging-deployがすべて成功しました。先行実行[42172925511](https://github.com/tossyhal/manga-nikki/actions/runs/42172925511)はUbuntuのフォント導入に時間がかかったため、deploy job開始前にキャンセルし、新しいrunで配信しました。
+- 初回配信SHAは`80188a02c2f524febcd6f5164223b4b1059284b2`です。これは履歴記録であり、現在の公開commitは公開URLの`/__deployment.json` markerで確認してください。
+- 認証なしのGETでhealthは`ok`、configは`dataMode=sample`・`generationAvailable=false`、markerは初回配信SHAと一致しました。manifestとService Workerも取得できました。
+- デスクトップブラウザでホーム画面を表示し、「漫画を読む」から架空sampleの漫画詳細・4コマ説明・拡大ボタンを確認しました。確認した画面ではページエラーはありません。Android/iPhone実機は未確認です。
+- DB/Auth接続、本番公開、実AI生成は未実施です。通常のdev用Cloudflare tokenで配信できましたが、他Workerへのアクセスが拒否されることは独立監査していません。
+
 ## 初期Worker作成の履歴（退役済み）
 
 初期Worker作成は完了し、以後の運用はこの文書の通常staging sample CD手順を使います。旧bootstrap workflowと手順は再実行しません。
@@ -59,7 +69,7 @@ variableの設定だけでは新しいworkflow runを起動しません。初回
 - [初期Worker作成run](https://github.com/tossyhal/manga-nikki/actions/runs/42084008640)
 - [通常token読取check run](https://github.com/tossyhal/manga-nikki/actions/runs/42085998783)
 - [退役前の初期設定手順](https://github.com/tossyhal/manga-nikki/blob/0789d08ba24790bf100ac3597467ff4bf17957d8/docs/DEPLOYMENT.md)
-- 初期作成用Cloudflare tokenの失効、Bitwarden上の旧secret削除、GitHubの旧Secret ID削除はownerから完了報告を受けています。Cloudflare API監査は未実施です。
+- 初期作成用Cloudflare tokenの失効とBitwarden上の旧secret削除はownerから完了報告を受けています。GitHubの旧Secret ID削除はGitHub APIのreadbackで確認済みです。Cloudflare API監査は未実施です。
 - devのCloudflare Accessは導入しません。sample URLは公開し、架空データだけを扱います。
 
 ## 公式資料

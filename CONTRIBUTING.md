@@ -1,6 +1,6 @@
 # 開発手順（CONTRIBUTING）
 
-PR#29までの変更は`main`へ統合済みです。PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約を追加していますが、private画像保存・assets登録・成功確定RPCは未実装です。新規実AI生成には保存handlerと復旧callbackの両方が必要です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+PR#29までの変更は`main`へ統合済みです。現在のbranchではOpenAI白黒生成のQueue経路にprivate画像保存・assets登録・成功確定RPC・保存復旧を接続しています。実AI生成を受付可能にするには環境・予算・認証・Queue等の追加設定が必要で、共有DBへのmigration適用と実AI検証は未実施です。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 
 ## 1. 最初にやること（ツールの準備）
 
@@ -81,15 +81,19 @@ pnpm dev
 
 初期設定は[動作モード対応表](docs/ARCHITECTURE.md#mode-matrix)の`local-mock`です。秘密情報（APIキーなど）を用意せず、localhostで入力→固定漫画→履歴を確認します。実クラウドへの接続は[OPERATIONS](docs/OPERATIONS.md)を参照してください。PowerShellで`pnpm.ps1`が拒否されたら`pnpm.cmd`を試します。
 
-`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`dev.vars.local-connected.example`を編集し、`.dev.vars.local-connected`へコピーして、開発用Supabaseにレビュー済みmigrationを適用してから次のように起動します。Turnstile検証用secretと許可hostnameがない状態では生成受付が停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
+`local-connected`は開発用Supabase/Authと固定mock Queue経路の結合確認に限ります。必要な場合だけ`.env.example`を`.env.local`へ、`dev.vars.local-connected.example`を`.dev.vars.local-connected`へ先にコピーし、コピー先だけ値を設定してから、開発用Supabaseにレビュー済みmigrationを適用して起動します。コピー元のexampleには秘密情報を書かないでください。`.env.local`にはブラウザー用のSupabase URL・publishable key・Turnstile site keyを、`.dev.vars.local-connected`にはサーバー用設定とsecret keyを設定します。サーバー専用secretをブラウザー用設定へ入れないでください。
+
+`pnpm dev:connected`は`.dev.vars.local-connected`が存在しない場合、Viteを起動する前に停止します。`.env.local`は通常の`pnpm dev`や`pnpm build`にも読み込まれます。初期設定の`local-mock`は画面を表示するだけでは匿名Authを開始しないため、`.env.local`を接続確認のたびに退避する必要はありません。サンプルpreviewには`pnpm build:staging`を使います。
 
 ```sh
-CLOUDFLARE_ENV=local-connected pnpm dev
+pnpm dev:connected
 ```
+
+このモードでは日記をSupabaseへ保存・読み込みます。漫画は固定mockのみで、実AIは呼び出しません。新しい匿名セッションは、利用条件への同意後、登録用CAPTCHAの確認が必要です。Turnstile検証用secretと許可hostnameがない場合、生成受付は停止します。共有DBの設定・migration適用やremote Queue作成はこの手順に含みません。
 
 ## 3. 初期基盤の範囲
 
-以下は初期基盤を作った時点の担当範囲です。日記DB・RLS/RPC・mock Queueに加え、PR#41ではOpenAI白黒生成のQueue接続と保存復旧callback契約まで実装しています。共有DB適用、private画像保存handler、実生成完了RPC、実環境検証は未完了です。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackがdurableな保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存系handlerが不足すれば新規受付を止めますが、既存queued jobと`reserved`枠はreleaseせず、ready復帰後に再配送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。現在の状態は[PLAN](docs/PLAN.md)を参照してください。
+以下は初期基盤を作った時点の担当範囲です。現在のbranchにはOpenAI白黒生成のQueue経路、private画像保存・assets登録・完了確定RPC・保存復旧runtimeがあります。保存が一時失敗したjobはQueueからackして`saving`に保持し、Cronの復旧callbackが保存情報から続行します。復旧callbackは新しいAI呼出しをしてはいけません。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。共有DB適用、実AI課金・品質、実環境のTurnstile / Queue / Cronは未確認です。現在の状態と別承認が必要なdemo準備は[PLAN](docs/PLAN.md)と[OPERATIONS](docs/OPERATIONS.md)を参照してください。
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md)のclient/server/shared構成と、[API](docs/API.md)の共有Zod schemaを用意する。
 - 4ルート、health/config、モックの保存・生成APIで日記入力→固定4コマ→保存・再取得を通す。
@@ -112,12 +116,13 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 | コマンド | 用途 | いつ用意するか |
 |---|---|---|
 | `pnpm dev` | 画面とAPIの開発サーバー | 実装済み |
+| `pnpm dev:connected` | 設定した開発用Supabaseへ接続するローカル開発サーバー | 実装済み |
 | `pnpm lint` | 静的ルール検査 | 実装済み |
 | `pnpm typecheck` | TypeScriptの型検査 | 実装済み |
 | `pnpm test` | Vitestの非watch実行 | 実装済み |
 | `pnpm test:e2e` | PlaywrightのモックE2E | 実装済み |
 | `pnpm build` | ビルド検証。公開しない | 実装済み |
-| `pnpm build:staging` / `pnpm build:production` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
+| `pnpm build:staging` / `pnpm build:production` / `pnpm build:demo` | 対象環境を固定したビルドと成果物検査。公開しない | 実装済み |
 | `pnpm test:release-environment` | 隔離fixtureで環境変数の混入を検査 | 実装済み |
 | `pnpm format` / `pnpm format:check` | 整形 / 整形の検査 | 実装済み |
 | `pnpm test:db` | 隔離PostgreSQLの日記RLS/RPC・同時要求 | 実装済み（PostgreSQL 16が必要） |
@@ -126,17 +131,21 @@ mise lock --platform linux-x64,windows-x64,macos-arm64,macos-x64
 
 実AIは通常CIで呼びません。未実装のコマンドを確認済みと報告せず、lockfile不一致は版・ブランチの差を確認します。`--frozen-lockfile`を外して再生成しません。Playwrightのブラウザ導入は採用版の公式手順に従います。
 
+`pnpm test:e2e`は通常開発サーバー（5173）と分けた4176で専用サーバーを起動します。既存のサーバーは再利用しないため、4176を別のプロセスが使用中ならE2Eは起動に失敗します。専用ポートを変える場合は`PLAYWRIGHT_PORT`を設定してください。E2E専用サーバーは通常dev serverと別のViteキャッシュを使います。
+
 ### 環境別ビルド
 
-staging / productionのビルドは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
+staging / productionのsample buildと隔離demo buildは対象環境を明示し、`dist/`へ成果物を作ります。CloudflareやSupabaseへの接続・公開は行いません。
 
 ```sh
 pnpm build:staging
 pnpm build:production
-pnpm preview
+pnpm build:demo
 ```
 
-Worker設定は両環境とも`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。対象環境ごとのブラウザ公開値が必要な場合は、`.env.staging.example`または`.env.production.example`を`.env.staging.local`または`.env.production.local`へコピーして設定します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、別途承認されたサーバー専用設定を使います。
+staging / productionは引き続き`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
+
+staging / productionの公開値は`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして設定します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
 
 `pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けず、本番環境には接続しません。必要なGitHub/Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 
@@ -218,6 +227,6 @@ miseの導入・シェル有効化・lockfileの説明は2026-10-27に[公式導
 
 - `local-mock`では本文と固定結果を開発Workerのメモリだけに保存します。ブラウザ再読込では取得できますが、開発サーバー再起動やHMRで消える場合があります。
 - `local-mock`で表示する漫画は入力内容とは無関係の固定サンプルです。入力本文は別に保存します。実データを入れないでください。
-- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、保存復旧callback契約を実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、クラウドStorage API、保存handler、実生成の成功確定RPC、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実生成画像のprivate Storage保存・署名URL発行は未接続です。保存handlerまたは復旧callbackのどちらか一方でも未設定のWorkerでは実AI生成を503で停止します。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存handlerの一時障害はjobを`saving`のまま保持し、Cronは復旧callbackがあればGENERATION_ENABLEDやOpenAI API keyがなくても保存を再開します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
+- 最新branchでは日記CRUD、生成受付、quota / status API、固定mock Queue、期限削除Scheduled handler、OpenAI白黒profileとQueue runner、private画像保存・署名URL・保存復旧runtimeを実装しています。過去の部分的なローカル結合確認は[README](README.md)を参照してください。共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境のStorage API、実AI課金と品質、Android Chrome・iPhone SafariのHTTPS実機は未確認です。期限削除serviceはStorageのobject削除に成功した後でDBのasset・job・entryを削除します。実AI受付は保存handlerと復旧callbackをdefault Workerへ注入済みですが、staging/productionの`sample` / `mock` / `GENERATION_ENABLED=false`とQueue未設定は維持しています。すでにqueuedのjobと`reserved`枠は保持し、ready条件復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・callbackごと120秒です。PWAの静的キャッシュ、更新案内、入力保護は実装済みです。サンプルモードは個人APIを認証せず拒否します。
 - `pnpm preview`はsample配信向けです。確認前に`pnpm build:staging`を実行してください。コンパイル済みWorkerはモック認証を拒否するため、日記保存の動作確認には`pnpm dev`を使います。
 - E2E初回は`pnpm exec playwright install chromium`、実行は`pnpm test:e2e`です。Windowsの実機確認はCIの結果と分けて報告します。

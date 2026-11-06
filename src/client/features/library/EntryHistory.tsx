@@ -60,22 +60,30 @@ function EntryHistoryItem({
   backTo?: string;
 }) {
   const preview = useEntryPreview(entry);
-  const staleLabel =
-    preview.generation?.status === 'succeeded'
-      ? '編集前の漫画'
-      : preview.generation
-        ? `${generationLabel(preview.generation.status) ?? '状態未確認'}（編集前）`
-        : '編集済み';
+  const currentGeneration =
+    preview.generation?.entryRevision === entry.revision ? preview.generation : null;
+  const hasOlderLatest = Boolean(
+    preview.generation && preview.generation.entryRevision < entry.revision,
+  );
+  const staleLabel = preview.comicGeneration ? '編集前の漫画' : '編集済み';
   const statusLabel = showStatus
     ? preview.isStale
-      ? staleLabel
-      : preview.generation
-        ? generationLabel(preview.generation.status)
-        : entry.latestGenerationId
-          ? (preview.error ?? '状態未確認')
-          : '下書き'
+      ? currentGeneration
+        ? `${generationLabel(currentGeneration.status) ?? '状態未確認'}・編集前の漫画あり`
+        : staleLabel
+      : hasOlderLatest
+        ? staleLabel
+        : currentGeneration
+          ? generationLabel(currentGeneration.status)
+          : entry.latestGenerationId
+            ? preview.error
+              ? '状態を確認できません'
+              : '状態を確認しています'
+            : '下書き'
     : null;
-  const previewError = preview.generation && preview.error ? preview.error : null;
+  const previewError =
+    preview.imageError ??
+    (preview.error && (preview.generation || preview.comicGeneration) ? preview.error : null);
 
   return (
     <li className="entry-history-item">
@@ -99,6 +107,19 @@ function EntryHistoryItem({
         </span>
         <Icon name="chevron-right" size={20} />
       </Link>
+      {preview.imageError && (
+        <button
+          className="entry-history-image-retry"
+          type="button"
+          aria-label="漫画画像を再読み込み"
+          aria-disabled={preview.isLoading}
+          onClick={() => {
+            if (!preview.isLoading) preview.retryImage();
+          }}
+        >
+          <Icon name="refresh" size={18} />
+        </button>
+      )}
     </li>
   );
 }

@@ -43,7 +43,9 @@ export function Comic({
   imageErrors = [],
   imageLoading = false,
   imageRetrying = false,
+  imageResetVersion = 0,
   onRetryImages,
+  onImageError,
   titleAs: Title = 'h2',
   hideTitle = false,
 }: {
@@ -54,20 +56,28 @@ export function Comic({
   imageErrors?: string[];
   imageLoading?: boolean;
   imageRetrying?: boolean;
+  imageResetVersion?: number;
   onRetryImages?: () => void;
+  onImageError?: (assetId: string) => boolean;
   /** 漫画タイトルの見出しレベル。周囲の見出し階層に合わせて選ぶ */
   titleAs?: 'h2' | 'h3';
   /** 周囲に同じ漫画タイトルの見出しがある場合は重複を避ける */
   hideTitle?: boolean;
 }) {
   const ids = comic.visual.kind === 'page' ? [comic.visual.assetId] : comic.visual.assetIds;
-  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
-  const [failedImageIds, setFailedImageIds] = useState<string[]>([]);
+  const [zoomed, setZoomed] = useState<{ assetId: string; alt: string } | null>(null);
+  const [failedImageUrls, setFailedImageUrls] = useState<
+    Record<string, { src: string; resetVersion: number }>
+  >({});
   const zoomDialogRef = useRef<HTMLDialogElement>(null);
   const imageFailed = (id: string) =>
     imageError ||
     imageErrors.includes(id) ||
-    failedImageIds.includes(id) ||
+    Boolean(
+      images[id] &&
+      failedImageUrls[id]?.src === images[id] &&
+      failedImageUrls[id]?.resetVersion === imageResetVersion,
+    ) ||
     (!images[id] && !imageLoading);
   const pageImageFailed = comic.visual.kind === 'page' && imageFailed(comic.visual.assetId);
   const anyImageFailed = ids.some(imageFailed);
@@ -97,18 +107,22 @@ export function Comic({
                   className="comic-image-button"
                   type="button"
                   aria-label={`${alt}を拡大`}
-                  onClick={() => setZoomed({ src, alt })}
+                  onClick={() => setZoomed({ assetId: id, alt })}
                 >
                   <img
                     src={src}
                     loading="lazy"
                     decoding="async"
                     alt={alt}
-                    onError={() =>
-                      setFailedImageIds((current) =>
-                        current.includes(id) ? current : [...current, id],
-                      )
-                    }
+                    onError={() => {
+                      if (onImageError?.(id)) return;
+                      const src = images[id];
+                      if (src)
+                        setFailedImageUrls((current) => ({
+                          ...current,
+                          [id]: { src, resetVersion: imageResetVersion },
+                        }));
+                    }}
                   />
                 </button>
               ) : (
@@ -223,7 +237,32 @@ export function Comic({
             >
               <Icon name="close" />
             </button>
-            <img src={zoomed.src} alt={zoomed.alt} />
+            {imageFailed(zoomed.assetId) ? (
+              <output className="comic-image-placeholder is-error" aria-live="polite">
+                <span>漫画の画像を表示できません。</span>
+                <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
+              </output>
+            ) : images[zoomed.assetId] ? (
+              <img
+                src={images[zoomed.assetId]}
+                alt={zoomed.alt}
+                onError={() => {
+                  if (onImageError?.(zoomed.assetId)) return;
+                  const src = images[zoomed.assetId];
+                  if (src)
+                    setFailedImageUrls((current) => ({
+                      ...current,
+                      [zoomed.assetId]: { src, resetVersion: imageResetVersion },
+                    }));
+                }}
+              />
+            ) : (
+              <output className="comic-zoom-status" aria-live="polite">
+                {imageLoading
+                  ? '画像を読み込んでいます…'
+                  : '画像を表示できません。閉じて画像を再読み込みしてください。'}
+              </output>
+            )}
           </div>
         )}
       </dialog>

@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
+import { generationFixtures, panelsComic } from '../src/shared/fixtures';
+import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
 import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
 
@@ -68,6 +69,18 @@ async function dateTextMetrics(page: Page, selector: string) {
       color: style.color,
     };
   });
+}
+
+async function expectMainToFit(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const main = document.querySelector('#main');
+        if (!(main instanceof HTMLElement)) throw new Error('本文領域がありません');
+        return main.scrollHeight - main.clientHeight;
+      }),
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 async function shellGeometry(page: Page) {
@@ -242,6 +255,136 @@ test('pathname遷移ではmainへfocusし、記録タブのquery更新ではtab 
   await expect(listTab).toHaveAttribute('aria-selected', 'true');
 });
 
+test('詳細メニューは外側操作とTab離脱で閉じ、Escapeと矢印キーを保つ', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  const edit = page.getByRole('menuitem', { name: '日記を編集' });
+  const remove = page.getByRole('menuitem', { name: '日記を削除' });
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await expect(edit).toBeFocused();
+  await page.locator('.detail-title').click();
+  await expect(menu).toHaveCount(0);
+
+  await trigger.click();
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(edit).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(remove).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(menu).toHaveCount(0);
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await trigger.click();
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('null relatedTargetのblur後にtriggerを再タップしてもメニューを再度開かない', async ({
+  page,
+}) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  await trigger.click();
+  await expect(menu).toBeVisible();
+
+  const sawNullRelatedTarget = await page.evaluate(() => {
+    const triggerButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="その他の操作"]',
+    );
+    const menuItem = document.querySelector<HTMLButtonElement>('[role="menuitem"]');
+    const anchor = document.querySelector<HTMLDivElement>('.detail-menu-anchor');
+    if (!triggerButton || !menuItem || !anchor) throw new Error('詳細メニューがありません');
+    let sawNullRelatedTarget = false;
+    anchor.addEventListener(
+      'focusout',
+      (event) => {
+        if (event.target === menuItem) sawNullRelatedTarget = event.relatedTarget === null;
+      },
+      true,
+    );
+    menuItem.focus();
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', button: 0 }),
+    );
+    triggerButton.dispatchEvent(
+      new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', button: 0 }),
+    );
+    menuItem.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    triggerButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return sawNullRelatedTarget;
+  });
+  expect(sawNullRelatedTarget).toBe(true);
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('null relatedTargetのblur後も編集と削除のmenuitemを実行できる', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.goto(`/entries/${entryId}`);
+
+  const trigger = page.getByRole('button', { name: 'その他の操作' });
+  const menu = page.getByRole('menu', { name: '記録の操作' });
+  const clickItemAfterNullBlur = async (name: string) =>
+    page.evaluate((itemName) => {
+      const anchor = document.querySelector<HTMLDivElement>('.detail-menu-anchor');
+      const item = [
+        ...(anchor?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+      ].find((button) => button.textContent?.includes(itemName));
+      if (!anchor || !item) throw new Error(`menuitem「${itemName}」がありません`);
+      let sawNullRelatedTarget = false;
+      anchor.addEventListener(
+        'focusout',
+        (event) => {
+          if (event.target instanceof HTMLElement)
+            sawNullRelatedTarget = event.relatedTarget === null;
+        },
+        true,
+      );
+      item.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', button: 0 }),
+      );
+      item.dispatchEvent(
+        new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', button: 0 }),
+      );
+      (document.activeElement as HTMLElement | null)?.dispatchEvent(
+        new FocusEvent('focusout', { bubbles: true, relatedTarget: null }),
+      );
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return sawNullRelatedTarget;
+    }, name);
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  expect(await clickItemAfterNullBlur('日記を編集')).toBe(true);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeVisible();
+
+  await page.reload();
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  expect(await clickItemAfterNullBlur('日記を削除')).toBe(true);
+  await expect(page.getByRole('dialog', { name: 'この日記を削除しますか？' })).toBeVisible();
+});
+
 test('primary画面と詳細画面の下部ナビをviewport下端から12px離す', async ({ page }) => {
   await installMockUiRoutes(page);
 
@@ -260,7 +403,7 @@ test('primary画面と詳細画面の下部ナビをviewport下端から12px離�
     const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
-      const expectedWidth = Math.min(390, viewport.width - 40);
+      const expectedWidth = viewport.width >= 960 ? 360 : Math.min(390, viewport.width - 40);
       await expect
         .poll(async () => {
           const bounds = await nav.boundingBox();
@@ -305,7 +448,7 @@ test('primary画面と詳細画面の下部ナビをviewport下端から12px離�
 test('Home・入力・記録・詳細は主要幅で横にはみ出さない', async ({ page }) => {
   await installMockUiRoutes(page);
 
-  const widths = [1280, 430, 393, 320];
+  const widths = [1440, 1280, 800, 640, 430, 393, 320];
   await page.setViewportSize({ width: 320, height: 844 });
   const paths = ['/', '/new', '/library', `/entries/${entryId}`];
   for (const path of paths) {
@@ -349,6 +492,196 @@ test('Home・入力・記録・詳細は主要幅で横にはみ出さない', a
       }
     }
   }
+});
+
+test('デスクトップではページ幅を使い、漫画4コマを2列で表示する', async ({ page }) => {
+  await installMockUiRoutes(page, makeEntries(20));
+
+  const viewportWidths = [1280, 1440];
+  for (const width of viewportWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+
+    const shell = await page.locator('.app-shell').boundingBox();
+    const home = await page.locator('.home-page').boundingBox();
+    const todaySection = await page.locator('.today-section').boundingBox();
+    const recentRecords = await page.locator('.recent-records').boundingBox();
+    expect(shell?.width).toBe(1120);
+    expect(shell?.x).toBe((width - 1120) / 2);
+    expect(home?.width).toBe(960);
+    expect(todaySection).not.toBeNull();
+    expect(recentRecords).not.toBeNull();
+    expect((todaySection?.x ?? 0) + (todaySection?.width ?? 0)).toBeLessThan(recentRecords?.x ?? 0);
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+      .toBeLessThanOrEqual(width);
+    await expectMainToFit(page);
+    const homeDate = await dateTextMetrics(page, '.home-date');
+
+    await page.goto('/new');
+    const newEntry = await page.locator('.new-entry-page').boundingBox();
+    const diary = await page.locator('.entry-editor-card').boundingBox();
+    expect(newEntry?.width).toBe(960);
+    expect(diary?.width).toBeGreaterThanOrEqual(900);
+    expect(await dateTextMetrics(page, '.date-display time')).toEqual(homeDate);
+    await expectMainToFit(page);
+
+    await page.goto('/library');
+    const calendar = await page.locator('.library-calendar').boundingBox();
+    const selectedDay = await page.locator('.library-day-section').boundingBox();
+    expect(calendar).not.toBeNull();
+    expect(selectedDay).not.toBeNull();
+    expect((calendar?.x ?? 0) + (calendar?.width ?? 0)).toBeLessThan(selectedDay?.x ?? 0);
+    expect(calendar?.height).toBeLessThanOrEqual(320);
+    expect(selectedDay?.height).toBeLessThanOrEqual(360);
+    await expectMainToFit(page);
+
+    await page.getByRole('tab', { name: 'リスト' }).click();
+    await expect(page.getByRole('tabpanel', { name: 'リスト' })).toBeVisible();
+    const listCards = page.locator('.library-list-records .entry-history-list .entry-history-card');
+    await expect(listCards).toHaveCount(3);
+    const listCardBounds = await listCards.evaluateAll((cards) =>
+      cards.map((card) => card.getBoundingClientRect().left),
+    );
+    expect(new Set(listCardBounds).size).toBe(3);
+    await expectMainToFit(page);
+  }
+
+  const panelGeneration: Generation = {
+    ...generationFixtures(entryId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').succeeded,
+    comic: panelsComic,
+  };
+  const panelEntry: EntryDetail = {
+    ...detailFixture,
+    latestGenerationId: panelGeneration.id,
+    latestGeneration: panelGeneration,
+  };
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) =>
+    route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: `${today}T15:00:00.000Z`,
+        generationAvailable: true,
+      },
+    }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: panelEntry }));
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00.000Z' },
+    }),
+  );
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.comic.is-panels .comic-panel-card')).toHaveCount(4);
+  const panelGrid = await page
+    .locator('.comic.is-panels .comic-images')
+    .evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+  expect(panelGrid).toBe(2);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(1280);
+});
+
+test('短いデスクトップ画面の記録ビューは本文領域に収まる', async ({ page }) => {
+  await installMockUiRoutes(page, makeEntries(20));
+  await page.setViewportSize({ width: 1366, height: 650 });
+  await page.goto('/library');
+
+  const toolbarCenters = await page.locator('.library-view-toolbar').evaluate((toolbar) => {
+    const tabs = toolbar.querySelector('.library-view-tabs');
+    const refresh = toolbar.querySelector('.library-refresh-button');
+    if (!tabs || !refresh) throw new Error('記録ツールバーの要素がありません');
+    const centerY = (element: Element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top + bounds.height / 2;
+    };
+    return { tabs: centerY(tabs), refresh: centerY(refresh) };
+  });
+  expect(Math.abs(toolbarCenters.tabs - toolbarCenters.refresh)).toBeLessThanOrEqual(0.5);
+
+  const expectLibraryToFit = async (viewSelector: string) => {
+    await expectMainToFit(page);
+    await expect(page.locator('.library-page')).toHaveCSS('min-height', '0px');
+    await expect(page.locator(viewSelector)).toHaveCSS('min-height', '0px');
+  };
+
+  await expect(page.locator('.library-calendar')).toBeVisible();
+  await expectLibraryToFit('.library-calendar-view');
+
+  await page.getByRole('tab', { name: 'リスト' }).click();
+  await expect(page.getByRole('tabpanel', { name: 'リスト' })).toBeVisible();
+  await expectLibraryToFit('.library-list-view');
+
+  await page.route('**/api/v1/entries**', (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request-id',
+          retryable: true,
+        },
+      },
+    }),
+  );
+  await page.goto('/library');
+  await expect(page.locator('.library-tab-panel:not([hidden]) .library-state-view')).toBeVisible();
+  await expectLibraryToFit('.library-tab-panel:not([hidden]) .library-state-view');
+});
+
+test('960x540の保存エラー時は本文をスクロールできCTAと下部ナビを離す', async ({ page }) => {
+  await installMockUiRoutes(page);
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request-id',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.setViewportSize({ width: 960, height: 540 });
+  await page.goto('/new');
+  await page
+    .getByLabel('今日はどんな日だった？', { exact: true })
+    .fill('短い画面で保存エラーを確認する日記。');
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  const errorCard = page.locator('.save-error-card');
+  const retry = page.getByRole('button', { name: 'もう一度保存' });
+  await expect(errorCard).toBeVisible();
+  await expect(retry).toBeEnabled();
+  await errorCard.scrollIntoViewIfNeeded();
+  await expect(errorCard).toBeInViewport();
+  await retry.scrollIntoViewIfNeeded();
+  await expect(retry).toBeInViewport();
+
+  const layout = await page.evaluate(() => {
+    const main = document.querySelector('#main');
+    const action = document.querySelector('.primary-action-row > .button');
+    const nav = document.querySelector('.bottom-nav');
+    if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement) || !nav)
+      throw new Error('本文領域、保存操作、または下部ナビがありません');
+    return {
+      mainOverflow: main.scrollHeight - main.clientHeight,
+      actionBottom: action.getBoundingClientRect().bottom,
+      navTop: nav.getBoundingClientRect().top,
+    };
+  });
+  expect(layout.mainOverflow).toBeGreaterThan(0);
+  expect(layout.navTop - layout.actionBottom).toBeGreaterThanOrEqual(23.5);
 });
 
 test('通常の高さではHome・入力・6週カレンダー・20件一覧にスクロールを出さない', async ({
@@ -404,7 +737,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
       }
     } else if (path === '/new') {
       const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
-      const cta = page.locator('.primary-action-dock > .button');
+      const cta = page.locator('.primary-action-dock > .primary-action-row > .button');
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await expect(diary).toBeVisible();
@@ -497,7 +830,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
 
   const dateControl = page.locator('.date-control');
   const card = page.locator('.entry-editor-card');
-  const primaryAction = page.locator('.primary-action-dock > .button');
+  const primaryAction = page.locator('.primary-action-dock > .primary-action-row > .button');
   await expect(dateControl).toBeVisible();
   await expect(card).toBeVisible();
   await expect(primaryAction).toBeEnabled();
@@ -515,7 +848,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
     return {
       date: bounds('.date-control'),
       card: bounds('.entry-editor-card'),
-      action: bounds('.primary-action-dock > .button'),
+      action: bounds('.primary-action-dock > .primary-action-row > .button'),
       mainBottom: mainBounds.bottom,
     };
   });
@@ -526,7 +859,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
   await expect(primaryAction).toBeInViewport();
   const scrolledLayout = await page.evaluate(() => {
     const main = document.querySelector('#main');
-    const action = document.querySelector('.primary-action-dock > .button');
+    const action = document.querySelector('.primary-action-dock > .primary-action-row > .button');
     if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement))
       throw new Error('本文領域または保存操作がありません');
     const mainBounds = main.getBoundingClientRect();
