@@ -91,38 +91,62 @@ describe('production connected public configuration', () => {
   });
 
   it.each([
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: undefined }],
-    [{ ...publicValues, VITE_SUPABASE_URL: 'https://other.example.invalid' }],
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'opaque-unknown-key' }],
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'service_role_unknown' }],
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_private-sentinel' }],
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'sk-proj-private-sentinel' }],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: undefined },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+    [{ ...publicValues, VITE_SUPABASE_URL: 'https://other.example.invalid' }, 'VITE_SUPABASE_URL'],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'opaque-unknown-key' },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'service_role_unknown' },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_private-sentinel' },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: 'sk-proj-private-sentinel' },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
     [
       {
         ...publicValues,
         VITE_SUPABASE_PUBLISHABLE_KEY: jwtWithRole('service_role'),
       },
-    ],
-    [{ ...publicValues, VITE_TURNSTILE_SITE_KEY: '1x00000000000000000000AA' }],
-    [{ ...publicValues, VITE_TURNSTILE_SITE_KEY: 'site-key\nsentinel' }],
-    [{ ...publicValues, VITE_TURNSTILE_SITE_KEY: '0x4AAAAAAAsite-key-length-is-too-long' }],
-    [{ ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: ' sb_publishable_padded' }],
-  ])('rejects incomplete or unsafe browser values without exposing them', (values) => {
-    let error: unknown;
-    try {
-      validateProductionReleasePublicValues(values as typeof publicValues);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(error).toBeInstanceOf(ProductionConnectedDeploymentFailure);
-    expect((error as Error).message).toBe('INPUT_PUBLIC_CONFIGURATION_INVALID');
-    expect((error as Error).message).not.toContain('private-sentinel');
-    expect([
-      'VITE_SUPABASE_URL',
       'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+    [
+      { ...publicValues, VITE_TURNSTILE_SITE_KEY: '1x00000000000000000000AA' },
       'VITE_TURNSTILE_SITE_KEY',
-    ]).toContain((error as ProductionConnectedDeploymentFailure).publicSetting);
-  });
+    ],
+    [{ ...publicValues, VITE_TURNSTILE_SITE_KEY: 'site-key\nsentinel' }, 'VITE_TURNSTILE_SITE_KEY'],
+    [
+      { ...publicValues, VITE_TURNSTILE_SITE_KEY: '0x4AAAAAAAsite-key-length-is-too-long' },
+      'VITE_TURNSTILE_SITE_KEY',
+    ],
+    [
+      { ...publicValues, VITE_SUPABASE_PUBLISHABLE_KEY: ' sb_publishable_padded' },
+      'VITE_SUPABASE_PUBLISHABLE_KEY',
+    ],
+  ])(
+    'rejects incomplete or unsafe browser values without exposing them',
+    (values, expectedSetting) => {
+      let error: unknown;
+      try {
+        validateProductionReleasePublicValues(values as typeof publicValues);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(ProductionConnectedDeploymentFailure);
+      expect((error as Error).message).toBe('INPUT_PUBLIC_CONFIGURATION_INVALID');
+      expect((error as Error).message).not.toContain('private-sentinel');
+      expect((error as ProductionConnectedDeploymentFailure).publicSetting).toBe(expectedSetting);
+    },
+  );
 
   it('writes only the allowlisted production VITE values into a new mode-0600 file', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'manga-nikki-production-env-'));
