@@ -62,9 +62,10 @@ export function useHomeRecords(
             config: currentConfig,
             configError,
             retryKey,
-            records:
-              isMissingLocalSession(failure) || !navigator.onLine
-                ? { status: 'sample' }
+            records: !navigator.onLine
+              ? { status: 'sample' }
+              : isMissingLocalSession(failure)
+                ? { status: 'ready', entries: [] }
                 : {
                     status: 'error',
                     message:

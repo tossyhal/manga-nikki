@@ -234,13 +234,17 @@ test('サンプルを2回開閉しても戻る操作1回で前の画面に戻る
   await expect(page).toHaveURL(/\/library$/);
 });
 
-test('liveホームは履歴取得と匿名登録を始めない', async ({ page }) => {
-  let personalEntryReads = 0;
+test('liveホームは未登録でも空状態を表示し、日記入力を開ける', async ({ page }) => {
+  const personalApiRequests: string[] = [];
   const externalAuthRequests: string[] = [];
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
   page.on('request', (request) => {
-    if (request.method() === 'GET' && request.url().includes('/api/v1/entries?')) {
-      personalEntryReads += 1;
+    const url = new URL(request.url());
+    if (
+      url.pathname.startsWith('/api/v1/entries') ||
+      (request.method() === 'POST' && url.pathname.startsWith('/api/v1/generations'))
+    ) {
+      personalApiRequests.push(`${request.method()} ${url.pathname}`);
     }
     if (/supabase\.co|challenges\.cloudflare\.com/.test(request.url())) {
       externalAuthRequests.push(request.url());
@@ -248,12 +252,19 @@ test('liveホームは履歴取得と匿名登録を始めない', async ({ page
   });
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '漫画を読む' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '最近の記録' })).toHaveCount(0);
+  const todayRegion = page.getByRole('region', { name: '今日の記録' });
+  await expect(page.getByRole('heading', { name: 'サンプル', exact: true })).toHaveCount(0);
+  await expect(page.getByText('今日はまだ記録がありません')).toBeVisible();
+  await expect(page.locator('img[src="/cat-mascot.png"]')).toBeVisible();
+  await expect(todayRegion.getByRole('link', { name: '日記を書く', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '漫画を読む' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle');
+  await todayRegion.getByRole('link', { name: '日記を書く', exact: true }).click();
+  await expect(page).toHaveURL(/\/new$/);
+  await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toBeEnabled();
   await page.waitForLoadState('networkidle');
 
-  expect(personalEntryReads).toBe(0);
+  expect(personalApiRequests).toEqual([]);
   expect(externalAuthRequests).toEqual([]);
 });
 
