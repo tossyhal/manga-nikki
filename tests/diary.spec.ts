@@ -567,10 +567,29 @@ test('オフライン時は保存せず、再接続後も本文を保持して�
   await expect(diary).toHaveValue(offlineBody);
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '4コマにする' })).toBeEnabled();
+  await expect
+    .poll(
+      () =>
+        apiRequests
+          .slice(beforeReconnect)
+          .filter(({ method, path }) => method === 'GET' && path === '/api/v1/config').length,
+    )
+    .toBe(1);
   const reconnectRequests = apiRequests.slice(beforeReconnect);
   expect(reconnectRequests.length).toBeGreaterThan(0);
+  const reconnectConfigRequests = reconnectRequests.filter(
+    ({ method, path }) => method === 'GET' && path === '/api/v1/config',
+  );
+  const reconnectQuotaRequests = reconnectRequests.filter(
+    ({ method, path }) => method === 'GET' && path === '/api/v1/me/quota',
+  );
+  expect(reconnectConfigRequests).toHaveLength(1);
+  expect(reconnectQuotaRequests.length).toBeGreaterThan(0);
   expect(
-    reconnectRequests.every(({ method, path }) => method === 'GET' && path === '/api/v1/me/quota'),
+    reconnectRequests.every(
+      ({ method, path }) =>
+        method === 'GET' && ['/api/v1/config', '/api/v1/me/quota'].includes(path),
+    ),
   ).toBe(true);
   expect(entryPosts).toBe(0);
   expect(generationPosts).toBe(0);

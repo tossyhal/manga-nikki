@@ -153,6 +153,7 @@ function DetailContent({
   const { quota, activeGeneration, quotaState, refreshing, setActiveGeneration, refreshQuota } =
     useGenerationQuota({
       dataMode: config.dataMode,
+      generationAvailable: config.generationAvailable,
       activeRef,
       markLoading: false,
       onActiveGeneration: (current) => {

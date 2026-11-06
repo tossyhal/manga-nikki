@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, Outlet, useBlocker, useLocation, type BlockerFunction } from 'react-router';
 import type { DiaryActivity } from '../features/diary/diaryActivity';
-import { getClientConfig, type ClientConfig } from '../lib/config';
+import { getClientConfig, refreshClientConfig, type ClientConfig } from '../lib/config';
 import type { AppContext } from './AppContext';
 import { BottomNav } from './BottomNav';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -16,10 +16,23 @@ function documentTitle(pathname: string) {
   return 'ページが見つかりません | 漫画日記';
 }
 
+function sameClientConfig(left: ClientConfig, right: ClientConfig): boolean {
+  return (
+    left.generationAvailable === right.generationAvailable &&
+    left.dataMode === right.dataMode &&
+    left.consentVersion === right.consentVersion &&
+    left.retentionDays === right.retentionDays
+  );
+}
+
+const configRefreshThrottleMs = 5_000;
+
 export function App() {
   const location = useLocation();
   const isPrimaryRoute = ['/', '/new', '/library'].includes(location.pathname);
   const mainRef = useRef<HTMLElement | null>(null);
+  const configRef = useRef<ClientConfig | null>(null);
+  const configRequestSequenceRef = useRef(0);
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [configError, setConfigError] = useState(false);
   const [initialConfigPending, setInitialConfigPending] = useState(true);
@@ -32,7 +45,18 @@ export function App() {
   const [generationNotice, setGenerationNotice] =
     useState<DiaryActivity['generationNavigation']>(undefined);
   const diaryActivityRef = useRef(diaryActivity);
+  const applyConfig = useCallback((loadedConfig: ClientConfig) => {
+    const currentConfig = configRef.current;
+    const nextConfig =
+      currentConfig && sameClientConfig(currentConfig, loadedConfig) ? currentConfig : loadedConfig;
+    configRef.current = nextConfig;
+    setConfig(nextConfig);
+    setConfigError(false);
+    setInitialConfigPending(false);
+  }, []);
   const retryConfig = useCallback(() => {
+    configRequestSequenceRef.current++;
+    configRef.current = null;
     setConfig(null);
     setConfigError(false);
     setConfigRetry((retry) => retry + 1);
@@ -70,15 +94,13 @@ export function App() {
   const hasConfirmedExit = useCallback(() => leaveConfirmedRef.current, []);
   useEffect(() => {
     let active = true;
+    const requestId = ++configRequestSequenceRef.current;
     void getClientConfig()
       .then((loadedConfig) => {
-        if (active) {
-          setConfig(loadedConfig);
-          setInitialConfigPending(false);
-        }
+        if (active && requestId === configRequestSequenceRef.current) applyConfig(loadedConfig);
       })
       .catch(() => {
-        if (active) {
+        if (active && requestId === configRequestSequenceRef.current) {
           setConfigError(true);
           setInitialConfigPending(false);
         }
@@ -86,7 +108,83 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [configRetry]);
+  }, [applyConfig, configRetry]);
+  useEffect(() => {
+    let active = true;
+    let lastRefreshStartedAt = 0;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    let refreshTimer: number | null = null;
+    const canRefresh = () => document.visibilityState === 'visible' && navigator.onLine;
+    const scheduleRefresh = () => {
+      if (!active || !refreshQueued || refreshTimer !== null || !canRefresh()) return;
+      const delay = Math.max(0, configRefreshThrottleMs - (Date.now() - lastRefreshStartedAt));
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (!active || !canRefresh()) return;
+        runRefresh();
+      }, delay);
+    };
+    const runRefresh = () => {
+      if (!active || !canRefresh()) return;
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      const remainingThrottle =
+        lastRefreshStartedAt === 0
+          ? 0
+          : configRefreshThrottleMs - (Date.now() - lastRefreshStartedAt);
+      if (remainingThrottle > 0) {
+        refreshQueued = true;
+        scheduleRefresh();
+        return;
+      }
+      refreshQueued = false;
+      lastRefreshStartedAt = Date.now();
+      refreshInFlight = true;
+      const requestId = ++configRequestSequenceRef.current;
+      void refreshClientConfig()
+        .then((loadedConfig) => {
+          if (active && requestId === configRequestSequenceRef.current) applyConfig(loadedConfig);
+        })
+        .catch(() => {
+          if (
+            active &&
+            requestId === configRequestSequenceRef.current &&
+            configRef.current === null
+          ) {
+            setConfigError(true);
+            setInitialConfigPending(false);
+          }
+        })
+        .finally(() => {
+          refreshInFlight = false;
+          if (refreshQueued) scheduleRefresh();
+        });
+    };
+    const refreshWhenResumed = () => {
+      if (!canRefresh()) return;
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      runRefresh();
+    };
+    const refreshFromPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) refreshWhenResumed();
+    };
+    document.addEventListener('visibilitychange', refreshWhenResumed, true);
+    window.addEventListener('online', refreshWhenResumed, true);
+    window.addEventListener('pageshow', refreshFromPageShow, true);
+    return () => {
+      active = false;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      document.removeEventListener('visibilitychange', refreshWhenResumed, true);
+      window.removeEventListener('online', refreshWhenResumed, true);
+      window.removeEventListener('pageshow', refreshFromPageShow, true);
+    };
+  }, [applyConfig]);
   useLayoutEffect(() => {
     document.title = documentTitle(location.pathname);
     mainRef.current?.focus({ preventScroll: true });
