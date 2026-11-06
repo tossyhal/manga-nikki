@@ -1,0 +1,139 @@
+name: 本番生成resource初期設定
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: checkは読取のみ、setupは専用Queue/private bucketの不足分だけ作成、probe-storageは一時fixtureで拒否検査
+        type: choice
+        default: check
+        required: true
+        options: [check, setup, probe-storage]
+      confirmation:
+        description: setup/probe-storageはmanga-nikki-generations-productionと入力（中断時は状態を調査し再実行しない）
+        type: string
+        default: ''
+        required: false
+permissions:
+  contents: read
+jobs:
+  authorize:
+    if: github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: checkout前にownerと操作を確認
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          node --input-type=module <<'NODE'
+          const operation = process.env.OPERATION;
+          if (process.env.GITHUB_ACTOR_ID !== '92223710' || process.env.GITHUB_TRIGGERING_ACTOR !== 'tossyhal' ||
+              !/^[0-9a-f]{40}$/i.test(process.env.GITHUB_SHA ?? '') ||
+              !['check', 'setup', 'probe-storage'].includes(operation ?? '') ||
+              (operation !== 'check' && (process.env.CONFIRMATION !== 'manga-nikki-generations-production' || process.env.GITHUB_RUN_ATTEMPT !== '1'))) {
+            console.error('OWNER_GATE_OR_INPUT_REJECTED');
+            process.exitCode = 1;
+          }
+          NODE
+  checks:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - run: node -e "require('node:fs').copyFileSync('.dev.vars.example', '.dev.vars')"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+  resources:
+    needs: [authorize, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    concurrency:
+      group: manga-nikki-deploy-production
+      queue: max
+      cancel-in-progress: false
+    env:
+      PRODUCTION_PLATFORM_OPERATION: ${{ inputs.operation }}
+      PRODUCTION_PLATFORM_CONFIRMATION: ${{ inputs.confirmation }}
+      BWS_CLOUDFLARE_SECRET_ID: ${{ vars.BWS_CLOUDFLARE_SECRET_ID }}
+      BWS_SUPABASE_PUBLISHABLE_KEY_SECRET_ID: ${{ vars.BWS_SUPABASE_PUBLISHABLE_KEY_SECRET_ID }}
+      BWS_SUPABASE_SECRET_KEY_SECRET_ID: ${{ vars.BWS_SUPABASE_SECRET_KEY_SECRET_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - name: 秘密取得前にownerと最新mainを確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node --experimental-strip-types scripts/production-platform.ts --gate-only
+      - name: 既存production MAから必要な3件だけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_CLOUDFLARE_SECRET_ID }} > CLOUDFLARE_API_TOKEN
+            ${{ vars.BWS_SUPABASE_PUBLISHABLE_KEY_SECRET_ID }} > SUPABASE_PUBLISHABLE_KEY
+            ${{ vars.BWS_SUPABASE_SECRET_KEY_SECRET_ID }} > SUPABASE_SECRET_KEY
+      - name: 固定resourceだけを検査または初期作成
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node --experimental-strip-types scripts/production-platform.ts
+  storage-metadata:
+    needs: [authorize, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev-database-setup
+    concurrency:
+      group: manga-nikki-dev-database-setup
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: 秘密取得前にownerと最新mainを確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+        run: node --experimental-strip-types scripts/production-platform-metadata.ts --gate-only
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y postgresql-client-16
+      - name: 既存DB setup MAからpasswordだけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }} > SUPABASE_DB_PASSWORD
+      - name: Storage RLSとrestrictive policyをread-only確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+        run: node --experimental-strip-types scripts/production-platform-metadata.ts
