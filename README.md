@@ -75,9 +75,9 @@
 
 ## PWAのビルド確認
 
-環境別のbuildは`pnpm build:staging`または`pnpm build:production`で行います。ローカル実行は成果物検査まででCloudflareへ公開しません。`develop`へのpush後、CIのdatabase/checkが成功し、所有者がRepository variable`STAGING_SAMPLE_CD_ENABLED=true`を設定した場合だけ、stagingへ架空sampleを配信します。既定は無効です。stagingは公開workers.dev URLで、個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番の配信はこのworkflowに含めず、別承認が必要です。対象環境の手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
+環境別のbuildは`pnpm build:staging`または`pnpm build:production`で行います。ローカル実行は成果物検査まででCloudflareへ公開しません。`develop`へのpush後、CIのdatabase/checkが成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`の場合に限り、stagingへ架空sampleを配信します。このvariableの既定値は無効で、2026-11-06時点で`true`に設定されています。stagingは公開workers.dev URLで、個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番の配信はこのworkflowに含めず、別承認が必要です。対象環境の手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 
-stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。Repository variable`STAGING_SAMPLE_CD_ENABLED`が未設定のため、sample CDはまだ有効化されていません。有効化に必要なGitHub Ruleset・Environment・Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowと資格情報は退役済みです。
+stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。2026-11-06にdevelopの`80188a02c2f524febcd6f5164223b4b1059284b2`を初回公開し、[Actions実行](https://github.com/tossyhal/manga-nikki/actions/runs/42173608290)のdatabase/check/staging-deployはすべて成功しました。このSHAは初回配信の記録です。現在の公開commitは`/__deployment.json`のmarkerで確認してください。公開後の確認範囲と未確認事項は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowは退役済みで、資格情報は退役扱い（確認範囲は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照）です。
 
 開発サーバーの起動とビルドでは、公開用設定に既知のSupabaseサーバー専用キー形式が入っている場合に処理を停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
 
@@ -93,7 +93,7 @@ stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm bui
 
 新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
 
-ローカルpreviewでの確認はAndroid Chrome・iPhone SafariのHTTPS実機確認の代わりにはなりません。実機インストール、standalone表示、更新の確認は公開前に別途行います。
+Android Chrome・iPhone SafariでのHTTPS実機インストール、standalone表示、更新は未確認です。ローカルpreviewでの確認は実機確認の代わりにはなりません。
 
 ## ライセンス・利用条件
 
