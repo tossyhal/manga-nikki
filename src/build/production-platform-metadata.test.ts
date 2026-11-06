@@ -9,6 +9,7 @@ const valid = {
   readOnly: true,
   storageRlsOk: true,
   storageOwnerPrivilege: false,
+  storagePolicyDelegated: false,
   storageOwnerSetPrivilege: false,
   restrictivePoliciesOk: true,
   sameStorageOwner: true,
@@ -28,6 +29,7 @@ describe('Storage metadata', () => {
       missingPolicyCount: 0,
       mismatchedPolicyCount: 0,
       ownerPrivilege: false,
+      policyDelegated: false,
       ownerSetPrivilege: false,
       policiesOk: true,
     });
@@ -44,6 +46,8 @@ describe('Storage metadata', () => {
     { anonBypassRls: true },
     { readOnly: false },
     { restrictivePoliciesOk: null },
+    { storagePolicyDelegated: undefined },
+    { storagePolicyDelegated: 'true' },
   ])('不正なmetadataは拒否する %j', (override) => {
     expect(() =>
       parseProductionPlatformMetadata(JSON.stringify({ ...valid, ...override })),
@@ -74,6 +78,7 @@ describe('Storage policy setup gate', () => {
     expect(() =>
       assertStoragePolicySetupAllowed({
         ownerPrivilege: true,
+        policyDelegated: false,
         ownerSetPrivilege: true,
         sameStorageOwner: true,
         missingPolicyCount: 1,
@@ -82,10 +87,33 @@ describe('Storage policy setup gate', () => {
       }),
     ).toThrow('STORAGE_POLICY_MISMATCH');
   });
+  it('固定2tableへの正式なpolicy委任があればowner membershipなしで許可する', () => {
+    const metadata = parseProductionPlatformMetadata(
+      JSON.stringify({
+        ...valid,
+        storagePolicyDelegated: true,
+        restrictivePoliciesOk: false,
+        missingPolicyCount: 2,
+      }),
+    );
+    expect(metadata.policyDelegated).toBe(true);
+    expect(() => assertStoragePolicySetupAllowed(metadata)).not.toThrow();
+    expect(() =>
+      assertStoragePolicySetupAllowed({
+        ...metadata,
+        mismatchedPolicyCount: 1,
+        missingPolicyCount: 1,
+      }),
+    ).toThrow('STORAGE_POLICY_MISMATCH');
+    expect(() => assertStoragePolicySetupAllowed({ ...metadata, sameStorageOwner: false })).toThrow(
+      'STORAGE_POLICY_OWNER_ACTION_REQUIRED',
+    );
+  });
   it('owner権限のない不足policyを作成しない', () => {
     expect(() =>
       assertStoragePolicySetupAllowed({
         ownerPrivilege: false,
+        policyDelegated: false,
         ownerSetPrivilege: false,
         sameStorageOwner: true,
         missingPolicyCount: 2,

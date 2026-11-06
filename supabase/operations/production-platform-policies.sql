@@ -7,6 +7,7 @@ DECLARE
   owner_oid oid;
   relation_count integer;
   owner_count integer;
+  policy_delegated boolean := false;
   expected record;
   actual record;
 BEGIN
@@ -23,7 +24,16 @@ BEGIN
   IF current_user <> 'postgres' AND current_user <> pg_catalog.pg_get_userbyid(owner_oid) THEN
     RAISE EXCEPTION 'STORAGE_IDENTITY_INVALID';
   END IF;
-  IF NOT pg_catalog.pg_has_role(current_user,owner_oid,'USAGE') THEN
+  -- Supabaseの正式委任はpolicy DDLだけを許可し、owner membershipを必要としない。
+  IF current_user='postgres' AND EXISTS (
+    SELECT 1 FROM pg_catalog.pg_settings
+    WHERE name='supautils.policy_grants' AND context='sighup' AND vartype='string'
+  ) THEN
+    policy_delegated := COALESCE(
+      pg_catalog.current_setting('supautils.policy_grants',true)::jsonb -> 'postgres'
+        @> '["storage.buckets","storage.objects"]'::jsonb,false);
+  END IF;
+  IF NOT policy_delegated AND NOT pg_catalog.pg_has_role(current_user,owner_oid,'USAGE') THEN
     IF NOT pg_catalog.pg_has_role(current_user,owner_oid,'SET') THEN
       RAISE EXCEPTION 'STORAGE_POLICY_OWNER_ACTION_REQUIRED';
     END IF;

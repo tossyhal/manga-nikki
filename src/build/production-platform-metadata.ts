@@ -27,6 +27,7 @@ export class ProductionPlatformMetadataFailure extends Error {
 }
 export type ProductionPlatformMetadata = {
   ownerPrivilege: boolean;
+  policyDelegated: boolean;
   ownerSetPrivilege: boolean;
   sameStorageOwner: boolean;
   missingPolicyCount: number;
@@ -57,6 +58,7 @@ export function parseProductionPlatformMetadata(raw: string): ProductionPlatform
   if (
     Object.entries(expected).some(([key, value]) => values[key] !== value) ||
     typeof values.storageOwnerPrivilege !== 'boolean' ||
+    typeof values.storagePolicyDelegated !== 'boolean' ||
     typeof values.storageOwnerSetPrivilege !== 'boolean' ||
     typeof values.restrictivePoliciesOk !== 'boolean' ||
     typeof values.sameStorageOwner !== 'boolean' ||
@@ -73,6 +75,7 @@ export function parseProductionPlatformMetadata(raw: string): ProductionPlatform
     throw new ProductionPlatformMetadataFailure('STORAGE_METADATA_INVALID');
   return {
     sameStorageOwner: values.sameStorageOwner,
+    policyDelegated: values.storagePolicyDelegated,
     missingPolicyCount: Number(values.missingPolicyCount),
     mismatchedPolicyCount: Number(values.mismatchedPolicyCount),
     ownerPrivilege: values.storageOwnerPrivilege,
@@ -100,7 +103,10 @@ export function assertStoragePolicySetupAllowed(metadata: ProductionPlatformMeta
     throw new ProductionPlatformMetadataFailure('STORAGE_POLICY_MISMATCH');
   if (
     !metadata.sameStorageOwner ||
-    (!metadata.policiesOk && !metadata.ownerPrivilege && !metadata.ownerSetPrivilege)
+    (!metadata.policiesOk &&
+      !metadata.ownerPrivilege &&
+      !metadata.ownerSetPrivilege &&
+      !metadata.policyDelegated)
   ) {
     throw new ProductionPlatformMetadataFailure('STORAGE_POLICY_OWNER_ACTION_REQUIRED');
   }

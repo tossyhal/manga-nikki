@@ -82,3 +82,12 @@ production Environmentの`PRODUCTION_GENERATION_INFRA_ENABLED`と`PRODUCTION_GEN
 試験枠の操作はmainのowner限定`production-generation-trial-policy.yml`で行います。`check`は読取のみ、`prepare`は`PREPARE_ONE_COMIC_1USD_TRIAL`を確認文字列に指定し、生成停止を維持して日次・全期間1漫画、総予算・予約額各1USDの固定profileを設定します。既存counter行または生成履歴があれば停止し、削除やresetはしません。`enable`は`ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST`と`provider_cost_verified=true`が必要で、費用の根拠確認前に実行しません。`stop`は`STOP_GENERATION`を指定し、policyのenabledだけをfalseにします。既存予約やunknownの枠は維持します。
 
 基盤を追加した後の生成停止はDB policyをfalseにし、必要なら`PRODUCTION_GENERATION_ENABLED=false`で再配信します。Queue/Secretsが残るため`PRODUCTION_GENERATION_INFRA_ENABLED`はtrueを維持します。基盤なし版への切替は通常停止とは別の削除計画が必要です。
+
+
+## Storage policyの正式委任
+
+`supautils.policy_grants`が`postgres`へ`storage.buckets`と`storage.objects`の両方を委任している場合は、owner membershipや`SET ROLE`がなくても固定restrictive policyを作成できます。metadataと実行直前のSQLは、登録済みGUCが`context=sighup`・`vartype=string`であることと、JSON内の固定2tableを照合します。委任設定自体やGRANT、table owner、RLSは変更しません。設定がない場合は既存のowner/SET ROLE経路だけを許可し、既存policy不一致は上書きせず停止します。
+
+一次資料は[Supabaseの既定設定](https://github.com/supabase/postgres/blob/develop/ansible/files/postgresql_config/supautils.conf.j2)、[supautilsのpolicy委任仕様](https://github.com/supabase/supautils#table-ownership-bypass)、[GUC登録](https://github.com/supabase/supautils/blob/master/src/supautils.c)です。`current_setting('supautils.policy_grants',true)`は読取専用で確認でき、設定変更やowner roleの追加は不要です。
+
+`supabase/tests/production_platform_delegation.sql`は、固定2tableを委任したsupautils付きの廃棄可能PostgreSQL専用fixtureです。非superuserかつownerのUSAGE/SETなしでの作成、既存policy保持、不一致時のtransaction rollback、RLS維持を確認します。
