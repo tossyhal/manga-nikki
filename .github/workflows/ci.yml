@@ -47,6 +47,14 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm test:release-environment
+      - name: Ubuntu公式mirrorを使用
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Azure mirrorの低速なfont downloadを避ける。
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
       - run: pnpm exec playwright install --with-deps --only-shell chromium
       - run: pnpm test:e2e
       - name: PWA検査（検査済みのビルド成果物を再利用）
