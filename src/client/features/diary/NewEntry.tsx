@@ -317,6 +317,13 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
     setError('確認に失敗しました。本文は残っています。新しい確認を取得して再操作してください。');
   }
 
+  function cancelRegistrationCaptcha() {
+    if (!activeRef.current || !registrationPendingRef.current) return;
+    registrationPendingRef.current = false;
+    setPendingSave(null);
+    setError('');
+  }
+
   const primaryDisabled =
     operationBusy ||
     saved !== null ||
@@ -458,6 +465,9 @@ export function NewEntry({ config, onActivityChange, hasBlockedNavigation }: New
                 匿名登録用の確認を利用できません。本文はこの画面に残っています。
               </p>
             )}
+            <button className="button-text" type="button" onClick={cancelRegistrationCaptcha}>
+              確認をやめる
+            </button>
           </section>
         )}
         {saveErrorIntent !== null ? (

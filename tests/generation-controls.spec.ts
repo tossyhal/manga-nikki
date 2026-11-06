@@ -730,6 +730,117 @@ test('登録CAPTCHAのwidget解除後に届いたcallbackは画面を離れて�
   expect(entryPosts).toBe(0);
 });
 
+test('登録CAPTCHAを中断しても入力を保ち、古いtokenを無視して再試行できる', async ({ page }) => {
+  await installTurnstileFake(page, { delayFirstRegistrationCallback: true });
+  let signupRequests = 0;
+  let entryPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() === 'POST') entryPosts++;
+    return route.continue();
+  });
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => {
+    signupRequests++;
+    return route.abort();
+  });
+
+  await page.goto('/new');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const date = page.locator('input[type="date"]');
+  const body = '確認を中断しても保持する架空日記';
+  const originalDate = await date.inputValue();
+  await diary.fill(body);
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect(page.getByRole('region', { name: '匿名登録' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => Boolean(window.__releaseE2eRegistrationCaptcha)))
+    .toBe(true);
+
+  await page.getByRole('button', { name: '確認をやめる' }).click();
+  await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
+  await expect(diary).toBeEnabled();
+  await expect(diary).toHaveValue(body);
+  expect(await date.inputValue()).toBe(originalDate);
+  expect(await page.evaluate(() => window.__e2eTurnstileRemoveCount)).toBe(1);
+
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '入力内容が保存されていません' })).toBeVisible();
+  await clickAppDialogButton(page, '入力内容が保存されていません', '入力に戻る');
+  await page.evaluate(() => window.__releaseE2eRegistrationCaptcha?.());
+  expect(signupRequests).toBe(0);
+  expect(entryPosts).toBe(0);
+
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect(page.getByRole('alert')).toContainText('匿名登録に失敗しました');
+  expect(await page.evaluate(() => window.__e2eTurnstileRenderCount)).toBe(2);
+  expect(signupRequests).toBe(1);
+  expect(entryPosts).toBe(0);
+});
+
+test('停止した登録CAPTCHA scriptを中断・timeout後に再試行できる', async ({ page }) => {
+  await page.clock.install({ time: new Date(`${jstToday()}T12:00:00.000Z`) });
+  let releaseFirstScript!: () => void;
+  let releaseSecondScript!: () => void;
+  const firstScriptGate = new Promise<void>((resolve) => {
+    releaseFirstScript = resolve;
+  });
+  const secondScriptGate = new Promise<void>((resolve) => {
+    releaseSecondScript = resolve;
+  });
+  let scriptRequests = 0;
+  let signupRequests = 0;
+  let entryPosts = 0;
+  await page.route('**/api.js*', async (route) => {
+    scriptRequests++;
+    if (scriptRequests === 1) await firstScriptGate;
+    if (scriptRequests === 2) await secondScriptGate;
+    try {
+      await route.fulfill({ status: 200, contentType: 'application/javascript', body: '' });
+    } catch {
+      // 画面の取消やtimeout後はscriptの応答が破棄される。
+    }
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: liveClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() === 'POST') entryPosts++;
+    return route.continue();
+  });
+  await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => {
+    signupRequests++;
+    return route.abort();
+  });
+
+  await page.goto('/new');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const body = 'script待機中も保持する架空日記';
+  await diary.fill(body);
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect(page.getByRole('region', { name: '匿名登録' })).toBeVisible();
+  await expect.poll(() => scriptRequests).toBe(1);
+
+  await page.getByRole('button', { name: '確認をやめる' }).click();
+  await expect(page.getByRole('region', { name: '匿名登録' })).toHaveCount(0);
+  await expect(diary).toBeEnabled();
+  await expect(diary).toHaveValue(body);
+  releaseFirstScript();
+
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect.poll(() => scriptRequests).toBe(2);
+  await page.clock.fastForward(15_001);
+  await expect(page.getByRole('alert')).toContainText('確認に失敗しました');
+  await expect(diary).toBeEnabled();
+  expect(await page.getByRole('region', { name: '匿名登録' }).count()).toBe(0);
+  releaseSecondScript();
+
+  await page.getByRole('button', { name: '下書きとして保存' }).click();
+  await expect.poll(() => scriptRequests).toBe(3);
+  await expect(page.getByRole('alert')).toContainText('確認に失敗しました');
+  expect(signupRequests).toBe(0);
+  expect(entryPosts).toBe(0);
+});
+
 test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルとして受付する', async ({ page }) => {
   await installTurnstileFake(page);
   const order: string[] = [];
