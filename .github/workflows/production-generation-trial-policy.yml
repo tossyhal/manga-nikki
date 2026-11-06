@@ -1,0 +1,108 @@
+name: 初回漫画生成試験のDBpolicy
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: checkは読取、prepareは停止を維持した固定1漫画/1USD枠、enableは費用検証後のみ、stopは受付停止
+        type: choice
+        options: [check, prepare, enable, stop]
+        default: check
+        required: true
+      confirmation:
+        description: prepare=PREPARE_ONE_COMIC_1USD_TRIAL、enable=ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST、stop=STOP_GENERATION
+        type: string
+        default: ''
+        required: false
+      provider_cost_verified:
+        description: enable専用。脚本1回＋画像4回の実請求上限を別途検証済み（DB予約額だけではprovider capにならない）
+        type: boolean
+        default: false
+        required: true
+permissions:
+  contents: read
+jobs:
+  authorize:
+    if: github.repository == 'tossyhal/manga-nikki' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: checkout前にownerと固定操作を確認
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PROVIDER_COST_VERIFIED: ${{ inputs.provider_cost_verified }}
+        run: |
+          node --input-type=module <<'NODE'
+          const confirmations={prepare:'PREPARE_ONE_COMIC_1USD_TRIAL',enable:'ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST',stop:'STOP_GENERATION'};
+          const operation=process.env.OPERATION;
+          if (process.env.GITHUB_ACTOR_ID !== '92223710' || process.env.GITHUB_TRIGGERING_ACTOR !== 'tossyhal' ||
+              !/^[0-9a-f]{40}$/i.test(process.env.GITHUB_SHA ?? '') ||
+              !['check','prepare','enable','stop'].includes(operation ?? '') ||
+              (operation !== 'check' && (process.env.GITHUB_RUN_ATTEMPT !== '1' || process.env.CONFIRMATION !== confirmations[operation])) ||
+              (operation === 'enable' && process.env.PROVIDER_COST_VERIFIED !== 'true')) {
+            console.error('OWNER_GATE_OR_INPUT_REJECTED');
+            process.exitCode=1;
+          }
+          NODE
+  checks:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - run: pnpm install --frozen-lockfile
+      - run: node -e "require('node:fs').copyFileSync('.dev.vars.example', '.dev.vars')"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+  policy:
+    needs: [authorize, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev-database-setup
+    concurrency:
+      group: manga-nikki-dev-database-setup
+      queue: max
+      cancel-in-progress: false
+    env:
+      PRODUCTION_TRIAL_POLICY_OPERATION: ${{ inputs.operation }}
+      PRODUCTION_TRIAL_POLICY_CONFIRMATION: ${{ inputs.confirmation }}
+      PRODUCTION_TRIAL_PROVIDER_COST_VERIFIED: ${{ inputs.provider_cost_verified }}
+      BWS_SUPABASE_DB_PASSWORD_SECRET_ID: ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+        with:
+          version: '2026.10.19'
+          install_args: '--locked'
+      - name: 秘密取得前にownerと最新mainを確認
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node --experimental-strip-types scripts/production-trial-policy.ts --gate-only
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y postgresql-client-16
+      - name: 既存DB setup MAからpasswordだけ取得
+        uses: bitwarden/sm-action@f1de238fc00c738c56140796018be9084c2b5d21
+        with:
+          access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
+          cloud_region: us
+          secrets: |
+            ${{ vars.BWS_SUPABASE_DB_PASSWORD_SECRET_ID }} > SUPABASE_DB_PASSWORD
+      - name: 状態確認後に指定した固定policy操作だけを実行
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node --experimental-strip-types scripts/production-trial-policy.ts
