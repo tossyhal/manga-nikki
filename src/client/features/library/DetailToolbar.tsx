@@ -23,7 +23,17 @@ export function DetailToolbar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const menuAnchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || !menuAnchorRef.current?.contains(target)) setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [menuOpen]);
   useEffect(() => {
     if (!menuOpen) return;
     menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
@@ -38,7 +48,15 @@ export function DetailToolbar({
         <h1 className={`detail-title${statusView ? ' detail-state-title' : ''}`}>{title}</h1>
         {statusView && <p className="detail-state-summary">{summary}</p>}
       </div>
-      <div className="detail-menu-anchor">
+      <div
+        ref={menuAnchorRef}
+        className="detail-menu-anchor"
+        onBlurCapture={(event) => {
+          const nextTarget = event.relatedTarget;
+          if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget))
+            setMenuOpen(false);
+        }}
+      >
         <button
           ref={menuTriggerRef}
           className="icon-button"

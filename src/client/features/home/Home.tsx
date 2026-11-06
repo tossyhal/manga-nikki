@@ -1,6 +1,6 @@
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { type Entry, type Generation } from '../../../shared/schemas';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
@@ -142,6 +142,8 @@ export function Home({
   configError: boolean;
   retryConfig: () => void;
 }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [recordsRetry, setRecordsRetry] = useState(0);
   const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
@@ -150,13 +152,18 @@ export function Home({
   const todayEntries = entries.filter((entry) => entry.diaryDate === today);
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
-  const [sampleOpen, setSampleOpen] = useState(false);
+  const sampleOpen = new URLSearchParams(location.search).get('sample') === '1';
+  const openSample = () => navigate('/?sample=1');
 
   if (showSample && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
-          <button className="icon-button" type="button" onClick={() => setSampleOpen(false)}>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => navigate('/', { replace: true })}
+          >
             <Icon name="back" />
             <span className="sr-only">戻る</span>
           </button>
@@ -199,11 +206,7 @@ export function Home({
             role="alert"
             actions={
               <>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="button button-secondary" type="button" onClick={openSample}>
                   サンプルを見る
                 </button>
                 <button className="button button-secondary" type="button" onClick={retryConfig}>
@@ -218,11 +221,7 @@ export function Home({
               <h2>{pageComic.title}</h2>
               <p>サンプル漫画</p>
               <div className="home-today-actions">
-                <button
-                  className="today-write-link"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="today-write-link" type="button" onClick={openSample}>
                   <span>漫画を読む</span>
                   <Icon name="chevron-right" size={18} />
                 </button>
