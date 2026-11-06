@@ -25,6 +25,8 @@ const status = {
   public80SchemaReady: false,
   public80Ready: false,
   public80Prepared: false,
+  public80Active: false,
+  event250Prepared: false,
   cumulativeReservedCount: 0,
   cumulativeReservedMicroUsd: 0,
 };
@@ -33,7 +35,7 @@ describe('初回試験policy入力', () => {
     expect(validateTrialPolicyInput({ ...env, PRODUCTION_TRIAL_POLICY_OPERATION: 'check' })).toBe(
       'check',
     ));
-  it.each(['prepare', 'enable', 'stop', 'activate-public80'] as const)(
+  it.each(['prepare', 'enable', 'stop', 'activate-public80', 'activate-event250'] as const)(
     'writeは初回と固定確認を要求する %s',
     (operation) => {
       const input = {
@@ -57,6 +59,15 @@ describe('初回試験policy入力', () => {
         ...env,
         PRODUCTION_TRIAL_POLICY_OPERATION: 'enable',
         PRODUCTION_TRIAL_POLICY_CONFIRMATION: TRIAL_POLICY_CONFIRMATIONS.enable,
+      }),
+    ).toThrow('TRIAL_POLICY_INPUT_INVALID');
+  });
+  it('activate-event250は固定確認だけでなく費用検証済みflagを要求する', () => {
+    expect(() =>
+      validateTrialPolicyInput({
+        ...env,
+        PRODUCTION_TRIAL_POLICY_OPERATION: 'activate-event250',
+        PRODUCTION_TRIAL_POLICY_CONFIRMATION: TRIAL_POLICY_CONFIRMATIONS['activate-event250'],
       }),
     ).toThrow('TRIAL_POLICY_INPUT_INVALID');
   });
@@ -196,13 +207,15 @@ describe('固定SQL write runner', () => {
 
 describe('transaction内の固定SQL設定', () => {
   const source = 'BEGIN READ WRITE;\n-- TRIAL_POLICY_SETTINGS\nSELECT 1;\nCOMMIT;\n';
-  it.each(['prepare', 'enable', 'stop', 'activate-public80'] as const)(
+  it.each(['prepare', 'enable', 'stop', 'activate-public80', 'activate-event250'] as const)(
     'allowlist済みoperationだけ固定literalで挿入する %s',
     (operation) => {
       const sql = buildTrialPolicySql(
         source,
         operation,
-        operation === 'enable' || operation === 'activate-public80',
+        operation === 'enable' ||
+          operation === 'activate-public80' ||
+          operation === 'activate-event250',
       );
       expect(sql).toContain(`SET LOCAL manga_nikki.trial_policy_operation='${operation}';`);
       expect(sql).not.toContain('-- TRIAL_POLICY_SETTINGS');
@@ -227,7 +240,7 @@ describe('transaction内の固定SQL設定', () => {
   });
   it('状態のstdoutは固定booleanだけから作る', () => {
     expect(renderTrialPolicyStatus(status)).toBe(
-      'enabled=false initialPolicy=true trialPrepared=false historyEmpty=true policyTriggerPresent=true public80SchemaReady=false public80Ready=false public80Prepared=false cumulativeReservedCount=0 cumulativeReservedMicroUsd=0',
+      'enabled=false initialPolicy=true trialPrepared=false historyEmpty=true policyTriggerPresent=true public80SchemaReady=false public80Ready=false public80Prepared=false public80Active=false event250Prepared=false cumulativeReservedCount=0 cumulativeReservedMicroUsd=0',
     );
   });
 });
@@ -262,6 +275,48 @@ describe('write失敗の安全な分類', () => {
         stderr: 'ERROR:  TRIAL_POLICY_CONTEXT_INVALID\nERROR:  TRIAL_POLICY_STATE_INVALID\n',
       }),
     ).toBe('UNKNOWN');
+  });
+});
+
+describe('発表用event250への一回限り移行', () => {
+  const ready = {
+    ...status,
+    enabled: true,
+    historyEmpty: false,
+    public80SchemaReady: true,
+    public80Active: true,
+  };
+
+  it('稼働中の固定public80からのみ移行を許可する', () => {
+    expect(() => assertTrialPolicyChangeAllowed('activate-event250', ready)).not.toThrow();
+    for (const changes of [
+      { enabled: false },
+      { public80SchemaReady: false },
+      { public80Active: false },
+      { policyTriggerPresent: false },
+      { event250Prepared: true },
+    ])
+      expect(() =>
+        assertTrialPolicyChangeAllowed('activate-event250', { ...ready, ...changes }),
+      ).toThrow('TRIAL_POLICY_STATE_INVALID');
+  });
+
+  it('専用固定SQLだけを選び、履歴を書き換えない', async () => {
+    const executor = vi.fn().mockImplementation(async (_file, args) => {
+      const source = await readFile(args[args.length - 1], 'utf8');
+      expect(source).toContain("trial_policy_operation='activate-event250'");
+      expect(source).toContain('global_total_limit=250,budget_micro_usd=250000000');
+      expect(source).not.toMatch(
+        /(?:UPDATE|DELETE FROM|INSERT INTO) (?:public\.generations|private\.(?:reservations|quota_counters|provider_attempts))/i,
+      );
+      return { stdout: 'TRIAL_POLICY_TRANSACTION_COMMITTED', stderr: '' };
+    });
+    await writeTrialPolicy('activate-event250', 'fixture-password', true, executor);
+    expect(executor).toHaveBeenCalledTimes(1);
+    await expect(
+      writeTrialPolicy('activate-event250', 'fixture-password', false, executor),
+    ).rejects.toThrow('TRIAL_POLICY_INPUT_INVALID');
+    expect(executor).toHaveBeenCalledTimes(1);
   });
 });
 

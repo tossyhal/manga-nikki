@@ -51,7 +51,7 @@ export function productionGenerationQueueConfiguration(queue: string) {
   return {
     producers: [{ binding: 'GENERATION_QUEUE', queue }],
     consumers: [
-      { queue, max_batch_size: 1, max_batch_timeout: 0, max_retries: 3, max_concurrency: 2 },
+      { queue, max_batch_size: 1, max_batch_timeout: 0, max_retries: 3, max_concurrency: 10 },
     ],
   };
 }
