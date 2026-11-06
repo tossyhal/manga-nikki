@@ -51,11 +51,10 @@ export async function exportComic(
   canvas.width = 848;
   context.font = '24px sans-serif';
   const captions = comic.panels.map((panel) =>
-    lines(
-      context,
-      `${panel.index}. ${panel.caption || panel.scene}${panel.dialogue ? `\n「${panel.dialogue}」` : ''}`,
-      776,
-    ),
+    [
+      panel.caption ? lines(context, `${panel.index}. ${panel.caption}`, 776) : [],
+      panel.dialogue ? lines(context, `「${panel.dialogue}」`, 776) : [],
+    ].flat(),
   );
   const titleLines = lines(context, comic.title, 776);
   const imageHeights = images.map((image) =>
