@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
-import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
+import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import {
   draftEntryDetailFixture,
   liveClientConfigFixture,
@@ -141,6 +141,241 @@ test('詳細の日付と1,000個のUnicode文字をrevision付きで保存し、
   await page.getByText('元の日記を読む', { exact: true }).click();
   await expect(page.getByText(updatedBody, { exact: true })).toBeVisible();
   expect(patch).toEqual({ expectedRevision: 1, diaryDate: '2026-01-02', body: updatedBody });
+});
+
+test('再生成中と失敗後も最後に保存した漫画を表示し、最新jobの状態を併記する', async ({ page }) => {
+  const previousSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const retryId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  let latestGeneration: Generation = previousSuccess;
+  let currentDetail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: previousSuccess.id,
+    latestGeneration: previousSuccess,
+    lastSuccessfulGeneration: previousSuccess,
+  };
+  let status: 'queued' | 'failed' = 'queued';
+  let statusRequests = 0;
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      const update = route.request().postDataJSON() as {
+        expectedRevision: number;
+        diaryDate: string;
+        body: string;
+      };
+      currentDetail = {
+        ...currentDetail,
+        diaryDate: update.diaryDate,
+        body: update.body,
+        revision: currentDetail.revision + 1,
+      };
+      return route.fulfill({
+        json: {
+          id: currentDetail.id,
+          diaryDate: currentDetail.diaryDate,
+          body: currentDetail.body,
+          revision: currentDetail.revision,
+          latestGenerationId: currentDetail.latestGenerationId,
+          createdAt: currentDetail.createdAt,
+          updatedAt: currentDetail.updatedAt,
+        } satisfies Entry,
+      });
+    }
+    return route.fulfill({ json: currentDetail });
+  });
+  await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
+    latestGeneration = generationFixtures(entryId, retryId, 2).queued;
+    currentDetail = {
+      ...currentDetail,
+      latestGenerationId: retryId,
+      latestGeneration,
+      lastSuccessfulGeneration: previousSuccess,
+    };
+    return route.fulfill({
+      status: 202,
+      json: {
+        generationId: retryId,
+        status: 'queued',
+        statusUrl: `/api/v1/generations/${retryId}`,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
+    route.fulfill({ json: previousSuccess }),
+  );
+  await page.route(`**/api/v1/generations/${retryId}`, (route) => {
+    statusRequests++;
+    latestGeneration =
+      status === 'failed' ? generationFixtures(entryId, retryId, 2).failed : latestGeneration;
+    return route.fulfill({ json: latestGeneration });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await expect(page.locator('.comic')).toBeVisible();
+  await clickEntryMenuItem(page, '日記を編集');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill('編集した日記です。');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+
+  await expect(page.locator('.detail-toolbar')).toContainText('漫画をつくっています');
+  await expect(page.locator('.comic')).toBeVisible();
+  await expect(page.locator('.detail-date-row time')).toHaveCount(1);
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+  expect(latestGeneration.status).toBe('queued');
+
+  status = 'failed';
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect(page.getByRole('heading', { name: '日記は保存されています' })).toBeVisible();
+  await expect(page.locator('.comic')).toBeVisible();
+  await expect(page.getByText('編集前の日記から生成された漫画です。')).toBeVisible();
+});
+
+test('ホームで既知の旧漫画と状態取得失敗を別々に案内する', async ({ page }) => {
+  const oldSuccess = generationFixtures(entryId, generationId, 1).succeeded;
+  const oldFailure = generationFixtures(entryId, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', 1).failed;
+  const unavailableId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const editedEntry: Entry = {
+    ...draftEntryDetailFixture,
+    revision: 2,
+    latestGenerationId: oldFailure.id,
+  };
+  const unavailableEntry: Entry = {
+    ...draftEntryDetailFixture,
+    id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    body: '状態確認に失敗した記録です。',
+    latestGenerationId: unavailableId,
+  };
+  const detail: EntryDetail = {
+    ...editedEntry,
+    latestGeneration: oldFailure,
+    lastSuccessfulGeneration: oldSuccess,
+  };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [editedEntry, unavailableEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/entries/${unavailableEntry.id}`, (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-request',
+          retryable: true,
+        },
+      },
+    }),
+  );
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const oldComicCard = page.locator('.entry-history-card').filter({ hasText: '編集前の漫画' });
+  await expect(oldComicCard).toBeVisible();
+  await expect(oldComicCard).not.toContainText('生成失敗');
+  await expect(oldComicCard.locator('img')).toHaveAttribute('src', '/sample-comic.svg');
+  const unavailableCard = page
+    .locator('.entry-history-card')
+    .filter({ hasText: '状態確認に失敗した記録です。' });
+  await expect(unavailableCard).toContainText('状態を確認できません');
+});
+
+test('編集後の旧generationが失敗済みなら一覧に編集済みと表示する', async ({ page }) => {
+  const oldFailure = generationFixtures(entryId, generationId, 1).failed;
+  const editedEntry: Entry = {
+    ...draftEntryDetailFixture,
+    revision: 2,
+    latestGenerationId: oldFailure.id,
+  };
+  const detail: EntryDetail = { ...editedEntry, latestGeneration: oldFailure };
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [editedEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
+
+  await page.goto('/');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const card = page.locator('.entry-history-card').filter({ hasText: '編集済み' });
+  await expect(card).toBeVisible();
+  await expect(card).not.toContainText('状態を確認しています');
+});
+
+test('ホームと一覧で漫画画像の取得失敗を読める', async ({ page }) => {
+  const todayGeneration = generationFixtures(entryId, generationId).succeeded;
+  const recentEntryId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const recentGenerationId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const todayEntry: Entry = {
+    ...draftEntryDetailFixture,
+    diaryDate: jstToday(),
+    latestGenerationId: todayGeneration.id,
+  };
+  const recentEntry: Entry = {
+    ...draftEntryDetailFixture,
+    id: recentEntryId,
+    diaryDate: '2026-01-01',
+    body: '画像取得に失敗した最近の記録です。',
+    latestGenerationId: recentGenerationId,
+  };
+  const recentGeneration = generationFixtures(recentEntryId, recentGenerationId).succeeded;
+  const details = new Map<string, EntryDetail>([
+    [
+      todayEntry.id,
+      {
+        ...todayEntry,
+        latestGeneration: todayGeneration,
+        lastSuccessfulGeneration: todayGeneration,
+      },
+    ],
+    [
+      recentEntry.id,
+      {
+        ...recentEntry,
+        latestGeneration: recentGeneration,
+        lastSuccessfulGeneration: recentGeneration,
+      },
+    ],
+  ]);
+
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [todayEntry, recentEntry], nextCursor: null } }),
+  );
+  for (const [id, entryDetail] of details) {
+    await page.route(`**/api/v1/entries/${id}`, (route) => route.fulfill({ json: entryDetail }));
+  }
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '一時的に利用できません。',
+          requestId: 'fixture-image-request',
+          retryable: true,
+        },
+      },
+    }),
+  );
+
+  await page.goto('/');
+  await expect(page.locator('.home-today-content')).toContainText('漫画画像を表示できません。');
+  await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
+  const recentCard = page.locator('.entry-history-card').filter({ hasText: recentEntry.body });
+  await expect(recentCard.locator('.entry-history-preview-error')).toHaveText(
+    '漫画画像を表示できません。',
+  );
 });
 
 test('保存中はヘッダーの編集取消を無効にし、完了後に最新の日記を表示する', async ({ page }) => {
@@ -677,6 +912,7 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
 
 test('生成受付の409後に最新状態が進行中なら受付エラーを解除する', async ({ page }) => {
   const queued = generationFixtures(entryId, generationId, 1).queued;
+  const running = generationFixtures(entryId, generationId, 1).running;
   const succeeded = generationFixtures(entryId, generationId, 1).succeeded;
   const latest: EntryDetail = {
     ...draftEntryDetailFixture,
@@ -686,6 +922,23 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
   let entryReads = 0;
   let generationReads = 0;
   let generationSubmitted = false;
+  let releaseFirstPoll!: () => void;
+  let notifyFirstPoll!: () => void;
+  let releaseTerminalPoll!: () => void;
+  let notifyTerminalPoll!: () => void;
+  const firstPollGate = new Promise<void>((resolve) => {
+    releaseFirstPoll = resolve;
+  });
+  const firstPollRequested = new Promise<void>((resolve) => {
+    notifyFirstPoll = resolve;
+  });
+  const terminalPollGate = new Promise<void>((resolve) => {
+    releaseTerminalPoll = resolve;
+  });
+  const terminalPollRequested = new Promise<void>((resolve) => {
+    notifyTerminalPoll = resolve;
+  });
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00Z') });
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/entries/*/generations', (route) => {
     generationSubmitted = true;
@@ -705,9 +958,16 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
     entryReads++;
     return route.fulfill({ json: generationSubmitted ? latest : draftEntryDetailFixture });
   });
-  await page.route(`**/api/v1/generations/${generationId}`, (route) => {
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
     generationReads++;
-    return route.fulfill({ json: generationReads === 1 ? queued : succeeded });
+    if (generationReads === 1) {
+      notifyFirstPoll();
+      await firstPollGate;
+      return route.fulfill({ json: running });
+    }
+    notifyTerminalPoll();
+    await terminalPollGate;
+    return route.fulfill({ json: succeeded });
   });
   await page.route('**/api/v1/assets/*/url', (route) =>
     route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
@@ -716,6 +976,15 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();
 
+  await firstPollRequested;
+  releaseFirstPoll();
+  await expect(page.getByRole('heading', { name: '画像を描いています' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  const advancePolling = page.clock.runFor(5100);
+  await terminalPollRequested;
+  releaseTerminalPoll();
+  await advancePolling;
   await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(entryReads).toBeGreaterThanOrEqual(2);

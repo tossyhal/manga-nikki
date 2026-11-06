@@ -124,8 +124,25 @@ function decodeCursor(value: string): z.infer<typeof cursorSchema> {
 
 function mapGeneration(value: unknown, entry: Entry): Generation {
   const generation = parseGenerationRow(value);
-  if (!generation || generation.entryId !== entry.id || generation.id !== entry.latestGenerationId)
+  if (
+    !generation ||
+    generation.entryId !== entry.id ||
+    generation.id !== entry.latestGenerationId ||
+    generation.entryRevision > entry.revision
+  )
     throw unavailable();
+  return generation;
+}
+
+function mapLastSuccessfulGeneration(value: unknown, entry: Entry): Generation | null {
+  const generation = parseGenerationRow(value);
+  if (
+    !generation ||
+    generation.entryId !== entry.id ||
+    generation.status !== 'succeeded' ||
+    generation.entryRevision > entry.revision
+  )
+    return null;
   return generation;
 }
 
@@ -204,18 +221,43 @@ export async function getLiveEntryDetail(
   if (error) readError(error);
   if (!data) return null;
   const entry = mapEntry(data);
-  if (!entry.latestGenerationId) return { ...entry, latestGeneration: null };
 
-  const generation = await client
+  const latestResult = entry.latestGenerationId
+    ? await client
+        .from('generations')
+        .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
+        .eq('id', entry.latestGenerationId)
+        .eq('entry_id', entry.id)
+        .eq('owner_id', context.owner)
+        .maybeSingle()
+    : { data: null, error: null };
+  if (latestResult.error) readError(latestResult.error);
+  const latestGeneration = latestResult.data ? mapGeneration(latestResult.data, entry) : null;
+  if (entry.latestGenerationId && !latestGeneration) throw unavailable();
+  if (latestGeneration?.status === 'succeeded') {
+    return {
+      ...entry,
+      latestGeneration,
+      lastSuccessfulGeneration: latestGeneration,
+    };
+  }
+
+  const successfulResult = await client
     .from('generations')
     .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
-    .eq('id', entry.latestGenerationId)
     .eq('entry_id', entry.id)
     .eq('owner_id', context.owner)
+    .eq('status', 'succeeded')
+    .lte('entry_revision', entry.revision)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
     .maybeSingle();
-  if (generation.error) readError(generation.error);
-  if (!generation.data) throw unavailable();
-  return { ...entry, latestGeneration: mapGeneration(generation.data, entry) };
+  if (successfulResult.error) readError(successfulResult.error);
+  const lastSuccessfulGeneration = successfulResult.data
+    ? mapLastSuccessfulGeneration(successfulResult.data, entry)
+    : null;
+  return { ...entry, latestGeneration, lastSuccessfulGeneration };
 }
 
 export async function updateLiveEntry(

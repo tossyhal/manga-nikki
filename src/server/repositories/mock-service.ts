@@ -72,6 +72,34 @@ export function getMockEntry(repository: MockRepository, id: string, owner: stri
   return found;
 }
 
+export function getMockEntryDetail(repository: MockRepository, id: string, owner: string) {
+  const found = getMockEntry(repository, id, owner);
+  const latestStored = found.entry.latestGenerationId
+    ? repository.generations.get(found.entry.latestGenerationId)
+    : null;
+  const latestGeneration =
+    latestStored?.owner === owner && latestStored.generation.entryId === found.entry.id
+      ? latestStored.generation
+      : null;
+  const queriedLastSuccessfulGeneration = [...repository.generations.values()]
+    .reverse()
+    .find(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === found.entry.id &&
+        stored.generation.entryRevision <= found.entry.revision &&
+        stored.generation.status === 'succeeded',
+    )?.generation;
+  const lastSuccessfulGeneration =
+    latestGeneration?.status === 'succeeded' ? latestGeneration : queriedLastSuccessfulGeneration;
+
+  return {
+    ...found.entry,
+    latestGeneration,
+    lastSuccessfulGeneration: lastSuccessfulGeneration ?? null,
+  };
+}
+
 export function reserveMockGeneration(
   repository: MockRepository,
   owner: string,

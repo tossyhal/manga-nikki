@@ -271,3 +271,56 @@ it('serves all generation states and exposes only successful owned assets', asyn
     ).toBe(404);
   }
 });
+
+it('keeps a prior mock success visible after the latest job fails', async () => {
+  const repository = createMockRepository();
+  app = createApp({ localDevelopment: true, repository });
+  const entry = await create();
+  const successfulId = crypto.randomUUID();
+  const failedId = crypto.randomUUID();
+  const fixtures = generationFixtures(entry.id, successfulId, 1);
+  const failed = generationFixtures(entry.id, failedId, 2).failed;
+  repository.generations.set(successfulId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: fixtures.succeeded,
+  });
+  repository.generations.set(failedId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: failed,
+  });
+  const foreignSuccess = generationFixtures(entry.id, crypto.randomUUID(), 2).succeeded;
+  repository.generations.set(foreignSuccess.id, {
+    owner: crypto.randomUUID(),
+    key: crypto.randomUUID(),
+    generation: foreignSuccess,
+  });
+  const futureSuccess = generationFixtures(entry.id, crypto.randomUUID(), 3).succeeded;
+  repository.generations.set(futureSuccess.id, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: futureSuccess,
+  });
+  const storedEntry = repository.entries.get(entry.id)!.entry;
+  storedEntry.revision = 2;
+  storedEntry.latestGenerationId = failedId;
+
+  const detailAfterFailure = await (await request(`/entries/${entry.id}`)).json();
+  expect(detailAfterFailure.latestGeneration.id).toBe(failedId);
+  expect(detailAfterFailure.latestGeneration.status).toBe('failed');
+  expect(detailAfterFailure.latestGenerationId).toBe(failedId);
+  expect(detailAfterFailure.lastSuccessfulGeneration.id).toBe(successfulId);
+
+  const newestSuccessId = crypto.randomUUID();
+  const newestSuccess = generationFixtures(entry.id, newestSuccessId, 2).succeeded;
+  repository.generations.set(newestSuccessId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: newestSuccess,
+  });
+  storedEntry.latestGenerationId = newestSuccessId;
+  const detailAfterSuccess = await (await request(`/entries/${entry.id}`)).json();
+  expect(detailAfterSuccess.latestGenerationId).toBe(newestSuccessId);
+  expect(detailAfterSuccess.lastSuccessfulGeneration.id).toBe(newestSuccessId);
+});

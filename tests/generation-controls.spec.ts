@@ -408,8 +408,8 @@ test('終端polling後に返った古いactive-generation応答で成功状態�
   await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
   await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
     generationReads++;
-    if (generationReads <= 2) return route.fulfill({ json: queued });
-    if (generationReads === 3) {
+    if (generationReads === 1) return route.fulfill({ json: queued });
+    if (generationReads === 2) {
       notifyActiveRead();
       await activeReadGate;
       return route.fulfill({ json: running });
@@ -434,7 +434,7 @@ test('終端polling後に返った古いactive-generation応答で成功状態�
   await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
   await expect.poll(() => quotaRequests).toBe(3);
   releaseActiveRead();
-  await expect.poll(() => generationReads).toBe(4);
+  await expect.poll(() => generationReads).toBe(3);
   await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
   await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toHaveCount(0);
 });
@@ -518,7 +518,15 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
     order.push('entry-saved');
     return route.fulfill({ json: { ...entryDetail, latestGeneration: undefined } });
   });
-  await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: entryDetail }));
+  await page.route(`**/api/v1/entries/${entryId}`, (route) =>
+    route.fulfill({
+      json: {
+        ...entryDetail,
+        latestGenerationId: generation?.id ?? null,
+        latestGeneration: generation,
+      },
+    }),
+  );
   await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
     const body = route.request().postDataJSON() as { captchaToken: string };
     generationRequests.push({
@@ -697,14 +705,23 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   const firstGeneration = generationFixtures(entryId, generationId).unknown;
   const generationRequests: Array<{ key: string; captchaToken: string }> = [];
   let generationReads = 0;
+  let latestGeneration: Generation | null = null;
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
   );
   await page.route('**/api/v1/me/quota', (route) =>
-    route.fulfill({ json: availableQuota(generationReads > 0 ? generationId : null) }),
+    route.fulfill({
+      json: availableQuota(latestGeneration?.status === 'unknown' ? generationId : null),
+    }),
   );
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
-    route.fulfill({ json: draftEntryDetailFixture }),
+    route.fulfill({
+      json: {
+        ...draftEntryDetailFixture,
+        latestGenerationId: latestGeneration?.id ?? null,
+        latestGeneration,
+      },
+    }),
   );
   await page.route(`**/api/v1/entries/${entryId}/generations`, async (route) => {
     const body = route.request().postDataJSON() as { captchaToken: string };
@@ -716,6 +733,7 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
       await route.abort('failed');
       return;
     }
+    latestGeneration = firstGeneration;
     await route.fulfill({
       status: 202,
       json: {
@@ -744,7 +762,7 @@ test('通信断の受付確認は同じキーで再送し、unknownを自動再�
   expect(generationRequests[0]?.key).toBe(generationRequests[1]?.key);
   expect(generationRequests[0]?.captchaToken).toBe('generation-token-e2e-1');
   expect(generationRequests[1]?.captchaToken).toBe('');
-  await expect.poll(() => generationReads).toBe(2);
+  await expect.poll(() => generationReads).toBe(1);
 
   const readsAfterUnknown = generationReads;
   await page.clock.runFor(5200);
@@ -859,16 +877,24 @@ test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り�
   await installLiveSession(page);
   await installTurnstileFake(page, { failFirstGeneration: true });
   const generation = generationFixtures(entryId, generationId).succeeded;
+  let latestGeneration: Generation | null = null;
   let generationRequests = 0;
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
   );
   await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
-    route.fulfill({ json: draftEntryDetailFixture }),
+    route.fulfill({
+      json: {
+        ...draftEntryDetailFixture,
+        latestGenerationId: latestGeneration?.id ?? null,
+        latestGeneration,
+      },
+    }),
   );
   await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
     generationRequests++;
+    latestGeneration = generation;
     return route.fulfill({
       status: 202,
       json: {
@@ -1954,6 +1980,7 @@ test('quota待ち中に編集しなければ自動生成用CAPTCHAを実行す�
   });
   const generationRequests: Array<{ key: string; captchaToken: string; expectedRevision: number }> =
     [];
+  let latestGeneration: Generation | null = null;
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
   );
@@ -1963,7 +1990,13 @@ test('quota待ち中に編集しなければ自動生成用CAPTCHAを実行す�
     return route.fulfill({ json: availableQuota() });
   });
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
-    route.fulfill({ json: draftEntryDetailFixture }),
+    route.fulfill({
+      json: {
+        ...draftEntryDetailFixture,
+        latestGenerationId: latestGeneration?.id ?? null,
+        latestGeneration,
+      },
+    }),
   );
   await page.route(`**/api/v1/entries/${entryId}/generations`, (route) => {
     const body = route.request().postDataJSON() as {
@@ -1975,6 +2008,7 @@ test('quota待ち中に編集しなければ自動生成用CAPTCHAを実行す�
       captchaToken: body.captchaToken,
       expectedRevision: body.expectedRevision,
     });
+    latestGeneration = generationFixtures(entryId, generationId).queued;
     return route.fulfill({
       status: 202,
       json: {
@@ -2036,13 +2070,20 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
     releaseDelete = resolve;
   });
   const generationRequests: Array<{ key: string; token: string; expectedRevision: number }> = [];
+  let latestGeneration: Generation | null = null;
   await page.route('**/api/v1/config', (route) =>
     route.fulfill({ json: { ...liveClientConfigFixture, generationAvailable: true } }),
   );
   await page.route('**/api/v1/me/quota', (route) => route.fulfill({ json: availableQuota() }));
   await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
     if (route.request().method() !== 'DELETE')
-      return route.fulfill({ json: draftEntryDetailFixture });
+      return route.fulfill({
+        json: {
+          ...draftEntryDetailFixture,
+          latestGenerationId: latestGeneration?.id ?? null,
+          latestGeneration,
+        },
+      });
     notifyDelete();
     await deleteGate;
     return route.fulfill({
@@ -2067,6 +2108,7 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
       token: body.captchaToken,
       expectedRevision: body.expectedRevision,
     });
+    latestGeneration = generationFixtures(entryId, generationId).succeeded;
     return route.fulfill({
       status: 202,
       json: {

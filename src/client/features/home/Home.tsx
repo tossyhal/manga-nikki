@@ -37,14 +37,17 @@ function generationLabel(
   entry: Entry,
   loading: boolean,
   error?: string,
+  comicGeneration?: Generation | null,
 ) {
-  if (error)
-    return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
-  if (!generation || generation.entryRevision !== entry.revision) {
-    if (entry.latestGenerationId)
-      return loading ? '状態を確認しています' : '記録を開いて状態を確認';
-    return '下書き';
+  if (!generation) {
+    if (entry.latestGenerationId) {
+      if (error) return '記録の状態を確認できません';
+      return loading ? '状態を確認しています' : '記録の状態を確認できません';
+    }
+    return comicGeneration ? '編集前の漫画' : '下書き';
   }
+  if (generation.entryRevision !== entry.revision)
+    return comicGeneration ? '編集前の漫画' : '編集済み';
   switch (generation.status) {
     case 'queued':
     case 'running':
@@ -64,26 +67,37 @@ function generationLabel(
 
 function TodayEntryHero({ entry }: { entry: Entry }) {
   const preview = useEntryPreview(entry, { eager: true });
-  const generation =
-    preview.generation?.entryRevision === entry.revision ? preview.generation : null;
   let placeholder = '漫画はまだありません';
   if (preview.isLoading) placeholder = '漫画を読み込んでいます';
-  else if (preview.error?.includes('画像')) placeholder = '漫画を表示できません';
-  else if (preview.error) placeholder = '記録の状態を確認できません';
-  else if (entry.latestGenerationId && !generation) placeholder = '記録を開いて状態を確認';
-  else if (generation?.status === 'queued' || generation?.status === 'running')
+  else if (preview.imageError) placeholder = '漫画画像を表示できません';
+  else if (preview.error && !preview.generation) placeholder = '記録の状態を確認できません';
+  else if (preview.generation?.status === 'queued' || preview.generation?.status === 'running')
     placeholder = '漫画を作成中';
-  else if (generation?.status === 'failed' || generation?.status === 'cancelled')
+  else if (preview.generation?.status === 'failed' || preview.generation?.status === 'cancelled')
     placeholder = '漫画はありません';
-  const hasComic = generation?.status === 'succeeded';
+  const hasComic = Boolean(preview.comicGeneration);
   const comicTitle =
-    generation?.status === 'succeeded' ? generation.comic.title : summarizeDiary(entry.body);
+    preview.comicGeneration?.status === 'succeeded'
+      ? preview.comicGeneration.comic.title
+      : summarizeDiary(entry.body);
+  const label = generationLabel(
+    preview.generation,
+    entry,
+    preview.isLoading,
+    preview.error,
+    preview.comicGeneration,
+  );
 
   return (
     <div className="home-today-hero">
       <div className="home-today-content">
         <h2>{summarizeDiary(entry.body)}</h2>
-        <p>{generationLabel(generation, entry, preview.isLoading, preview.error)}</p>
+        <p>{label}</p>
+        {preview.isStale && <p>編集前の漫画を表示しています。</p>}
+        {preview.error && (preview.generation || preview.comicGeneration) && (
+          <p>最新の状態を確認できません。</p>
+        )}
+        {preview.imageError && <p>{preview.imageError}</p>}
         <Link className="today-write-link" to={`/entries/${encodeURIComponent(entry.id)}`}>
           <span>{hasComic ? '漫画を読む' : '記録を読む'}</span>
           <Icon name="chevron-right" size={18} />
