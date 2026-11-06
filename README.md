@@ -75,9 +75,9 @@
 
 ## PWAのビルド確認
 
-環境別buildはstaging / productionの架空sample確認に`pnpm build:staging` / `pnpm build:production`、隔離live-demo targetの成果物準備に`pnpm build:demo`を使います。どれも`dist/`の成果物検査までで、Cloudflareへの公開はしません。demo buildには`.env.demo.local`の公開3値が必要です。実デプロイは別途承認後にだけ`pnpm exec wrangler deploy`を手動実行します。対象環境のビルド設定と公開手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)および[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)を参照してください。
+環境別buildはstaging / productionの架空sample確認に`pnpm build:staging` / `pnpm build:production`、隔離live-demo targetの成果物準備に`pnpm build:demo`を使います。`build:demo`には`.env.demo.local`の公開3値が必要です。これらのローカルbuildは`dist/`の成果物検査までで、Cloudflareへ公開しません。`develop`へのpush後、CIの`database`・`check`が成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`が設定されている場合に限り、既存staging Workerへ架空sampleを配信します。variableの既定は無効で、stagingでは個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番配信はこのworkflowの対象外です。手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 
-アプリ配信とは別に、Bitwarden接続確認とstaging用の最小Worker初期作成を行う[手動workflow](docs/DEPLOYMENT.md)があります。mergeだけでは起動せず、workers.devとpreview URLを有効にしません。通常CDは後続作業です。
+stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。Repository variable`STAGING_SAMPLE_CD_ENABLED`が未設定のため、sample CDはまだ有効化されていません。有効化に必要なGitHub Ruleset・Environment・Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowと資格情報は退役済みです。
 
 開発サーバーの起動とビルドでは、公開用設定に既知のSupabase / OpenAIサーバー専用キー形式が入っている場合に処理を停止します。demo buildではSupabase URLにHTTPSも要求します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
 

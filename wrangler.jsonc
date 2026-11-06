@@ -49,7 +49,9 @@
       "triggers": { "crons": ["* * * * *", "0 15 * * *"] },
     },
     "staging": {
-      "triggers": { "crons": ["0 15 * * *"] },
+      "workers_dev": true,
+      "preview_urls": false,
+      "triggers": { "crons": [] },
       "vars": {
         "APP_ENV": "staging",
         "DATA_MODE": "sample",
