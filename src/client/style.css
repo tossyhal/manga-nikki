@@ -2215,48 +2215,30 @@ output {
     padding-bottom: 8px;
   }
 
-  .detail-page.has-comic {
-    --comic-column-width: 62%;
-    --detail-column-gap: 32px;
-    display: flow-root;
-  }
-
-  .detail-page.has-comic > .detail-toolbar,
-  .detail-page.has-comic > .detail-date-row,
-  .detail-page.has-comic > .detail-revision-note {
-    clear: both;
-  }
-
   .detail-page.has-comic > .comic {
-    float: left;
-    width: var(--comic-column-width);
+    width: 100%;
     max-width: 100%;
-    margin: 0 var(--detail-column-gap) 14px 0;
+    margin: 0 0 14px;
   }
 
-  .detail-page.has-comic > .comic ~ .detail-revision-note,
-  .detail-page.has-comic > .comic-actions,
-  .detail-page.has-comic > .generation-card,
-  .detail-page.has-comic > .original-diary,
-  .detail-page.has-comic > .generation-status-note,
-  .detail-page.has-comic > .inline-alert,
-  .detail-page.has-comic > .captcha-card,
-  .detail-page.has-comic > .hint,
-  .detail-page.has-comic > .error,
-  .detail-page.has-comic > .button-secondary,
-  .detail-page.has-comic > .detail-action-dock {
-    clear: none;
-    width: calc(100% - var(--comic-column-width) - var(--detail-column-gap));
-    margin: 0 0 14px calc(var(--comic-column-width) + var(--detail-column-gap));
-    min-width: 0;
+  .detail-page.has-comic > .comic.is-page {
+    max-width: 760px;
+    margin-inline: auto;
   }
 
   .detail-page.has-comic > .comic-actions {
-    margin-bottom: 8px;
+    width: min(100%, 520px);
+    margin: 0 0 8px;
   }
 
   .detail-page.has-comic > .detail-action-dock {
+    position: static;
+    bottom: auto;
+    left: auto;
+    width: min(100%, 520px);
     max-width: none;
+    margin: 12px auto 0;
+    transform: none;
   }
 
   .detail-page.has-comic > .detail-action-dock .button-primary {
@@ -2285,5 +2267,24 @@ output {
 
   .detail-page .original-diary > p {
     max-width: 68ch;
+  }
+
+  .shared-comic-page .comic.is-panels {
+    max-width: none;
+  }
+
+  .detail-page.has-panel-comic .comic.is-panels .comic-panel-card,
+  .shared-comic-page .comic.is-panels .comic-panel-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    align-items: center;
+    gap: 12px;
+  }
+
+  .detail-page.has-panel-comic .comic.is-panels .comic-panel-caption,
+  .detail-page.has-panel-comic .comic.is-panels .comic-panel-caption > div,
+  .shared-comic-page .comic.is-panels .comic-panel-caption,
+  .shared-comic-page .comic.is-panels .comic-panel-caption > div {
+    min-width: 0;
   }
 }
