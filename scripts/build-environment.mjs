@@ -86,11 +86,11 @@ try {
   for (const key of environmentKeys) delete process.env[key];
 
   const publicValues = await loadPublicVariables();
-  if (target === 'demo') {
+  if (target === 'demo' || target === 'production') {
     const missing = [...publicVariables].filter((key) => !publicValues[key]?.trim());
     assert(
       missing.length === 0,
-      `.env.demo.localに公開設定の3変数を設定してください: ${missing.join(', ')}`,
+      `.env.${target}.localに公開設定の3変数を設定してください: ${missing.join(', ')}`,
     );
   }
   Object.assign(process.env, publicValues);

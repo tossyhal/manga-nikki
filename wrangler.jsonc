@@ -102,11 +102,11 @@
       "name": "manga-nikki",
       "workers_dev": true,
       "preview_urls": false,
-      "triggers": { "crons": [] },
+      "triggers": { "crons": ["0 15 * * *"] },
       "vars": {
         "APP_ENV": "production",
-        "DATA_MODE": "sample",
-        "AI_MODE": "mock",
+        "DATA_MODE": "live",
+        "AI_MODE": "live",
         "GENERATION_ENABLED": "false",
       },
       "assets": {

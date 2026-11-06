@@ -7,7 +7,7 @@
 - Workflowは[database-migrate.yml](../.github/workflows/database-migrate.yml)です。`workflow_dispatch`だけを受け付け、repository、`main` ref、owner ID `92223710`、triggering actor `tossyhal`をcheckout前に確認します。Environment jobでも既存のread-only preflightと同じmain HEAD検査を行います。
 - workflowはlint、typecheck、unit test、PostgreSQL 16の`test:db`、buildを通過してからDB接続へ進みます。実際の適用jobはEnvironment `dev-database-setup`を引き続き使い、既存のBitwarden設定からDB password 1件だけを取得します。Environmentとworkflow名にある`dev`は旧名のままですが、接続先project refは上記の固定値です。
 - apply前に、最新developでレビュー済みのmigrationをmainへmergeしてください。manifestにはmain commit hashが含まれるため、mainのcommitが変わったらplanを取り直します。mainにないdevelop migrationはapply対象になりません。
-- 2026-11-06にmainは`d1d74407e0c84229759433a6c551bd5442fafbe0`へ昇格し、10 migrationが統合されました。成功したread-only確認run `42200231474`はschemaを変更していません。migration applyの成功履歴はありません。
+- 2026-11-06にmainへ統合された10 migrationをproduction projectへapplyしました。Actions run `42211812661`は成功し、read-only再確認でremote 10 / pending 0を確認しています。Auth、RLS/RPC、Storageの実ブラウザ動作は別途未確認です。
 
 ## planで内容を確認する
 

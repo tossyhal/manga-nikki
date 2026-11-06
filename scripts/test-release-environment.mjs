@@ -151,9 +151,15 @@ try {
   };
 
   const devSecretJwt = jwtWithRole('service_role', 'dev-jwt-payload-sentinel');
+  const devGuardEnvironment = {
+    ...childEnvironment,
+    VITE_SUPABASE_PUBLISHABLE_KEY: devSecretJwt,
+    CLOUDFLARE_ENV: undefined,
+    MANGA_NIKKI_RELEASE_TARGET: undefined,
+  };
   await assertPublicConfigRejected(
     ['node_modules/vite/bin/vite.js'],
-    { ...childEnvironment, VITE_SUPABASE_PUBLISHABLE_KEY: devSecretJwt },
+    devGuardEnvironment,
     'VITE_SUPABASE_PUBLISHABLE_KEY',
     [devSecretJwt, 'dev-jwt-payload-sentinel'],
   );
@@ -242,20 +248,67 @@ try {
   assert.equal(
     await exists(path.join(fixtureRoot, '.env.production.local')),
     false,
-    'productionの公開設定ファイルはない状態でbuildします。',
+    'productionの公開設定がない場合はbuildできません。',
   );
+  let missingProductionFailure;
   try {
     await execFileAsync(process.execPath, ['scripts/build-environment.mjs', 'production'], {
       cwd: fixtureRoot,
       env: childEnvironment,
       maxBuffer: 10 * 1024 * 1024,
+      timeout: 15_000,
     });
+  } catch (error) {
+    missingProductionFailure = error;
+  }
+  assert.ok(missingProductionFailure, '公開設定がないproduction buildを受け付けてしまいました。');
+  assert.notEqual(missingProductionFailure.code, 'ETIMEDOUT');
+  const missingProductionOutput = [missingProductionFailure.stdout, missingProductionFailure.stderr]
+    .filter((part) => typeof part === 'string')
+    .join('\n');
+  for (const variable of [
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
+    'VITE_TURNSTILE_SITE_KEY',
+  ]) {
+    assert.ok(
+      missingProductionOutput.includes(variable),
+      `missing設定に変数名がありません: ${variable}`,
+    );
+  }
+  assert.equal(
+    await exists(path.join(fixtureRoot, 'dist', 'client')),
+    false,
+    'missing設定の拒否後にproduction client成果物が作られています。',
+  );
+
+  const workflowBuildEnvironment = {
+    ...childEnvironment,
+    VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_release-build-sentinel',
+    VITE_TURNSTILE_SITE_KEY: '0x4AAAAAAAprod-site-123456',
+  };
+  delete workflowBuildEnvironment.VITE_SUPABASE_URL;
+  try {
+    await execFileAsync(
+      process.execPath,
+      ['--experimental-strip-types', 'scripts/build-production-connected.ts'],
+      {
+        cwd: fixtureRoot,
+        env: workflowBuildEnvironment,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
   } catch (error) {
     const details = typeof error.stderr === 'string' ? error.stderr.trim() : '';
     throw new Error(
-      `隔離fixtureのproduction sample buildが失敗しました。${details ? `\n${details}` : ''}`,
+      `隔離fixtureのproduction connected workflow buildが失敗しました。${details ? `\n${details}` : ''}`,
     );
   }
+  assert.equal(
+    await exists(path.join(fixtureRoot, '.env.production.local')),
+    false,
+    'production公開設定ファイルはbuild後に削除されています。',
+  );
   const productionArtifactFiles = await collectFiles(path.join(fixtureRoot, 'dist'));
   const productionArtifactContents = await Promise.all(
     productionArtifactFiles.map((file) => readFile(file)),
@@ -287,15 +340,39 @@ try {
   assert.equal(productionWorkerConfig.targetEnvironment, 'production');
   assert.deepEqual(productionWorkerConfig.vars, {
     APP_ENV: 'production',
-    DATA_MODE: 'sample',
-    AI_MODE: 'mock',
+    DATA_MODE: 'live',
+    AI_MODE: 'live',
     GENERATION_ENABLED: 'false',
+    SUPABASE_URL: 'https://leihsygtsamxffyybskh.supabase.co',
+    SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_release-build-sentinel',
+    TURNSTILE_ALLOWED_HOSTNAMES: 'manga-nikki.tossyhal.workers.dev',
   });
   assert.equal(productionWorkerConfig.workers_dev, true);
   assert.equal(productionWorkerConfig.preview_urls, false);
-  assert.deepEqual(productionWorkerConfig.triggers?.crons, []);
+  assert.deepEqual(productionWorkerConfig.triggers?.crons, ['0 15 * * *']);
+  assert.deepEqual(productionWorkerConfig.secrets?.required, [
+    'SUPABASE_SECRET_KEY',
+    'TURNSTILE_SECRET_KEY',
+  ]);
   if (productionWorkerConfig.queues !== undefined) {
     assert.deepEqual(productionWorkerConfig.queues, { producers: [], consumers: [] });
+  }
+
+  const productionClientText = productionArtifactContents
+    .filter((_, index) =>
+      productionArtifactFiles[index].startsWith(path.join(fixtureRoot, 'dist/client')),
+    )
+    .map((contents) => contents.toString('utf8'))
+    .join('\n');
+  for (const sentinel of [
+    'https://leihsygtsamxffyybskh.supabase.co',
+    'sb_publishable_release-build-sentinel',
+    '0x4AAAAAAAprod-site-123456',
+  ]) {
+    assert.ok(
+      productionClientText.includes(sentinel),
+      `production公開設定がclient成果物にありません: ${sentinel}`,
+    );
   }
 
   await rm(path.join(fixtureRoot, 'dist'), { recursive: true, force: true });
@@ -485,7 +562,7 @@ try {
     );
   }
 
-  console.log('Release environment isolation and demo target checks passed.');
+  console.log('Release environment isolation and target checks passed.');
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }
