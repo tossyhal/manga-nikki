@@ -2,13 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
 
-function ComicTranscript({ comic, className }: { comic: ComicDocument; className?: string }) {
+function ComicTranscript({
+  comic,
+  className,
+  includeScene = false,
+}: {
+  comic: ComicDocument;
+  className?: string;
+  includeScene?: boolean;
+}) {
   return (
     <ol className={className}>
       {comic.panels.map((panel) => (
         <li key={panel.index}>
-          <p>{panel.scene}</p>
-          {panel.caption && panel.caption !== panel.scene && <p>{panel.caption}</p>}
+          {includeScene && <p>{panel.scene}</p>}
+          {panel.caption && (!includeScene || panel.caption !== panel.scene) && (
+            <p>{panel.caption}</p>
+          )}
           {panel.dialogue && <p>「{panel.dialogue}」</p>}
         </li>
       ))}
@@ -157,7 +167,7 @@ export function Comic({
                         </>
                       ) : (
                         <>
-                          <p>{panel.caption || panel.scene}</p>
+                          {panel.caption && <p>{panel.caption}</p>}
                           {panel.caption && panel.caption !== panel.scene && (
                             <span className="sr-only">{panel.scene}</span>
                           )}
@@ -179,7 +189,7 @@ export function Comic({
           {comic.visual.kind === 'page' &&
             comic.visual.textMode === 'external' &&
             (hideTranscriptDisclosure && !pageImageFailed ? (
-              <ComicTranscript comic={comic} className="sr-only" />
+              <ComicTranscript comic={comic} className="sr-only" includeScene />
             ) : (
               <details className="comic-script" {...(pageImageFailed ? { open: true } : {})}>
                 <summary>
@@ -187,7 +197,7 @@ export function Comic({
                     ? '漫画の画像を表示できません。4コマの内容を読む'
                     : '4コマの内容を読む'}
                 </summary>
-                <ComicTranscript comic={comic} />
+                <ComicTranscript comic={comic} includeScene={pageImageFailed} />
                 {pageImageFailed && (
                   <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
                 )}
@@ -209,7 +219,7 @@ export function Comic({
               {pageImageFailed && (
                 <details className="comic-script comic-image-fallback" open>
                   <summary>漫画の画像を表示できません。内容を読む</summary>
-                  <ComicTranscript comic={comic} />
+                  <ComicTranscript comic={comic} includeScene />
                   <RetryImagesButton onRetryImages={onRetryImages} imageRetrying={imageRetrying} />
                 </details>
               )}

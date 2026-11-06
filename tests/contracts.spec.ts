@@ -46,6 +46,7 @@ for (const [kind, template] of [
     if (comic.visual.kind === 'page') {
       await expect(page.getByText('4コマの内容を読む', { exact: true })).toHaveCount(0);
       const transcript = page.locator('.comic-transcript > ol.sr-only');
+      await expect(transcript).toContainText(comic.panels[0].scene);
       await expect(transcript).toContainText(comic.panels[0].caption);
       await expect(transcript).toContainText('「波がきれい」');
     } else {
@@ -84,6 +85,9 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('heading', { level: 1, name: comic.title })).toBeVisible();
   await expect(page.locator('.comic-panel-card')).toHaveCount(4);
+  await expect(
+    page.locator('.comic-panel-card').first().getByText(comic.panels[0].scene, { exact: true }),
+  ).toBeVisible();
   for (const panel of comic.panels) {
     await expect(page.getByText(panel.caption, { exact: true })).toHaveCount(1);
     if (panel.dialogue) {
@@ -92,6 +96,57 @@ test('panels漫画の画像URLを取得できなくても脚本を表示する',
   }
   await expect(page.getByText('「絵がなくても残る会話」', { exact: true })).toBeVisible();
   await expect.poll(() => requestedAssetIds.size).toBe(4);
+});
+
+test('空captionのpanels漫画ではsceneを読者向け本文に出さずdialogueだけを表示する', async ({
+  page,
+}) => {
+  const comic = structuredClone(panelsComic);
+  comic.panels[0].caption = '';
+  comic.panels[0].dialogue = 'セリフだけを表示';
+  comic.panels[1].caption = '';
+  comic.panels[1].dialogue = '';
+  const generation = { ...fixtures.succeeded, comic };
+  await intercept(page, () => generation);
+
+  await page.goto(`/entries/${entryId}`);
+
+  const firstCaption = page.locator('.comic-panel-card').nth(0).locator('.comic-panel-caption');
+  await expect(firstCaption.getByText('「セリフだけを表示」', { exact: true })).toBeVisible();
+  await expect(firstCaption.getByText(comic.panels[0].scene, { exact: true })).toHaveCount(0);
+  const secondCaption = page.locator('.comic-panel-card').nth(1).locator('.comic-panel-caption');
+  await expect(secondCaption.getByText(comic.panels[1].scene, { exact: true })).toHaveCount(0);
+  await expect(secondCaption.locator('div > p')).toHaveCount(0);
+  await expect(
+    page.locator('.comic-panel-caption').getByText(comic.panels[2].caption, { exact: true }),
+  ).toBeVisible();
+});
+
+test('共有page漫画の開いた外部脚本ではsceneを読者向け本文に出さない', async ({ page }) => {
+  const comic = structuredClone(pageComic);
+  if (comic.visual.kind !== 'page') throw new Error('page comic fixture is required');
+  const assetId = comic.visual.assetId;
+  comic.visual.textMode = 'external';
+  comic.panels[0].caption = '';
+  comic.panels[0].dialogue = 'セリフだけを表示';
+  comic.panels[1].caption = '';
+  comic.panels[1].dialogue = '';
+  const token = 'd'.repeat(64);
+  await page.route(`**/api/v1/shared/${token}`, (route) =>
+    route.fulfill({
+      json: { comic, images: { [assetId]: '/sample-comic.svg' } },
+    }),
+  );
+
+  await page.goto(`/shared/${token}`);
+  await expect(page.getByRole('heading', { name: comic.title, exact: true })).toBeVisible();
+  await page.getByText('4コマの内容を読む', { exact: true }).click();
+  const transcript = page.locator('.comic-script');
+  await expect(transcript.getByText('「セリフだけを表示」', { exact: true })).toBeVisible();
+  await expect(transcript.getByText(comic.panels[0].scene, { exact: true })).toHaveCount(0);
+  await expect(transcript.getByText(comic.panels[1].scene, { exact: true })).toHaveCount(0);
+  await expect(transcript.getByText(comic.panels[2].caption, { exact: true })).toBeVisible();
+  await expect(transcript.locator('li').nth(1).locator('p')).toHaveCount(0);
 });
 
 test('4コマ画像は遅い署名URLを待たずに先に届いたコマから表示する', async ({ page }) => {
@@ -341,6 +396,7 @@ test('埋め込み文字の漫画で画像取得に失敗したら脚本を一�
   await page.goto(`/entries/${entryId}`);
   const fallback = page.locator('.comic-image-fallback');
   await expect(fallback).toBeVisible();
+  await expect(fallback.getByText(comic.panels[0].scene, { exact: true })).toBeVisible();
   await expect(fallback.getByText(comic.panels[0].caption, { exact: true })).toBeVisible();
   await expect(fallback.getByText('「一度だけ読み上げる会話」', { exact: true })).toBeVisible();
   await expect(page.locator('.comic-transcript ol.sr-only')).toHaveCount(0);
