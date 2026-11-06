@@ -17,6 +17,7 @@ export function useEntryEditor({
   actionInFlightRef,
   setBusy,
   setError,
+  setOperationFailed,
   readLatestEntry,
   onBeginEdit,
 }: {
@@ -28,6 +29,7 @@ export function useEntryEditor({
   actionInFlightRef: RefObject<boolean>;
   setBusy: (busy: boolean) => void;
   setError: (message: string) => void;
+  setOperationFailed: (failed: boolean) => void;
   readLatestEntry: () => Promise<EntryDetail>;
   onBeginEdit: () => void;
 }) {
@@ -47,6 +49,7 @@ export function useEntryEditor({
     setDraftBody(entry.body);
     setEditErrorStatus(null);
     setError('');
+    setOperationFailed(false);
     setEditing(true);
   }
 
@@ -56,12 +59,14 @@ export function useEntryEditor({
     setDraftBody(entry.body);
     setEditErrorStatus(null);
     setError('');
+    setOperationFailed(false);
     setEditing(false);
   }
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!entry || pending || !activeRef.current || actionInFlightRef.current) return;
+    setOperationFailed(false);
     const parsed = updateEntrySchema.safeParse({
       expectedRevision: entry.revision,
       diaryDate: draftDate,
@@ -111,6 +116,7 @@ export function useEntryEditor({
       }
     } catch (failure) {
       if (activeRef.current) {
+        setOperationFailed(true);
         setError(failure instanceof Error ? failure.message : '変更を保存できませんでした。');
         setEditErrorStatus(failure instanceof ApiClientError ? failure.status : null);
       }
@@ -126,6 +132,7 @@ export function useEntryEditor({
     if (!entry || !activeRef.current || actionInFlightRef.current) return;
     setBusy(true);
     setError('');
+    setOperationFailed(false);
     actionInFlightRef.current = true;
     try {
       const latest = await readLatestEntry();

@@ -404,7 +404,7 @@ test('通常の高さではHome・入力・6週カレンダー・20件一覧に�
       }
     } else if (path === '/new') {
       const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
-      const cta = page.locator('.primary-action-dock > .button');
+      const cta = page.locator('.primary-action-dock > .primary-action-row > .button');
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await expect(diary).toBeVisible();
@@ -497,7 +497,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
 
   const dateControl = page.locator('.date-control');
   const card = page.locator('.entry-editor-card');
-  const primaryAction = page.locator('.primary-action-dock > .button');
+  const primaryAction = page.locator('.primary-action-dock > .primary-action-row > .button');
   await expect(dateControl).toBeVisible();
   await expect(card).toBeVisible();
   await expect(primaryAction).toBeEnabled();
@@ -515,7 +515,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
     return {
       date: bounds('.date-control'),
       card: bounds('.entry-editor-card'),
-      action: bounds('.primary-action-dock > .button'),
+      action: bounds('.primary-action-dock > .primary-action-row > .button'),
       mainBottom: mainBounds.bottom,
     };
   });
@@ -526,7 +526,7 @@ test('横長の短い入力画面では日付・本文・保存CTAを重ねず�
   await expect(primaryAction).toBeInViewport();
   const scrolledLayout = await page.evaluate(() => {
     const main = document.querySelector('#main');
-    const action = document.querySelector('.primary-action-dock > .button');
+    const action = document.querySelector('.primary-action-dock > .primary-action-row > .button');
     if (!(main instanceof HTMLElement) || !(action instanceof HTMLElement))
       throw new Error('本文領域または保存操作がありません');
     const mainBounds = main.getBoundingClientRect();

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { resolveMode, type Environment, type Mode } from './mode';
 import { createServerRpcClient } from './supabase-clients';
 import { createServerStorageRemovalClient } from './supabase-storage';
+import { cleanStorageDeletionOutboxForScheduledEnvironment } from './storage-deletion-cleanup';
 
 const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const objectPathPattern = new RegExp(
@@ -175,10 +176,18 @@ export async function cleanRetainedEntriesForScheduledEnvironment(
   }
   if (mode !== 'local-connected' && mode !== 'live-demo') return undefined;
 
-  const summary = await createRetentionCleanupServiceForEnvironment(
-    environment,
-    fetcher,
-  ).cleanDueEntries();
-  console.info('retention_cleanup_summary', summary);
-  return summary;
+  try {
+    const summary = await createRetentionCleanupServiceForEnvironment(
+      environment,
+      fetcher,
+    ).cleanDueEntries();
+    console.info('retention_cleanup_summary', summary);
+    return summary;
+  } finally {
+    try {
+      await cleanStorageDeletionOutboxForScheduledEnvironment(environment, fetcher);
+    } catch {
+      console.error('storage_deletion_cleanup_unavailable');
+    }
+  }
 }

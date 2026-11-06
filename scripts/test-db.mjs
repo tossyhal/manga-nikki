@@ -125,6 +125,7 @@ function startSqlSession(applicationName) {
       if (result.code !== 0 && !receivedSignal) {
         throw new Error(`PostgreSQL同期接続に失敗しました: ${result.stderr}`);
       }
+      return result;
     },
   };
 }
@@ -369,12 +370,230 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
+  succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_storage.sql'), 'utf8')));
   console.log('成功: RLS・RPC権限・入力・冪等性・編集競合・削除・期限・下書き上限');
   console.log('成功: 生成枠policy・原子的予約・snapshot・停止後再送・予算profile');
   console.log('成功: mock専用受付・Queue完了・quota・再送照合・期限/削除精算');
   console.log(
     '成功: OpenAI profile allowlist・予算quota・saving開始・候補fairness/3件上限/5分backoff/24時間期限',
   );
+  console.log(
+    '成功: comic save task・lease・厳密asset/comic確定・consumed精算・retention path union',
+  );
+
+  const comicRaceActor = 'fa000000-0000-4000-8000-000000000001';
+  const comicRaceRequest = 'fa000000-0000-4000-8000-000000000002';
+  const comicRaceIdempotency = 'fa000000-0000-4000-8000-000000000003';
+  const comicRaceProfile = JSON.stringify({
+    profile_id: 'openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1',
+    is_mock: false,
+    max_cost_micro_usd: 17,
+    max_image_calls: 4,
+    provider: 'openai',
+    script_model: 'gpt-4.1-mini-2025-04-14',
+    image_model: 'gpt-image-2.5-flare',
+    color_mode: 'monochrome',
+  });
+  const comicRaceScript = JSON.stringify({
+    title: '隔離競合用の架空漫画',
+    panels: [1, 2, 3, 4].map((index) => ({
+      index,
+      scene: `競合確認の架空scene ${index}`,
+      caption: `架空caption ${index}`,
+      dialogue: '',
+    })),
+  });
+  const comicRaceAssets = JSON.stringify(
+    [1, 2, 3, 4].map((index) => ({
+      index,
+      media_type: 'image/png',
+      byte_size: 1200,
+      width: 1024,
+      height: 1024,
+      sha256: String.fromCharCode(96 + index).repeat(64),
+    })),
+  );
+  const comicRaceAttemptSteps = [
+    { stage: 'script', index: 1 },
+    ...Array.from({ length: 4 }, (_, index) => ({ stage: 'images', index: index + 1 })),
+  ]
+    .map(
+      ({ stage, index }) => `
+select (public.begin_provider_attempt(:'race_generation'::uuid, :'race_claim'::uuid, '${stage}', ${index}, true) ->> 'attempt_id') as race_attempt \\gset
+select public.finish_provider_attempt(:'race_generation'::uuid, :'race_claim'::uuid,
+  :'race_attempt'::uuid, 'succeeded', 'fictional-save-lease-race-${stage}-${index}') as race_finished \\gset`,
+    )
+    .join('\n');
+  const comicRaceSetup = `
+begin;
+insert into auth.users(id) values ('${comicRaceActor}');
+update private.generation_policy set enabled = true, user_daily_limit = 10,
+  global_daily_limit = 10, global_total_limit = 10, budget_micro_usd = 1000,
+  model_profile_json = '${comicRaceProfile.replaceAll("'", "''")}'::jsonb where id = 1;
+set local role service_role;
+select (public.create_entry('${comicRaceActor}', '${comicRaceRequest}',
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date,
+  '保存lease競合確認用の架空日記', 'v1')).id as race_entry \\gset
+select (public.reserve_openai_generation('${comicRaceActor}', :'race_entry'::uuid, 1,
+  '${comicRaceIdempotency}', true) ->> 'generation_id') as race_generation \\gset
+select (public.claim_generation(:'race_generation'::uuid) ->> 'claim_token') as race_claim \\gset
+${comicRaceAttemptSteps}
+select public.mark_generation_saving(:'race_generation'::uuid, :'race_claim'::uuid) as race_saving \\gset
+select public.begin_comic_save_task(:'race_generation'::uuid, '${comicRaceActor}', 1,
+  (pg_catalog.statement_timestamp() at time zone 'Asia/Tokyo')::date, :'race_claim'::uuid,
+  'openai-script-gpt-4.1-mini-2025-04-14+image-gpt-image-2.5-flare-bw-v1',
+  '${comicRaceScript.replaceAll("'", "''")}'::jsonb,
+  '${comicRaceAssets.replaceAll("'", "''")}'::jsonb) as race_task \\gset
+reset role;
+update public.generations set deadline_at = pg_catalog.clock_timestamp() - interval '1 minute'
+where id = :'race_generation'::uuid;
+update private.comic_save_tasks set lease_expires_at = pg_catalog.clock_timestamp() - interval '1 second'
+where generation_id = :'race_generation'::uuid;
+commit;
+select :'race_generation' || '|' || :'race_claim';`;
+  const comicRaceIds = succeeded(await sql(comicRaceSetup)).split('|');
+  assert.equal(comicRaceIds.length, 2);
+  const [comicRaceGeneration, comicRaceClaim] = comicRaceIds;
+  const concurrentComicRecoveryClaims = await Promise.all(
+    Array.from({ length: 6 }, (_, index) =>
+      sql(
+        `set role service_role; select public.claim_comic_save_recovery('${comicRaceGeneration}');`,
+        `mn-db-comic-recovery-claim-${index}`,
+      ),
+    ),
+  );
+  const comicRecoveryClaims = concurrentComicRecoveryClaims.map((result) =>
+    JSON.parse(succeeded(result)),
+  );
+  const acquiredComicRecoveryClaims = comicRecoveryClaims.filter(
+    (result) => result.status === 'claimed',
+  );
+  assert.equal(acquiredComicRecoveryClaims.length, 1);
+  assert.equal(comicRecoveryClaims.filter((result) => result.status === 'pending').length, 5);
+  const comicRecoverySaveClaim = acquiredComicRecoveryClaims[0].save_claim_token;
+  const failedComicRecovery = JSON.parse(
+    succeeded(
+      await sql(
+        `set role service_role; select public.fail_comic_save('${comicRaceGeneration}', '${comicRaceClaim}', '${comicRecoverySaveClaim}');`,
+      ),
+    ),
+  );
+  assert.equal(failedComicRecovery.status, 'failed');
+  const deletionFixtureOwner = 'fa100000-0000-4000-8000-000000000001';
+  succeeded(
+    await sql(`insert into private.storage_deletion_outbox(object_path,next_check_at)
+      select '${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/' ||
+        'fa300000-0000-4000-8000-' || lpad(index::text,12,'0') || '.png',
+        '2026-11-05 00:00:00+00'::timestamptz
+      from generate_series(1,45) as fixture(index);`),
+  );
+  const deletionHolderName = 'mn-db-storage-gc-lock-holder';
+  const deletionLockMarker = `${deletionHolderName}:lock-acquired`;
+  const deletionHolder = startSqlSession(deletionHolderName);
+  let deletionClaimant;
+  let deletionClaimReachedMarker;
+  let deletionMarkerWait;
+  try {
+    deletionHolder.write(`begin;
+      select object_path from private.storage_deletion_outbox
+      where object_path like '${deletionFixtureOwner}/%'
+      order by next_check_at,object_path limit 40 for update;
+      \\echo ${deletionLockMarker}\n`);
+    await deletionHolder.waitForOutput(deletionLockMarker);
+    deletionClaimant = startSqlSession('mn-db-storage-gc-skip-locked-claim');
+    const deletionClaimMarker = 'mn-db-storage-gc-skip-locked-claim:returned';
+    deletionClaimant.write(`set role service_role;
+      select public.claim_storage_deletion_cleanup(40);
+      \\echo ${deletionClaimMarker}\n`);
+    deletionMarkerWait = deletionClaimant.waitForOutput(deletionClaimMarker);
+    let timeout;
+    deletionClaimReachedMarker = await Promise.race([
+      deletionMarkerWait.then(() => true),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+    clearTimeout(timeout);
+  } finally {
+    await deletionHolder.finish('commit');
+  }
+  assert.ok(deletionClaimant);
+  await deletionMarkerWait;
+  const deletionClaimResult = await deletionClaimant.finish('select 1');
+  const firstDeletionBatch = JSON.parse(
+    deletionClaimResult.stdout.split('\n').find((line) => line.startsWith('[')),
+  );
+  assert.equal(
+    deletionClaimReachedMarker,
+    true,
+    'Storage GCはロック済みrowで待たずにSKIP LOCKEDする',
+  );
+  assert.equal(firstDeletionBatch.length, 5);
+  assert.deepEqual(
+    firstDeletionBatch.map((item) => item.object_path),
+    Array.from(
+      { length: 5 },
+      (_, index) =>
+        `${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/` +
+        `fa300000-0000-4000-8000-${String(index + 41).padStart(12, '0')}.png`,
+    ),
+  );
+  const secondDeletionBatch = JSON.parse(
+    succeeded(
+      await sql(
+        'set role service_role; select public.claim_storage_deletion_cleanup(40);',
+        'mn-db-storage-gc-next-batch',
+      ),
+    ),
+  );
+  assert.equal(secondDeletionBatch.length, 40);
+  assert.deepEqual(
+    secondDeletionBatch.map((item) => item.object_path),
+    Array.from(
+      { length: 40 },
+      (_, index) =>
+        `${deletionFixtureOwner}/fa200000-0000-4000-8000-000000000001/` +
+        `fa300000-0000-4000-8000-${String(index + 1).padStart(12, '0')}.png`,
+    ),
+  );
+  assert.equal(
+    new Set([...firstDeletionBatch, ...secondDeletionBatch].map((item) => item.object_path)).size,
+    45,
+  );
+  const oversizedDeletionBatch = await sql(
+    'set role service_role; select public.claim_storage_deletion_cleanup(41);',
+    'mn-db-storage-gc-max-limit',
+  );
+  assert.notEqual(oversizedDeletionBatch.code, 0);
+  assert.match(oversizedDeletionBatch.stderr, /INVALID_LIMIT/);
+  console.log('成功: Storage GCは40件上限・公平順・SKIP LOCKEDで残pathを拾う');
+  succeeded(
+    await sql(`begin;
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'global_total' and subject is null and day_key is null;
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'global_day' and subject is null
+          and day_key = (select reserved_day from private.reservations where generation_id = '${comicRaceGeneration}');
+      update private.quota_counters set count = count - 1,
+        committed_micro_usd = committed_micro_usd - 17
+        where scope = 'user_day' and subject = '${comicRaceActor}'
+          and day_key = (select reserved_day from private.reservations where generation_id = '${comicRaceGeneration}');
+      delete from private.comic_save_tasks where generation_id = '${comicRaceGeneration}';
+      delete from private.provider_attempts where generation_id = '${comicRaceGeneration}';
+      delete from private.reservations where generation_id = '${comicRaceGeneration}';
+      update public.entries set latest_generation_id = null where id = (
+        select entry_id from public.generations where id = '${comicRaceGeneration}');
+      delete from public.generations where id = '${comicRaceGeneration}';
+      delete from public.entries where owner_id = '${comicRaceActor}';
+      delete from auth.users where id = '${comicRaceActor}';
+      update private.generation_policy set enabled = false, user_daily_limit = 2,
+        global_daily_limit = 0, global_total_limit = 0, budget_micro_usd = 0,
+        model_profile_json = '{}'::jsonb where id = 1;
+      commit;`),
+  );
+  console.log('成功: 6並列保存復旧claimは1 leaseだけ取得し、他5件はpending');
 
   const actor = '33333333-3333-4333-8333-333333333333';
   succeeded(await sql(`insert into auth.users(id) values ('${actor}');`));

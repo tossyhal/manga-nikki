@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
-import type { Entry, EntryDetail } from '../src/shared/schemas';
+import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import {
   draftEntryDetailFixture,
   liveClientConfigFixture,
@@ -225,6 +225,236 @@ test('生成待ち・生成中の日記では編集操作を表示しない', as
   }
 });
 
+test('編集フォーム表示中に生成状態が後着しても入力と操作を一貫させる', async ({ page }) => {
+  let releaseQuota!: () => void;
+  let notifyQuota!: () => void;
+  const quotaRequested = new Promise<void>((resolve) => {
+    notifyQuota = resolve;
+  });
+  const quotaGate = new Promise<void>((resolve) => {
+    releaseQuota = resolve;
+  });
+  let releasePoll!: () => void;
+  let notifyPoll!: () => void;
+  const pollRequested = new Promise<void>((resolve) => {
+    notifyPoll = resolve;
+  });
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let generationReads = 0;
+
+  await configureDetail(page);
+  await page.route('**/api/v1/me/quota', async (route) => {
+    notifyQuota();
+    await quotaGate;
+    return route.fulfill({
+      json: {
+        remainingToday: 2,
+        activeGenerationId: generationId,
+        resetAt: '2099-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1)
+      return route.fulfill({ json: generationFixtures(entryId, generationId).queued });
+    if (generationReads === 2) {
+      notifyPoll();
+      await pollGate;
+    }
+    return route.fulfill({ json: generationFixtures(entryId, generationId).failed });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await quotaRequested;
+  await clickEntryMenuItem(page, '日記を編集');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  const draft = '生成状態が後着しても保つ編集内容';
+  await diary.fill(draft);
+
+  releaseQuota();
+  await pollRequested;
+  await expect(page.locator('#edit-entry-form')).toHaveCount(1);
+  await expect(diary).toHaveValue(draft);
+  await expect(diary).toBeDisabled();
+  await expect(page.locator('.detail-edit-pending-note')).toContainText(
+    '生成中のため変更を保存できません',
+  );
+  await expect(
+    page.locator('.detail-edit-toolbar').getByRole('button', { name: '保存', exact: true }),
+  ).toBeDisabled();
+
+  releasePoll();
+  await expect(diary).toBeEnabled();
+  await expect(diary).toHaveValue(draft);
+  await expect(
+    page.locator('.detail-edit-toolbar').getByRole('button', { name: '保存', exact: true }),
+  ).toBeEnabled();
+});
+
+test('生成中の編集フォームへ後着エラーを一度だけ表示する', async ({ page }) => {
+  let releaseQuota!: () => void;
+  let notifyQuota!: () => void;
+  const quotaRequested = new Promise<void>((resolve) => {
+    notifyQuota = resolve;
+  });
+  const quotaGate = new Promise<void>((resolve) => {
+    releaseQuota = resolve;
+  });
+  let generationReads = 0;
+  let releasePoll!: () => void;
+  let notifyPoll!: () => void;
+  const pollRequested = new Promise<void>((resolve) => {
+    notifyPoll = resolve;
+  });
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  await configureDetail(page);
+  await page.route('**/api/v1/me/quota', async (route) => {
+    notifyQuota();
+    await quotaGate;
+    return route.fulfill({
+      json: {
+        remainingToday: 2,
+        activeGenerationId: generationId,
+        resetAt: '2099-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 1)
+      return route.fulfill({ json: generationFixtures(entryId, generationId).queued });
+    if (generationReads === 2) {
+      notifyPoll();
+      await pollGate;
+      return route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: 'DEPENDENCY_UNAVAILABLE',
+            message: 'backend generation error',
+            requestId: 'generation-poll-failure-e2e',
+            retryable: true,
+          },
+        },
+      });
+    }
+    return route.fulfill({ json: generationFixtures(entryId, generationId).queued });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await quotaRequested;
+  await clickEntryMenuItem(page, '日記を編集');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diary.fill('生成状態を確認中に保持する架空の入力');
+  releaseQuota();
+  await pollRequested;
+  await expect(diary).toBeDisabled();
+  releasePoll();
+
+  const alert = page.locator('#edit-entry-form [role="alert"]');
+  await expect(alert).toContainText('一時的に利用できません');
+  await expect(page.getByRole('alert')).toHaveCount(1);
+  await expect(alert).toBeFocused();
+  await expect(diary).toHaveValue('生成状態を確認中に保持する架空の入力');
+  await expect(diary).toBeDisabled();
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`保存結果が離脱確認へ${outcome === 'success' ? '成功状態' : '未保存状態'}を反映する`, async ({
+    page,
+  }) => {
+    let currentDetail: EntryDetail = { ...draftEntryDetailFixture };
+    let releasePatch!: () => void;
+    let notifyPatch!: () => void;
+    const patchRequested = new Promise<void>((resolve) => {
+      notifyPatch = resolve;
+    });
+    const patchGate = new Promise<void>((resolve) => {
+      releasePatch = resolve;
+    });
+
+    await page.route('**/api/v1/config', (route) =>
+      route.fulfill({ json: mockClientConfigFixture }),
+    );
+    await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+      if (route.request().method() !== 'PATCH') return route.fulfill({ json: currentDetail });
+      const update = route.request().postDataJSON() as {
+        diaryDate: string;
+        body: string;
+      };
+      notifyPatch();
+      await patchGate;
+      if (outcome === 'failure')
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: 'DEPENDENCY_UNAVAILABLE',
+              message: '保存できませんでした。',
+              requestId: 'blocked-save-e2e',
+              retryable: true,
+            },
+          },
+        });
+      currentDetail = {
+        ...currentDetail,
+        ...update,
+        revision: 2,
+      };
+      return route.fulfill({
+        json: {
+          id: currentDetail.id,
+          diaryDate: currentDetail.diaryDate,
+          body: currentDetail.body,
+          revision: currentDetail.revision,
+          latestGenerationId: currentDetail.latestGenerationId,
+          createdAt: currentDetail.createdAt,
+          updatedAt: '2026-01-03T00:00:00Z',
+        } satisfies Entry,
+      });
+    });
+
+    await page.goto(`/entries/${entryId}`);
+    await clickEntryMenuItem(page, '日記を編集');
+    const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+    const draft = `離脱確認中に保存${outcome}`;
+    await diary.fill(draft);
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await patchRequested;
+    await page.getByRole('link', { name: '記録', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: '処理中です' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('保存に失敗すると');
+    await expect(dialog.getByRole('button', { name: '移動する' })).toBeVisible();
+
+    releasePatch();
+    if (outcome === 'success') {
+      await expect(page).toHaveURL(/\/library(?:\?|$)/);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    } else {
+      const dirtyDialog = page.getByRole('dialog', {
+        name: '入力内容が保存されていません',
+      });
+      await expect(dirtyDialog).toBeVisible();
+      await expect(dirtyDialog.getByRole('button', { name: '保存せずに離れる' })).toBeVisible();
+      await expect(diary).toHaveValue(draft);
+      await clickAppDialogButton(page, '入力内容が保存されていません', '入力に戻る');
+      await expect(diary).toHaveValue(draft);
+      await page.getByRole('link', { name: '記録', exact: true }).click();
+      await clickAppDialogButton(page, '入力内容が保存されていません', '保存せずに離れる');
+      await expect(page).toHaveURL(/\/library(?:\?|$)/);
+    }
+  });
+}
+
 for (const failure of [
   { status: 401, code: 'AUTH_EXPIRED', mode: 'live' as const },
   { status: 409, code: 'REVISION_CONFLICT', mode: 'mock' as const },
@@ -445,6 +675,53 @@ test('生成開始後の409を最新読込すると編集を閉じる', async ({
   await expect(page.getByLabel('今日はどんな日だった？', { exact: true })).toHaveCount(0);
 });
 
+test('生成受付の409後に最新状態が進行中なら受付エラーを解除する', async ({ page }) => {
+  const queued = generationFixtures(entryId, generationId, 1).queued;
+  const succeeded = generationFixtures(entryId, generationId, 1).succeeded;
+  const latest: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: queued,
+  };
+  let entryReads = 0;
+  let generationReads = 0;
+  let generationSubmitted = false;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    generationSubmitted = true;
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: {
+          code: 'ENTRY_BUSY',
+          message: 'この記録はすでに生成中です。',
+          requestId: 'e2e-entry-busy',
+          retryable: false,
+        },
+      },
+    });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    entryReads++;
+    return route.fulfill({ json: generationSubmitted ? latest : draftEntryDetailFixture });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, (route) => {
+    generationReads++;
+    return route.fulfill({ json: generationReads === 1 ? queued : succeeded });
+  });
+  await page.route('**/api/v1/assets/*/url', (route) =>
+    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
+  );
+
+  await page.goto(`/entries/${entryId}`);
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: succeeded.comic.title })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(entryReads).toBeGreaterThanOrEqual(2);
+  expect(generationReads).toBeGreaterThanOrEqual(2);
+});
+
 test('未来日は保存せず、日付と本文を保持する', async ({ page }) => {
   let patchCount = 0;
   await configureDetail(page);
@@ -621,6 +898,341 @@ test('詳細編集の未保存入力はアプリ内移動とhard reload前に確
   const menu = await openEntryMenu(page);
   await expect(menu.getByRole('menuitem', { name: '日記を編集' })).toBeVisible();
   await expect(page.getByText(draft, { exact: true })).toHaveCount(0);
+});
+
+test('保存中に選んだ一覧への移動を保存完了後も維持する', async ({ page }) => {
+  const savedEntry: Entry = {
+    id: entryId,
+    diaryDate: jstToday(),
+    body: '一覧への移動を維持する架空の日記',
+    revision: 1,
+    latestGenerationId: null,
+    createdAt: draftEntryDetailFixture.createdAt,
+    updatedAt: draftEntryDetailFixture.updatedAt,
+  };
+  let releasePost!: () => void;
+  let notifyPost!: () => void;
+  const postRequested = new Promise<void>((resolve) => {
+    notifyPost = resolve;
+  });
+  const postGate = new Promise<void>((resolve) => {
+    releasePost = resolve;
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    notifyPost();
+    await postGate;
+    return route.fulfill({ status: 201, json: savedEntry });
+  });
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [savedEntry], nextCursor: null } }),
+  );
+
+  await page.goto('/new');
+  await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(savedEntry.body);
+  await page.getByRole('button', { name: '下書き保存' }).click();
+  await postRequested;
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+
+  releasePost();
+  await expectDefaultLibraryLocation(page);
+  await expect(page.locator('.entry-history-card').first()).toContainText(savedEntry.body);
+});
+
+test('保存済み日記の漫画受付が失敗したら保留中の移動を取り消す', async ({ page }) => {
+  const savedEntry: Entry = {
+    id: entryId,
+    diaryDate: draftEntryDetailFixture.diaryDate,
+    body: '受付失敗後も画面に残す架空の日記',
+    revision: 1,
+    latestGenerationId: null,
+    createdAt: draftEntryDetailFixture.createdAt,
+    updatedAt: draftEntryDetailFixture.updatedAt,
+  };
+  let releaseGeneration!: () => void;
+  let notifyGeneration!: () => void;
+  const generationRequested = new Promise<void>((resolve) => {
+    notifyGeneration = resolve;
+  });
+  const generationGate = new Promise<void>((resolve) => {
+    releaseGeneration = resolve;
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({ status: 201, json: savedEntry })
+      : route.continue(),
+  );
+  await page.route('**/api/v1/entries/*/generations', async (route) => {
+    notifyGeneration();
+    await generationGate;
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: 'backend generation error',
+          requestId: 'generation-failure-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.goto('/new');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diary.fill(savedEntry.body);
+  await page.getByRole('button', { name: '4コマにする' }).click();
+  await generationRequested;
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseGeneration();
+
+  await expect(page).toHaveURL(/\/new$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(diary).toHaveValue(savedEntry.body);
+  await expect(page.getByRole('alert')).toContainText('一時的に利用できません');
+  await expect(page.getByRole('heading', { name: '日記を保存しました' })).toBeVisible();
+});
+
+test('保存後に利用枠がなくなった場合も保存済み記録への導線を表示する', async ({ page }) => {
+  const savedEntry: Entry = {
+    id: entryId,
+    diaryDate: jstToday(),
+    body: '保存後の利用枠再確認で案内する架空の日記',
+    revision: 1,
+    latestGenerationId: null,
+    createdAt: draftEntryDetailFixture.createdAt,
+    updatedAt: draftEntryDetailFixture.updatedAt,
+  };
+  let entryPosted = false;
+  let releaseQuota!: () => void;
+  let notifyQuota!: () => void;
+  const quotaRequested = new Promise<void>((resolve) => {
+    notifyQuota = resolve;
+  });
+  const quotaGate = new Promise<void>((resolve) => {
+    releaseQuota = resolve;
+  });
+  let generationPosts = 0;
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/me/quota', async (route) => {
+    if (entryPosted) {
+      notifyQuota();
+      await quotaGate;
+      return route.fulfill({
+        json: {
+          remainingToday: 0,
+          activeGenerationId: null,
+          resetAt: '2099-01-02T00:00:00Z',
+          generationAvailable: true,
+        },
+      });
+    }
+    return route.fulfill({
+      json: {
+        remainingToday: 3,
+        activeGenerationId: null,
+        resetAt: '2099-01-02T00:00:00Z',
+        generationAvailable: true,
+      },
+    });
+  });
+  await page.route('**/api/v1/entries', (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    entryPosted = true;
+    return route.fulfill({ status: 201, json: savedEntry });
+  });
+  await page.route('**/api/v1/entries/*/generations', (route) => {
+    if (route.request().method() === 'POST') generationPosts++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+
+  await page.goto('/new');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diary.fill(savedEntry.body);
+  await expect(page.getByRole('button', { name: '4コマにする', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '4コマにする', exact: true }).click();
+  await quotaRequested;
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseQuota();
+
+  await expect(page).toHaveURL(/\/new$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '日記を保存しました' })).toBeVisible();
+  await expect(page.getByRole('link', { name: '保存した記録を見る' })).toHaveAttribute(
+    'href',
+    `/entries/${entryId}`,
+  );
+  await expect(diary).toHaveValue(savedEntry.body);
+  expect(generationPosts).toBe(0);
+});
+
+test('削除成功後も処理中に選んだ戻る操作を維持する', async ({ page }) => {
+  const listEntry: Entry = { ...draftEntryDetailFixture, diaryDate: jstToday() };
+  let releaseDelete!: () => void;
+  let notifyDelete!: () => void;
+  const deleteRequested = new Promise<void>((resolve) => {
+    notifyDelete = resolve;
+  });
+  const deleteGate = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [listEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() !== 'DELETE')
+      return route.fulfill({ json: draftEntryDetailFixture });
+    notifyDelete();
+    await deleteGate;
+    return route.fulfill({ json: { deleted: true } });
+  });
+
+  await page.goto('/');
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expectDefaultLibraryLocation(page);
+  await page.locator('.entry-history-card').first().click();
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を削除');
+  const confirmDelete = clickAppDialogButton(page, 'この日記を削除しますか？', '削除する');
+  await deleteRequested;
+  await confirmDelete;
+
+  void page.goBack().catch(() => null);
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseDelete();
+  await expectDefaultLibraryLocation(page);
+});
+
+test('削除中のpollingエラーで保留中の移動を取り消さない', async ({ page }) => {
+  const listEntry: Entry = { ...draftEntryDetailFixture, diaryDate: jstToday() };
+  const detail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: generationFixtures(entryId, generationId).queued,
+  };
+  let generationReads = 0;
+  let releasePoll!: () => void;
+  let notifyPoll!: () => void;
+  const pollRequested = new Promise<void>((resolve) => {
+    notifyPoll = resolve;
+  });
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let releaseDelete!: () => void;
+  let notifyDelete!: () => void;
+  const deleteRequested = new Promise<void>((resolve) => {
+    notifyDelete = resolve;
+  });
+  const deleteGate = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  await configureDetail(page, detail);
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [listEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() !== 'DELETE') return route.fulfill({ json: detail });
+    notifyDelete();
+    await deleteGate;
+    return route.fulfill({ json: { deleted: true } });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationReads++;
+    if (generationReads === 2) {
+      notifyPoll();
+      await pollGate;
+      return route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: 'DEPENDENCY_UNAVAILABLE',
+            message: 'backend polling error',
+            requestId: 'delete-polling-error-e2e',
+            retryable: true,
+          },
+        },
+      });
+    }
+    return route.fulfill({ json: detail.latestGeneration });
+  });
+
+  await page.goto('/');
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expectDefaultLibraryLocation(page);
+  await page.locator('.entry-history-card').first().click();
+  await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
+  await pollRequested;
+  await clickEntryMenuItem(page, '日記を削除');
+  const confirmDelete = clickAppDialogButton(page, 'この日記を削除しますか？', '削除する');
+  await deleteRequested;
+  await confirmDelete;
+
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  const busyDialog = page.getByRole('dialog', { name: '処理中です' });
+  await expect(busyDialog).toBeVisible();
+  releasePoll();
+  await expect(page.locator('.detail-page [role="alert"]')).toContainText('一時的に利用できません');
+  await expect(busyDialog).toBeVisible();
+  releaseDelete();
+
+  await expect(page).toHaveURL('/');
+});
+
+test('削除失敗時は保留中の移動を取り消してエラーを残す', async ({ page }) => {
+  const listEntry: Entry = { ...draftEntryDetailFixture, diaryDate: jstToday() };
+  let releaseDelete!: () => void;
+  let notifyDelete!: () => void;
+  const deleteRequested = new Promise<void>((resolve) => {
+    notifyDelete = resolve;
+  });
+  const deleteGate = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  await configureDetail(page);
+  await page.route('**/api/v1/entries?*', (route) =>
+    route.fulfill({ json: { items: [listEntry], nextCursor: null } }),
+  );
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() !== 'DELETE')
+      return route.fulfill({ json: draftEntryDetailFixture });
+    notifyDelete();
+    await deleteGate;
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '削除できませんでした。',
+          requestId: 'delete-failure-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('link', { name: '記録', exact: true }).click();
+  await expectDefaultLibraryLocation(page);
+  await page.locator('.entry-history-card').first().click();
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を削除');
+  const confirmDelete = clickAppDialogButton(page, 'この日記を削除しますか？', '削除する');
+  await deleteRequested;
+  await confirmDelete;
+  void page.goBack().catch(() => null);
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseDelete();
+
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText('一時的に利用できません');
 });
 
 for (const accept of [false, true]) {
