@@ -53,6 +53,9 @@ export type DevDatabasePreflightErrorCode =
   | 'PSQL_COMMAND_FAILED'
   | 'DATABASE_QUERY_FAILED'
   | 'DATABASE_CATALOG_INVALID'
+  | 'DATABASE_IDENTITY_INVALID'
+  | 'DATABASE_SESSION_INVALID'
+  | 'DATABASE_PLATFORM_INVALID'
   | 'MIGRATION_HISTORY_READ_FAILED'
   | 'MIGRATION_HISTORY_INVALID'
   | 'MIGRATION_HISTORY_NOT_PREFIX'
@@ -109,26 +112,41 @@ type ValidatedContext = Readonly<{
 }>;
 
 type CatalogCheck = Readonly<{
-  connectionOk: boolean;
+  identityOk: boolean;
+  sessionOk: boolean;
+  platformOk: boolean;
   historyExists: boolean;
   publicTablesPresent: boolean;
   entriesPresent: boolean;
   generationsPresent: boolean;
 }>;
 
+const readOnlyTransactionSetupSql = [
+  'SET LOCAL default_transaction_read_only=on;',
+  "SET LOCAL statement_timeout='15s';",
+  "SET LOCAL lock_timeout='5s';",
+  'SET LOCAL search_path=pg_catalog;',
+].join('\n');
+
+const sessionSettingsCheckSql = `
+pg_catalog.current_setting('transaction_read_only') = 'on'
+  AND pg_catalog.current_setting('default_transaction_read_only') = 'on'
+  AND pg_catalog.current_setting('statement_timeout') = '15s'
+  AND pg_catalog.current_setting('lock_timeout') = '5s'
+  AND pg_catalog.current_setting('search_path') = 'pg_catalog'
+`.trim();
+
 const connectionCheckSql = `
 BEGIN READ ONLY;
+${readOnlyTransactionSetupSql}
 SELECT pg_catalog.json_build_object(
-  'connectionOk',
+  'identityOk',
   pg_catalog.current_database() = 'postgres'
     AND current_user = 'postgres'
-    AND pg_catalog.current_setting('transaction_read_only') = 'on'
-    AND pg_catalog.current_setting('default_transaction_read_only') = 'on'
-    AND pg_catalog.current_setting('statement_timeout') = '15s'
-    AND pg_catalog.current_setting('lock_timeout') = '5s'
-    AND pg_catalog.current_setting('search_path') = 'pg_catalog'
-    AND pg_catalog.has_schema_privilege(current_user, 'public', 'CREATE')
-    AND pg_catalog.to_regclass('auth.users') IS NOT NULL
+    AND pg_catalog.has_schema_privilege(current_user, 'public', 'CREATE'),
+  'sessionOk', ${sessionSettingsCheckSql},
+  'platformOk',
+    pg_catalog.to_regclass('auth.users') IS NOT NULL
     AND pg_catalog.to_regclass('storage.objects') IS NOT NULL
     AND (
       SELECT pg_catalog.count(*) = 3
@@ -426,8 +444,12 @@ function parseCatalogResult(raw: string): CatalogCheck {
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
-    !('connectionOk' in parsed) ||
-    typeof parsed.connectionOk !== 'boolean' ||
+    !('identityOk' in parsed) ||
+    typeof parsed.identityOk !== 'boolean' ||
+    !('sessionOk' in parsed) ||
+    typeof parsed.sessionOk !== 'boolean' ||
+    !('platformOk' in parsed) ||
+    typeof parsed.platformOk !== 'boolean' ||
     !('historyExists' in parsed) ||
     typeof parsed.historyExists !== 'boolean' ||
     !('publicTablesPresent' in parsed) ||
@@ -441,7 +463,9 @@ function parseCatalogResult(raw: string): CatalogCheck {
   }
 
   return {
-    connectionOk: parsed.connectionOk,
+    identityOk: parsed.identityOk,
+    sessionOk: parsed.sessionOk,
+    platformOk: parsed.platformOk,
     historyExists: parsed.historyExists,
     publicTablesPresent: parsed.publicTablesPresent,
     entriesPresent: parsed.entriesPresent,
@@ -449,16 +473,40 @@ function parseCatalogResult(raw: string): CatalogCheck {
   };
 }
 
-function parseRemoteVersions(raw: string): string[] {
-  if (raw === '') return [];
-  const lines = raw.split('\n');
-  if (lines.at(-1) === '') lines.pop();
-  const versions = lines.map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+function parseMigrationHistoryResult(raw: string): { sessionOk: boolean; versions: string[] } {
+  let parsed: unknown;
+  try {
+    const line = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+    if (line.length === 0 || line.includes('\n') || line.includes('\r')) {
+      return fail('MIGRATION_HISTORY_INVALID');
+    }
+    parsed = JSON.parse(line);
+  } catch (error) {
+    if (error instanceof DevDatabasePreflightFailure) throw error;
+    return fail('MIGRATION_HISTORY_INVALID');
+  }
+
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('sessionOk' in parsed) ||
+    typeof parsed.sessionOk !== 'boolean' ||
+    !('versions' in parsed) ||
+    !Array.isArray(parsed.versions) ||
+    parsed.versions.some((version) => typeof version !== 'string')
+  ) {
+    return fail('MIGRATION_HISTORY_INVALID');
+  }
+
+  return { sessionOk: parsed.sessionOk, versions: parsed.versions };
+}
+
+function parseRemoteVersions(versions: readonly string[]): string[] {
   if (versions.some((version) => !/^\d{14}$/.test(version))) {
     return fail('MIGRATION_HISTORY_INVALID');
   }
   if (new Set(versions).size !== versions.length) return fail('MIGRATION_HISTORY_INVALID');
-  return versions;
+  return [...versions];
 }
 
 function makePsqlConnection(password: string): PsqlConnection {
@@ -474,7 +522,26 @@ function makePsqlConnection(password: string): PsqlConnection {
 }
 
 function buildMigrationHistorySql(limit: number): string {
-  return `BEGIN READ ONLY;\nSELECT version FROM supabase_migrations.schema_migrations ORDER BY version LIMIT ${limit};\nROLLBACK;`;
+  return `
+BEGIN READ ONLY;
+${readOnlyTransactionSetupSql}
+SELECT pg_catalog.json_build_object(
+  'sessionOk', ${sessionSettingsCheckSql},
+  'versions', COALESCE(
+    (
+      SELECT pg_catalog.json_agg(version ORDER BY version)
+      FROM (
+        SELECT version
+        FROM supabase_migrations.schema_migrations
+        ORDER BY version
+        LIMIT ${limit}
+      ) AS migration_versions
+    ),
+    '[]'::json
+  )
+)::text;
+ROLLBACK;
+`.trim();
 }
 
 export async function runDevDatabasePreflight(
@@ -505,16 +572,17 @@ export async function runDevDatabasePreflight(
     if (error instanceof PsqlProcessFailure) return fail(error.code);
     return fail('DATABASE_QUERY_FAILED');
   }
-  if (!catalog.connectionOk) return fail('DATABASE_CATALOG_INVALID');
+  if (!catalog.identityOk) return fail('DATABASE_IDENTITY_INVALID');
+  if (!catalog.sessionOk) return fail('DATABASE_SESSION_INVALID');
+  if (!catalog.platformOk) return fail('DATABASE_PLATFORM_INVALID');
 
   let remoteVersions: string[] = [];
   if (catalog.historyExists) {
     try {
-      const rawVersions = await psql(
-        buildMigrationHistorySql(localMigrations.length + 1),
-        password,
-      );
-      remoteVersions = parseRemoteVersions(rawVersions);
+      const rawHistory = await psql(buildMigrationHistorySql(localMigrations.length + 1), password);
+      const history = parseMigrationHistoryResult(rawHistory);
+      if (!history.sessionOk) return fail('DATABASE_SESSION_INVALID');
+      remoteVersions = parseRemoteVersions(history.versions);
     } catch (error) {
       if (error instanceof DevDatabasePreflightFailure) throw error;
       if (error instanceof PsqlProcessFailure) return fail('MIGRATION_HISTORY_READ_FAILED');
