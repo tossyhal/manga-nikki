@@ -103,19 +103,32 @@ function TodayEntryHero({ entry }: { entry: Entry }) {
           <Icon name="chevron-right" size={18} />
         </Link>
       </div>
-      <Link
-        className="home-today-image"
-        to={`/entries/${encodeURIComponent(entry.id)}`}
-        aria-label={`${comicTitle}の記録を読む`}
-      >
-        <EntryThumbnail
-          preview={preview}
-          className="home-today-image-preview"
-          iconSize={32}
-          ariaHidden
-          placeholderLabel={placeholder}
-        />
-      </Link>
+      <div className="home-today-image">
+        <Link
+          className="home-today-image-link"
+          to={`/entries/${encodeURIComponent(entry.id)}`}
+          aria-label={`${comicTitle}の記録を読む`}
+        >
+          <EntryThumbnail
+            preview={preview}
+            className="home-today-image-preview"
+            iconSize={32}
+            ariaHidden
+            placeholderLabel={placeholder}
+          />
+        </Link>
+        {preview.imageError && (
+          <button
+            className="thumbnail-retry-button"
+            type="button"
+            aria-label="漫画画像を再読み込み"
+            disabled={preview.isLoading}
+            onClick={preview.retryImage}
+          >
+            <Icon name="refresh" size={18} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
