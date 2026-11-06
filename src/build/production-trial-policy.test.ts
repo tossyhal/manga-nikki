@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile, stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import {
   validateTrialPolicyInput,
   assertTrialPolicyChangeAllowed,
   parseTrialPolicyStatus,
   writeTrialPolicy,
   TRIAL_POLICY_CONFIRMATIONS,
-  TRIAL_POLICY_WRITE_PATH,
+  buildTrialPolicySql,
+  classifyTrialPolicyWriteFailure,
+  renderTrialPolicyStatus,
 } from './production-trial-policy.ts';
 const databaseReference = '6d238b9e-fdaf-497a-afef-b4f9011f9d33';
 const env = {
@@ -101,22 +105,26 @@ describe('policy状態', () => {
   });
 });
 describe('固定SQL write runner', () => {
-  it('固定ファイル、固定operationとminimal TLS環境だけで一度実行する', async () => {
-    const executor = vi
-      .fn()
-      .mockResolvedValue({ stdout: 'TRIAL_POLICY_TRANSACTION_COMMITTED\n', stderr: '' });
+  it('標準PGOPTIONSと同transaction内設定を渡し、0600一時SQLを完了後に削除する', async () => {
+    let sqlPath = '';
+    const executor = vi.fn().mockImplementation(async (_file, args, options) => {
+      sqlPath = args[args.length - 1];
+      expect((await stat(sqlPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(dirname(sqlPath))).mode & 0o777).toBe(0o700);
+      const sql = await readFile(sqlPath, 'utf8');
+      expect(sql).toMatch(
+        /^BEGIN READ WRITE;\nSET LOCAL manga_nikki.trial_policy_operation='prepare';\nSET LOCAL manga_nikki.trial_provider_cost_verified='false';\n/,
+      );
+      expect(sql).not.toContain('fixture-password');
+      expect(options.env.PGOPTIONS).toBe(
+        '-c default_transaction_read_only=off -c statement_timeout=15000 -c lock_timeout=5000 -c search_path=pg_catalog',
+      );
+      return { stdout: 'TRIAL_POLICY_TRANSACTION_COMMITTED\n', stderr: '' };
+    });
     await writeTrialPolicy('prepare', 'fixture-password', false, executor);
     const [file, args, options] = executor.mock.calls[0]!;
     expect(file).toBe('/usr/lib/postgresql/16/bin/psql');
-    expect(args).toEqual([
-      '-X',
-      '--no-password',
-      '-qAt',
-      '-v',
-      'ON_ERROR_STOP=1',
-      '-f',
-      TRIAL_POLICY_WRITE_PATH,
-    ]);
+    expect(args).toEqual(['-X', '--no-password', '-qAt', '-v', 'ON_ERROR_STOP=1', '-f', sqlPath]);
     expect(options.env).toMatchObject({
       PGSSLMODE: 'verify-full',
       PGPASSWORD: 'fixture-password',
@@ -139,7 +147,26 @@ describe('固定SQL write runner', () => {
         'PGAPPNAME',
       ].sort(),
     );
-    expect(options.env.PGOPTIONS).toContain('manga_nikki.trial_policy_operation=prepare');
+    await expect(stat(sqlPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(dirname(sqlPath))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+  it('SQLerror時も一時SQLを削除し、unknownを維持して既知causeだけ返す', async () => {
+    let sqlPath = '';
+    const executor = vi.fn().mockImplementation(async (_file, args) => {
+      sqlPath = args[args.length - 1];
+      throw {
+        stderr:
+          'psql:/tmp/fixture.sql:33: ERROR:  TRIAL_POLICY_CONTEXT_INVALID\nCONTEXT: private fixture detail\n',
+      };
+    });
+    await expect(
+      writeTrialPolicy('prepare', 'fixture-password', false, executor),
+    ).rejects.toMatchObject({
+      code: 'TRIAL_POLICY_WRITE_RESULT_UNKNOWN',
+      writeCause: 'TRIAL_POLICY_CONTEXT_INVALID',
+    });
+    await expect(stat(sqlPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(executor).toHaveBeenCalledTimes(1);
   });
   it('費用未検証enableはprocessを起動しない', async () => {
@@ -159,5 +186,72 @@ describe('固定SQL write runner', () => {
       ).rejects.toThrow('TRIAL_POLICY_WRITE_RESULT_UNKNOWN');
       expect(executor).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+describe('transaction内の固定SQL設定', () => {
+  const source = 'BEGIN READ WRITE;\n-- TRIAL_POLICY_SETTINGS\nSELECT 1;\nCOMMIT;\n';
+  it.each(['prepare', 'enable', 'stop'] as const)(
+    'allowlist済みoperationだけ固定literalで挿入する %s',
+    (operation) => {
+      const sql = buildTrialPolicySql(source, operation, operation === 'enable');
+      expect(sql).toContain(`SET LOCAL manga_nikki.trial_policy_operation='${operation}';`);
+      expect(sql).not.toContain('-- TRIAL_POLICY_SETTINGS');
+    },
+  );
+  it.each([
+    'BEGIN;\n-- TRIAL_POLICY_SETTINGS\n',
+    source + '-- TRIAL_POLICY_SETTINGS\n',
+    source.replace('-- TRIAL_POLICY_SETTINGS', '-- changed'),
+  ])('sentinelの位置/重複/欠落を拒否する', (invalid) => {
+    expect(() => buildTrialPolicySql(invalid, 'prepare', false)).toThrow(
+      'TRIAL_POLICY_INPUT_INVALID',
+    );
+  });
+  it('operationや費用flagを任意SQL文字列として扱わない', () => {
+    expect(() => buildTrialPolicySql(source, "prepare'; SELECT 1;--" as 'prepare', false)).toThrow(
+      'TRIAL_POLICY_INPUT_INVALID',
+    );
+    expect(() => buildTrialPolicySql(source, 'prepare', 'false' as unknown as boolean)).toThrow(
+      'TRIAL_POLICY_INPUT_INVALID',
+    );
+  });
+  it('状態のstdoutは固定booleanだけから作る', () => {
+    expect(renderTrialPolicyStatus(status)).toBe(
+      'enabled=false initialPolicy=true trialPrepared=false historyEmpty=true policyTriggerPresent=true',
+    );
+  });
+});
+describe('write失敗の安全な分類', () => {
+  it.each([
+    'TRIAL_POLICY_CONTEXT_INVALID',
+    'TRIAL_POLICY_STATE_INVALID',
+    'TRIAL_POLICY_HISTORY_NOT_EMPTY',
+    'TRIAL_PROFILE_INVALID',
+    'TRIAL_PROVIDER_COST_NOT_VERIFIED',
+  ])('完全一致する既知guardだけ分類する %s', (guard) => {
+    expect(
+      classifyTrialPolicyWriteFailure({
+        stderr: `psql:/tmp/fixture.sql:12: ERROR:  ${guard}\nCONTEXT: private fixture detail\n`,
+      }),
+    ).toBe(guard);
+    expect(classifyTrialPolicyWriteFailure({ stderr: `ERROR:  ${guard} private-extra` })).toBe(
+      'UNKNOWN',
+    );
+  });
+  it('標準read-onlyエラーだけ固定分類し、生errorや複数原因を返さない', () => {
+    expect(
+      classifyTrialPolicyWriteFailure({
+        stderr: 'ERROR:  cannot execute UPDATE in a read-only transaction\n',
+      }),
+    ).toBe('READ_ONLY_TRANSACTION');
+    expect(classifyTrialPolicyWriteFailure({ stderr: 'ERROR:  private fixture detail\n' })).toBe(
+      'UNKNOWN',
+    );
+    expect(
+      classifyTrialPolicyWriteFailure({
+        stderr: 'ERROR:  TRIAL_POLICY_CONTEXT_INVALID\nERROR:  TRIAL_POLICY_STATE_INVALID\n',
+      }),
+    ).toBe('UNKNOWN');
   });
 });
