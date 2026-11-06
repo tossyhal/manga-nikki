@@ -5,7 +5,7 @@
 ## 現在の状態
 
 - `manga-nikki` Worker、production Environment、Bitwarden machine account、Worker用Cloudflare token、Turnstile widgetの初期設定はowner報告済みです。CloudflareとBitwardenの権限scopeは独立監査していません。
-- 2026-11-06に初回接続版を公開しました。source `0ba2dc3057fbf1d3028188e000ec1f6a9bbb9c5e`の[Actions run 42220799768](https://github.com/tossyhal/manga-nikki/actions/runs/42220799768)はattempt 2で成功しました。独立実ブラウザGETでhealth `200/ok`、config `200/live/generationAvailable=false`、deployment marker `200/production`と同SHAを確認し、deploy後のWorker bindings/secretsとread-only Supabase probeも成功しています。現在の公開SHAはWorkerの`/__deployment.json` markerで確認できます。CDは既存Worker以外を作成しません。
+- 2026-11-06に初回接続版を公開しました。source `0ba2dc3057fbf1d3028188e000ec1f6a9bbb9c5e`の[Actions run 42220799768](https://github.com/tossyhal/manga-nikki/actions/runs/42220799768)はattempt 2で成功しました。agent-browserからのGETでhealth `200/ok`、config `200/live/generationAvailable=false`、deployment marker `200/production`と同SHAを確認し、deploy後のWorker bindings/secretsとread-only Supabase probeも成功しています。現在の公開SHAはWorkerの`/__deployment.json` markerで確認できます。CDは既存Worker以外を作成しません。
 - `production` Environmentは`main`だけを許可します。Environment secret `BWS_ACCESS_TOKEN`はproduction用Bitwarden machine account tokenです。
 - 2026-11-06のGitHub API readbackで、activeなruleset `main-owner-merge-only`（ID `26636985`）は`refs/heads/main`への更新を制限し、User ID `92223710`だけが`pull_request`経由でbypassできます。activeな`protect-main`（ID `25877767`）はPRとmerge commitを必須にし、force pushと削除を禁止、bypassなしです。mainとworkflowの変更はownerによるPR mergeが必要で、他collaboratorの直接更新・mergeはできません。
 - Environment variablesは`BWS_CLOUDFLARE_SECRET_ID`、`BWS_SUPABASE_PUBLISHABLE_KEY_SECRET_ID`、`BWS_SUPABASE_SECRET_KEY_SECRET_ID`、`BWS_TURNSTILE_SITE_KEY_SECRET_ID`、`BWS_TURNSTILE_SECRET_KEY_SECRET_ID`、`PRODUCTION_WORKER_URL`、`PRODUCTION_CONNECTED_CD_ENABLED`です。
@@ -45,7 +45,7 @@ Bitwarden取得前のmain確認とビルドの失敗ではWorker変更はあり�
 
 ## 有効化・停止・再実行
 
-初回公開は2026-11-06に完了し、Environment flagは`true`です。成功したsource SHAとrunは上記「現在の状態」に記録しています。flagが無効でもownerがmain pushや手動実行をすると、preflight summaryへ`skipped`を記録します。
+初回公開は2026-11-06に完了し、Environment flagは`true`です。flagが有効な間はCIに成功したmain pushでも自動配信します。flag変更だけでは配信runは開始しません。成功したsource SHAとrunは上記「現在の状態」に記録しています。flagが無効でもownerがmain pushや手動実行をすると、preflight summaryへ`skipped`を記録します。
 
 新しい配信を止めるには、production Environment variableを`false`に設定します。Environment variableを削除せず、同名のRepository / Organization variableも作成しません。既に配信したWorkerを非公開にする操作ではありません。
 
@@ -53,7 +53,7 @@ Bitwarden取得前のmain確認とビルドの失敗ではWorker変更はあり�
 gh variable set PRODUCTION_CONNECTED_CD_ENABLED --env production --body false --repo tossyhal/manga-nikki
 ```
 
-停止後に配信を再開する場合はflagを`true`にしてから、main workflowを明示的に実行します。
+停止後に配信を再開する場合も、先にWorker settingsでroute・custom domain・Preview URLsを確認し、flagを`true`にしてからmain workflowを明示的に実行します。
 
 ```sh
 gh variable set PRODUCTION_CONNECTED_CD_ENABLED --env production --body true --repo tossyhal/manga-nikki
@@ -64,6 +64,6 @@ gh workflow run ci.yml --ref main --repo tossyhal/manga-nikki
 
 ## 初期設定と未確認事項
 
-Turnstile widget `manga-nikki-prod`、公開hostname、Supabase Auth側のTurnstile設定と匿名サインイン有効化はownerから準備完了の報告を受けています。10 production migrationは成功apply済み(run `42211812661`)です。deploy後のWorker bindings/secrets、read-only Supabase probe、health/config/deployment markerの実ブラウザ確認は成功しました。実Cronの実行結果、別匿名ユーザーによる所有者分離QA、CAPTCHA失効・再利用拒否ケース、PWAホーム追加は未確認です。owner報告ではTurnstile操作後にiPhone Safariからの日記保存・再読み込み・削除を確認済みです。headless browserのCAPTCHA付き確認は手動CAPTCHAが必要な時点でキャンセルし、日記POSTを行っていません。
+Turnstile widget `manga-nikki-prod`、公開hostname、Supabase Auth側のTurnstile設定と匿名サインイン有効化はownerから準備完了の報告を受けています。10 production migrationは成功apply済み(run `42211812661`)です。deploy後のWorker bindings/secrets、read-only Supabase probe、health/config/deployment markerの実ブラウザ確認は成功しました。実Cronの実行結果、別匿名ユーザーによる所有者分離QA、CAPTCHA失効・再利用拒否ケース、PWAホーム追加は未確認です。owner報告ではTurnstile操作後にiPhone Safariからの日記保存・再読み込み・削除を確認済みです。agent-browserによる確認は手動CAPTCHAが表示された時点でキャンセルしました。
 
 実AIの費用承認は未実施で、`OPENAI_API_KEY`とQueueは設定しません。実AIを有効にする前に、生成中の画面遷移・受付状態を無通知にしない既知P2-2を修正・再確認し、budget、Queue、二重実行防止、画像保存/復旧を別承認・別検証します。
