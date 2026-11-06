@@ -21,6 +21,8 @@
     "tests",
     "scripts/bootstrap-staging.ts",
     "scripts/deploy-staging-sample.ts",
+    "scripts/check-production-sample-preflight.ts",
+    "scripts/deploy-production-sample.ts",
     "scripts/check-dev-database.ts",
     "*.config.ts"
   ]

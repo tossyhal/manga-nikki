@@ -143,15 +143,15 @@ pnpm build:production
 pnpm build:demo
 ```
 
-staging / productionは引き続き`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
+staging / productionは引き続き`DATA_MODE=sample`・`AI_MODE=mock`・`GENERATION_ENABLED=false`です。production targetの固定Worker名は`manga-nikki`で、Cron / Queue bindingはありません。demoは専用Worker名`manga-nikki-demo`、`APP_ENV=staging`・`DATA_MODE=live`・`AI_MODE=live`・`GENERATION_ENABLED=false`と専用Queue bindingを使います。demoのWorker公開URL・preview URLは無効です。Queue設定はローカルWrangler設定だけで、Queue resourceを作成しません。`pnpm preview`は`pnpm build:staging`後の架空sample確認に使い、live設定を含むdemo成果物の確認には使わないでください。
 
 staging / productionの公開値は`.env.staging.example` / `.env.production.example`を対象の`.env.<環境>.local`へコピーして設定します。demoには`.env.demo.example`を`.env.demo.local`へコピーし、3値すべてを設定します。demo buildは値が未設定なら停止します。ビルドは指定対象の`.env.<環境>.local`から`VITE_SUPABASE_URL`・`VITE_SUPABASE_PUBLISHABLE_KEY`・`VITE_TURNSTILE_SITE_KEY`だけを読み、`.env.local`・`.env.development.local`・`.dev.vars`やプロセス環境の`VITE_*`は使いません。秘密情報はこれらのファイルへ記載せず、Worker Secretsなどサーバー専用設定で管理します。demo modeは日記CRUDに実接続するため、公開前に隔離Supabase、migration、認証、RLS、CAPTCHA、費用上限、公開範囲を別途確認・承認してください。
 
-`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けず、本番環境には接続しません。必要なGitHub/Bitwarden設定は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
+`pnpm test:release-environment`は一時ディレクトリに作ったfixtureで、ローカル値・サーバーsecret・別環境の値が成果物へ混ざらないことを検査します。`pnpm preview`はビルド成果物のローカル確認です。実環境へのデプロイではありません。GitHub Actionsのstaging sample CDは、`develop` pushまたは同branchの手動実行で`database`と`check`の成功後に動きますが、Repository variable`STAGING_SAMPLE_CD_ENABLED`が文字列`true`でなければskipされます。ビルド済み成果物・既存Worker・公開先・sample設定を検査してから、ビルド生成のstaging Wrangler設定をローカルWranglerで1回だけ配信します。deploy時に`--env`は付けません。production sample CDは別jobで、main・owner actor・CI成功が揃ったjobで起動します。production Environment variable`PRODUCTION_SAMPLE_CD_ENABLED`が`true`でない場合は成功skipし、既定では無効です。公開承認後の有効化・実行条件・失敗時の確認は[PRODUCTION_DEPLOYMENT](docs/PRODUCTION_DEPLOYMENT.md)を参照してください。
 
 DB基盤の変更時は`pnpm test:db`も実行します。PostgreSQLの準備・テストの範囲・保存API担当へのRPC契約は[supabase/README.md](supabase/README.md)を参照してください。通常の画面開発にはPostgreSQLは不要です。
 
-初期設定専用workflowは退役済みです。staging sample CDは架空データだけを公開し、Supabase/Auth/Turnstile・実AI・productionの配信設定を行いません。
+初期設定専用workflowは退役済みです。staging sample CDは架空データだけを公開し、Supabase/Auth/Turnstile・実AIを使いません。production sample CDも同じ架空データだけを配信し、別のowner専用・無効既定のjobとして運用します。
 
 ## 5. ブランチ運用とPull Request（PR）の進め方
 
