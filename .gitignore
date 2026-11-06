@@ -13,6 +13,7 @@ test-results/
 !.env.example
 !.env.staging.example
 !.env.production.example
+!.env.demo.example
 .dev.vars
 .dev.vars.*
 !.dev.vars.example

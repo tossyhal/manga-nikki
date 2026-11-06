@@ -5,14 +5,14 @@
 日記をAIで4コマ漫画に変換して保存・閲覧できる、スマートフォン向けPWAです。
 技育CAMP2026ハッカソンVol.6にて、チーム「27卒」が開発します。
 
-> 現在の状態（2026-11-05時点）
-> PR#29までの変更は`main`へ統合済みです。現在のPR#41ではOpenAI白黒生成のQueue接続と保存復旧経路まで実装しています。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
+> 現在の状態（2026-11-06時点）
+> PR#29までの変更は`main`へ統合済みです。現在の作業branchでは、OpenAI白黒生成のQueue経路に加え、画像のprivate Storage保存・DB完了確定・保存復旧・署名URL取得までをdefault Workerへ接続しています。段階ごとの詳細は[PLAN](docs/PLAN.md)を参照してください。
 >
-> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、Storage先行の期限削除、環境別sample buildと公開設定guardを実装しています。PR#41ではOpenAIの脚本・白黒画像provider、profile制約、各API呼出しのattempt ledger、live Queue runnerと保存復旧callback契約を追加しています。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。保存先は開発Workerのメモリで、再起動やコード変更で消える場合があります。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionの`sample` modeと不正なmodeは個人DBへ接続しません。生成画像のprivate Storage保存・assets登録・実生成のsucceeded確定RPCは未実装です。保存handlerまたは復旧callbackが未設定なら新規実AI生成を停止します。すでにqueuedのjobと`reserved`枠はreleaseせず保持し、ready復帰後にreconcileから再送します。保存復旧は元claim deadlineから24時間以内、5分backoff、Cron1回最大3件・各120秒です。復旧callback未設定や24時間経過後は自動復旧しません。実AI課金・アカウント権限・品質、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、最新branchの全経路は未確認です。
+> 匿名Auth・日記CRUD/編集・RLS/RPC、原子的な生成枠予約とclaim / attempt / lease / unknown、固定mock Queue経路、CAPTCHA・利用枠UI、PWA、期限削除、環境別sample buildと公開設定guardを実装しています。実生成画像はprivate `comics` bucketへ決定論的なpathで保存し、binary signature・MIME・PNG各chunk CRC・JPEGのSOS/EOI構造・寸法を照合します（8 MiB/画像、16 MiB/4コマ、2,048px/辺、4 MP/画像、16 MP/4コマ）。DB完了失敗後は保存済み画像を再検証して完了を再開し、欠損・不正画像は追加AI呼出しなしで失敗・消費確定します。本人の有効な日記、成功済みgeneration、comic内のasset参照を確認した後だけ60秒の署名URLを返し、署名直後にも状態を再確認します。閲覧中に署名URLが期限切れした場合は1回だけ自動再取得し、その後は手動操作で再試行します。日記の新規作成はowner50件/JST日・全体1,000件/JST日の頻度と、物理回収前100件/owner・5,000件/globalの保持上限で制限します。local-mockでは作成時fingerprintと削除tombstoneを保持して実DBの冪等契約に合わせます。local-mockでは日記→固定漫画→仮保存→再読込を確認できます。local-connectedでは固定mockの画像URLに公開の架空サンプルを返します。staging/productionは引き続き`sample` / `mock` / `GENERATION_ENABLED=false`で、Queue bindingもありません。独立した`demo` Wrangler targetと隔離buildを準備していますが、Cloudflare resource作成・秘密情報登録・共有DBへのmigration適用・deployは行っていません。DB migrationはbranchに追加中ですが共有DBへは適用していません。隔離Supabase統合では親担当者が保存・復旧・署名URL・他owner拒否・削除後404を確認しました。実AI課金・アカウント権限・品質、共有DBへのmigration適用、実Turnstile・実Cloudflare Queue / Cron、公開環境の全経路は未確認です。
 
 > 以前、隔離Supabase CLI / PostgreSQL / Auth / PostgREST / StorageとローカルQueueで、匿名Auth A/B、日記作成・再取得・PATCH競合・他owner拒否、service fixtureからの固定mock Consumer、Storage→DB期限削除service、一部Storage RLSを確認しました。これは部分的な過去検証で、実Turnstile・共有DB・実Cloudflare Queue / Cron・HTTPSスマホ実機や、最新branchの全経路を確認したものではありません。この文書同期では再実行していません。
 
-日記DBのmigration・RLS・日記操作用RPC・生成由来metadataと隔離PostgreSQLテストがあります。共有DBへのmigration適用と実クラウド環境での結合確認は未実施です。過去の隔離環境による部分検証の範囲は[supabase/README.md](supabase/README.md)を参照してください。
+日記・生成・private画像保存用migration、RLS、専用RPCと隔離PostgreSQLテストがあります。共有DBへのmigration適用と実クラウド環境での結合確認は未実施です。隔離環境での部分検証の範囲は[supabase/README.md](supabase/README.md)を参照してください。
 
 ## 最初に読むドキュメント
 
@@ -75,11 +75,11 @@
 
 ## PWAのビルド確認
 
-環境別のbuildは`pnpm build:staging`または`pnpm build:production`で行います。ローカル実行は成果物検査まででCloudflareへ公開しません。`develop`へのpush後、CIのdatabase/checkが成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`の場合に限り、stagingへ架空sampleを配信します。このvariableの既定値は無効で、2026-11-06時点で`true`に設定されています。stagingは公開workers.dev URLで、個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番の配信はこのworkflowに含めず、別承認が必要です。対象環境の手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
+環境別buildはstaging / productionの架空sample確認に`pnpm build:staging` / `pnpm build:production`、隔離live-demo targetの成果物準備に`pnpm build:demo`を使います。`build:demo`には`.env.demo.local`の公開3値が必要です。これらのローカルbuildは`dist/`の成果物検査までで、Cloudflareへ公開しません。`develop`へのpush後、CIの`database`・`check`が成功し、Repository variable`STAGING_SAMPLE_CD_ENABLED=true`が設定されている場合に限り、既存staging Workerへ架空sampleを配信します。variableの既定は無効で、2026-11-06時点で`true`に設定されています。stagingでは個人DB/Auth/Turnstile・実AI・Queue/Cronを使いません。本番配信はこのworkflowの対象外です。手順は[CONTRIBUTING](CONTRIBUTING.md#環境別ビルド)・[OPERATIONS](docs/OPERATIONS.md#4-環境分離と公開までの手順)・[DEPLOYMENT](docs/DEPLOYMENT.md)を参照してください。
 
 stagingのsample公開先は[workers.dev URL](https://manga-nikki-staging.tossyhal.workers.dev)です。2026-11-06にdevelopの`80188a02c2f524febcd6f5164223b4b1059284b2`を初回公開し、[Actions実行](https://github.com/tossyhal/manga-nikki/actions/runs/42173608290)のdatabase/check/staging-deployはすべて成功しました。このSHAは初回配信の記録です。現在の公開commitは`/__deployment.json`のmarkerで確認してください。公開後の確認範囲と未確認事項は[DEPLOYMENT](docs/DEPLOYMENT.md)に記録しています。初期作成用workflowは退役済みで、資格情報は退役扱い（確認範囲は[DEPLOYMENT](docs/DEPLOYMENT.md)を参照）です。
 
-開発サーバーの起動とビルドでは、公開用設定に既知のSupabaseサーバー専用キー形式が入っている場合に処理を停止します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
+開発サーバーの起動とビルドでは、公開用設定に既知のSupabase / OpenAIサーバー専用キー形式が入っている場合に処理を停止します。demo buildではSupabase URLにHTTPSも要求します。これは既知形式の誤設定対策であり、すべての秘密情報を検出するものではありません。
 
 PWAのビルドとService Workerのキャッシュ範囲、オフライン表示の自動確認には次を実行します。
 
@@ -89,7 +89,7 @@ pnpm test:e2e:pwa
 
 `pnpm build`は、生成したService Workerの事前キャッシュがアプリ画面・バージョン付きJS/CSS・manifest・アイコン・架空サンプルだけであることも検査します。production previewを使う受入テストではCache Storageの対象を確認し、ネットワークを切ってもホーム画面と架空サンプルを表示できることを確認します。個人の日記と生成画像はキャッシュ対象ではありません。
 
-stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm build:staging`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。通常の`pnpm build`では開発用設定が混ざって`/config`が503になる場合があるため、sample previewには環境別buildを使います。日記保存の動作確認には`pnpm dev`を使ってください。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
+stagingの架空sample画面とPWAをpreviewで確認する場合は、`pnpm build:staging`の後に`pnpm preview`を実行して`http://127.0.0.1:4173`を開きます。通常の`pnpm build`では開発用設定が混ざって`/config`が503になる場合があるため、sample previewには環境別buildを使います。日記保存の確認には、モックなら`pnpm dev`、Supabaseへ保存する場合は[local-connected手順](CONTRIBUTING.md#2-初回起動)に従い`pnpm dev:connected`を使ってください。ローカルの安全な接続として扱われるため、ブラウザの開発者ツールでManifest、Service Worker、Cache Storageを確認できます。
 
 新しい版が利用可能なときは更新案内を表示し、利用者が「更新する」を押した場合にだけ切り替えます。日記の未保存入力中や保存・生成中は更新操作を止め、入力本文を保ちます。previewで更新案内を確認するには、同じURLで一度Service Workerを有効にした後、新しいビルドを配信してアプリを再度開きます。
 

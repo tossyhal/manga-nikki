@@ -2,6 +2,11 @@ import { z } from 'zod';
 import { resolveMode, type Environment, type Mode } from './mode';
 import { createServerRpcClient } from './supabase-clients';
 import { createServerStorageRemovalClient } from './supabase-storage';
+import { cleanStorageDeletionOutboxForScheduledEnvironment } from './storage-deletion-cleanup';
+import {
+  removeAndConfirmStorageObjectAbsent,
+  type StorageObjectCleanupClient,
+} from './storage-object-cleanup';
 
 const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const objectPathPattern = new RegExp(
@@ -36,21 +41,11 @@ export type RetentionCleanupRpc = {
   finalize(entryId: string, claimToken: string): Promise<RpcResult>;
 };
 
-export type RetentionStorage = {
-  remove(paths: string[]): Promise<{ data: unknown; error: unknown }>;
-  list(
-    path: string,
-    options: { search: string; limit: number; offset: number },
-  ): Promise<{ data: unknown; error: unknown }>;
-};
+export type RetentionStorage = StorageObjectCleanupClient;
 
 function isSafePath(path: string, ownerId: string): boolean {
   if (!objectPathPattern.test(path)) return false;
   return path.startsWith(`${ownerId.toLowerCase()}/`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function tasksFromRpc(data: unknown): CleanupTask[] {
@@ -95,27 +90,7 @@ export function createRetentionCleanupService(
       for (const task of tasks) {
         let storageDeleted = true;
         for (const path of task.object_paths) {
-          try {
-            const removed = await storage.remove([path]);
-            if (removed.error !== null || !Array.isArray(removed.data)) {
-              storageDeleted = false;
-              break;
-            }
-            const [ownerId, generationId, name] = path.split('/');
-            const listed = await storage.list(`${ownerId}/${generationId}`, {
-              search: name!,
-              limit: 2,
-              offset: 0,
-            });
-            if (
-              listed.error !== null ||
-              !Array.isArray(listed.data) ||
-              listed.data.some((item) => !isRecord(item) || item.name === name)
-            ) {
-              storageDeleted = false;
-              break;
-            }
-          } catch {
+          if (!(await removeAndConfirmStorageObjectAbsent(storage, path))) {
             storageDeleted = false;
             break;
           }
@@ -175,10 +150,18 @@ export async function cleanRetainedEntriesForScheduledEnvironment(
   }
   if (mode !== 'local-connected' && mode !== 'live-demo') return undefined;
 
-  const summary = await createRetentionCleanupServiceForEnvironment(
-    environment,
-    fetcher,
-  ).cleanDueEntries();
-  console.info('retention_cleanup_summary', summary);
-  return summary;
+  try {
+    const summary = await createRetentionCleanupServiceForEnvironment(
+      environment,
+      fetcher,
+    ).cleanDueEntries();
+    console.info('retention_cleanup_summary', summary);
+    return summary;
+  } finally {
+    try {
+      await cleanStorageDeletionOutboxForScheduledEnvironment(environment, fetcher);
+    } catch {
+      console.error('storage_deletion_cleanup_unavailable');
+    }
+  }
 }

@@ -7,7 +7,7 @@ export const publicEnvironmentVariables = [
 ] as const;
 
 const publicKeyError = (variable: string) =>
-  `${variable}にSupabaseサーバー専用キー形式の値を設定できません。公開設定を確認してください。`;
+  `${variable}にサーバー専用キー形式の値を設定できません。公開設定を確認してください。`;
 
 function hasServiceRoleJwt(value: string): boolean {
   const segments = value.split('.');
@@ -27,16 +27,33 @@ function hasServiceRoleJwt(value: string): boolean {
   }
 }
 
-function hasKnownSupabaseServerKeyFormat(value: string | undefined): boolean {
+function hasKnownServerKeyFormat(value: string | undefined): boolean {
   const normalized = value?.trim() ?? '';
-  return normalized.startsWith('sb_secret_') || hasServiceRoleJwt(normalized);
+  return (
+    normalized.startsWith('sb_secret_') ||
+    normalized.startsWith('sk-') ||
+    hasServiceRoleJwt(normalized)
+  );
 }
 
-export function assertNoKnownSupabaseServerKeyFormats(environment: Record<string, string>): void {
+export function assertNoKnownServerKeyFormats(environment: Record<string, string>): void {
   for (const variable of publicEnvironmentVariables) {
-    if (hasKnownSupabaseServerKeyFormat(environment[variable])) {
+    if (hasKnownServerKeyFormat(environment[variable])) {
       throw new Error(publicKeyError(variable));
     }
+  }
+}
+
+export function assertDemoSupabaseUrlUsesHttps(environment: Record<string, string>): void {
+  let url: URL;
+  try {
+    url = new URL(environment.VITE_SUPABASE_URL?.trim() ?? '');
+  } catch {
+    throw new Error('demoのVITE_SUPABASE_URLにはHTTPSの有効なURLを設定してください。');
+  }
+
+  if (url.protocol !== 'https:') {
+    throw new Error('demoのVITE_SUPABASE_URLにはHTTPSの有効なURLを設定してください。');
   }
 }
 
@@ -45,7 +62,8 @@ export function publicConfigGuard(): Plugin {
     name: 'manga-nikki-public-config-guard',
     enforce: 'pre',
     configResolved(config) {
-      assertNoKnownSupabaseServerKeyFormats(config.env);
+      assertNoKnownServerKeyFormats(config.env);
+      if (config.mode === 'demo') assertDemoSupabaseUrlUsesHttps(config.env);
     },
   };
 }

@@ -20,11 +20,16 @@ export function createMockEntry(
   owner: string,
   input: z.infer<typeof createEntrySchema>,
 ) {
+  const requestKey = `${owner}:${input.createRequestId}`;
+  if (repository.entryTombstones.has(requestKey)) throw new ApiError(404, 'NOT_FOUND');
   const existing = [...repository.entries.values()].find(
     (x) => x.owner === owner && x.requestId === input.createRequestId,
   );
   if (existing) {
-    if (existing.entry.body !== input.body || existing.entry.diaryDate !== input.diaryDate)
+    if (
+      existing.createFingerprint !==
+      JSON.stringify([input.diaryDate, input.body, input.consentVersion])
+    )
       throw new ApiError(409, 'IDEMPOTENCY_CONFLICT');
     return existing.entry;
   }
@@ -43,7 +48,12 @@ export function createMockEntry(
     createdAt: now,
     updatedAt: now,
   };
-  repository.entries.set(entry.id, { owner, requestId: input.createRequestId, entry });
+  repository.entries.set(entry.id, {
+    owner,
+    requestId: input.createRequestId,
+    createFingerprint: JSON.stringify([input.diaryDate, input.body, input.consentVersion]),
+    entry,
+  });
   return entry;
 }
 
@@ -72,6 +82,34 @@ export function getMockEntry(repository: MockRepository, id: string, owner: stri
   return found;
 }
 
+export function getMockEntryDetail(repository: MockRepository, id: string, owner: string) {
+  const found = getMockEntry(repository, id, owner);
+  const latestStored = found.entry.latestGenerationId
+    ? repository.generations.get(found.entry.latestGenerationId)
+    : null;
+  const latestGeneration =
+    latestStored?.owner === owner && latestStored.generation.entryId === found.entry.id
+      ? latestStored.generation
+      : null;
+  const queriedLastSuccessfulGeneration = [...repository.generations.values()]
+    .reverse()
+    .find(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === found.entry.id &&
+        stored.generation.entryRevision <= found.entry.revision &&
+        stored.generation.status === 'succeeded',
+    )?.generation;
+  const lastSuccessfulGeneration =
+    latestGeneration?.status === 'succeeded' ? latestGeneration : queriedLastSuccessfulGeneration;
+
+  return {
+    ...found.entry,
+    latestGeneration,
+    lastSuccessfulGeneration: lastSuccessfulGeneration ?? null,
+  };
+}
+
 export function reserveMockGeneration(
   repository: MockRepository,
   owner: string,
@@ -93,6 +131,16 @@ export function reserveMockGeneration(
     statusUrl: `/api/v1/generations/${id}`,
   });
   if (old) return receipt(old.generation.id);
+  if (
+    [...repository.generations.values()].some(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === entry.id &&
+        stored.generation.entryRevision === input.expectedRevision &&
+        stored.generation.status === 'succeeded',
+    )
+  )
+    throw new ApiError(409, 'REVISION_ALREADY_GENERATED');
   const counter = `${owner}:${jstToday()}`;
   const count = repository.counts.get(counter) ?? 0;
   if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');

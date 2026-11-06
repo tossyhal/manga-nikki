@@ -1,6 +1,6 @@
-import { jstToday } from '../../../shared/date';
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { Icon } from '../../app/Icon';
+import { useJstToday } from '../../lib/useJstToday';
 
 export function DiaryDateField({
   id,
@@ -11,6 +11,8 @@ export function DiaryDateField({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const today = useJstToday();
+
   return (
     <div className="date-control">
       <label className="date-display" htmlFor={id}>
@@ -23,7 +25,7 @@ export function DiaryDateField({
         className="date-picker-input"
         type="date"
         value={value}
-        max={jstToday()}
+        max={today}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') event.preventDefault();

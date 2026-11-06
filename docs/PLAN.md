@@ -1,6 +1,6 @@
 # 開発計画（PLAN）
 
-この計画は初期のロードマップです。PR#29までの変更は`main`へ統合済みです。2026-11-05時点のPR#41では、固定OpenAI白黒profile、Queue runner、保存復旧callback契約まで実装しています。画像private保存・assets登録・実生成の成功確定RPC・復旧handler本体・実環境検証が残っています。
+この計画は初期のロードマップです。PR#29までの変更は`main`へ統合済みです。現在のbranchでは固定OpenAI白黒profile、Queue runner、private画像保存・assets登録・成功確定RPC・復旧runtime・署名URL取得を接続しています。共有DBへのmigration適用と公開環境検証は残っています。
 
 ---
 
@@ -9,12 +9,12 @@
 | 段階 | 作るもの | 完了の目安（ゴール） | 最新branchの状態 |
 |---|---|---|---|
 | 1. 初期基盤 | React / Hono・共有型・モックAPI・標準コマンド・CI | 秘密情報なしで起動し、「入力 → 固定4コマ表示 → 履歴確認」と標準検査がすべて通る | 実装済み |
-| 2. 保存と認証 | 匿名Auth・日記CRUD・private画像保存・RLS / RPC | リロード後も本人の記録だけを取得でき、他人からのアクセスを拒否できる | 匿名Auth・日記CRUD・編集・RLS / RPCは実装済み。共有DBへのmigration適用は未実施で、生成画像のprivate Storage保存と署名URLは未接続 |
-| 3. AIの評価・接続 | 脚本/画像adapter・出力検証・モデルと最大費用の評価 | 架空日記で品質・処理時間・費用・データ保持条件を確認する | OpenAI脚本・白黒画像adapter、Strict profile検証、画像検証とattempt hooksは実装済み。実AI品質・利用権限・費用評価とCmax承認、保存接続は未完了 |
-| 4. 生成の統合 | 原子的な枠予約・Queue・重複防止・障害復旧 | 「入力 → 実生成 → 保存 → 再訪」が通り、通信再送や中断で二重生成しない | 原子的なmock/OpenAI枠予約、claim / attempt / lease / unknown、固定mock QueueとOpenAI Consumer、saving pending時のQueue ack・Cron復旧契約は実装済み。保存復旧は元claim deadlineから24時間以内・5分backoff・Cron最大3件/各120秒で、enqueue枠を残す候補選択を行います。画像保存handler・復旧handler・完了RPC・実Cloudflare Queue接続は未完了 |
-| 5. 公開準備 | スマホ実機/PWA確認・削除/期限処理・予算停止・デモ準備 | [公開前チェック（OPERATIONS.md）](OPERATIONS.md)を通し、少数の実生成で計測する | PWA・期限削除・環境別sample build・公開設定guardは実装済み。実スマホHTTPS・実Turnstile・実Cloudflare Queue / Cron・画像性能・Cmax承認・公開デモ準備は未完了 |
+| 2. 保存と認証 | 匿名Auth・日記CRUD・private画像保存・RLS / RPC | リロード後も本人の記録だけを取得でき、他人からのアクセスを拒否できる | 匿名Auth・日記CRUD・編集・RLS / RPC、private Storage保存・60秒署名URL取得は実装済み。保存用migrationはbranchに追加済みだが共有DBには未適用。親担当者の隔離Supabase統合で保存・復旧・他owner拒否・削除後404を確認 |
+| 3. AIの評価・接続 | 脚本/画像adapter・出力検証・モデルと最大費用の評価 | 架空日記で品質・処理時間・費用・データ保持条件を確認する | OpenAI脚本・白黒画像adapter、Strict profile検証、実画像signature/寸法/サイズ・attempt hooksは実装済み。実AI品質・利用権限・費用評価とCmax承認は未完了 |
+| 4. 生成の統合 | 原子的な枠予約・Queue・重複防止・障害復旧 | 「入力 → 実生成 → 保存 → 再訪」が通り、通信再送や中断で二重生成しない | 原子的なmock/OpenAI枠予約、claim / attempt / lease / unknown、固定mock QueueとOpenAI Consumer、default Workerへの保存handler・復旧handler注入を実装済み。保存復旧は元claim deadlineから24時間以内・5分backoff・Cron最大3件/各120秒で、AIを再実行しません。実AI実行と実Cloudflare Queue接続は未確認 |
+| 5. 公開準備 | スマホ実機/PWA確認・削除/期限処理・予算停止・デモ準備 | [公開前チェック（OPERATIONS.md）](OPERATIONS.md)を通し、少数の実生成で計測する | PWA・期限削除・環境別sample build・公開設定guard、署名URL失効後の1回自動再取得は実装済み。staging/productionはsample/offのままです。実スマホHTTPS・実Turnstile・実Cloudflare Queue / Cron・画像性能・Cmax承認・公開デモ準備は未完了 |
 
-`Comic.tsx`の画像拡大と`loading="lazy"`も未実装です。残タスクはこの表と[公開前チェック](OPERATIONS.md)に記載した範囲です。
+`Comic.tsx`の画像拡大と`loading="lazy"`は実装済みです。残タスクはこの表と[公開前チェック](OPERATIONS.md)に記載した範囲です。
 
 ### 進め方のポイント
 

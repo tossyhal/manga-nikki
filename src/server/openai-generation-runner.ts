@@ -15,7 +15,7 @@ import type { ImageProvider } from './ai/image-provider';
 import type { ScriptProvider } from './ai/script-provider';
 import { scriptSchema } from './ai/script-schema';
 import { resolveMode, type Environment } from './mode';
-import { callGenerationRpc, getGenerationQueue } from './live-generations';
+import { callGenerationRpc, getGenerationQueue, LiveGenerationError } from './live-generations';
 import {
   GenerationSavePendingError,
   type RecoverGeneratedComic,
@@ -134,6 +134,14 @@ export async function runOpenAIGeneration(
   const attemptIds = new Map<string, string>();
   const metadata = new Map<string, ProviderCallMetadata>();
   const key = (stage: ProviderStage, callIndex: number) => `${stage}:${callIndex}`;
+  const assertBeforeDeadline = () => {
+    generationController.signal.throwIfAborted();
+    if (Date.now() >= deadlineMs) {
+      const error = new DOMException('Generation deadline exceeded', 'TimeoutError');
+      generationController.abort(error);
+      throw error;
+    }
+  };
 
   const attemptHooks: ProviderAttemptHooks = {
     begin: async (stage, callIndex) => {
@@ -252,10 +260,23 @@ export async function runOpenAIGeneration(
     )
       throw new Error('PROVIDER_ATTEMPTS_INCOMPLETE');
 
-    const saving = await callGenerationRpc(environment, fetcher, 'mark_generation_saving', {
-      p_generation_id: claim.generation_id,
-      p_claim_token: claim.claim_token,
-    });
+    assertBeforeDeadline();
+    let saving: unknown;
+    const savingFetcher: typeof fetch = (input, init) =>
+      (fetcher ?? fetch)(input, { ...init, signal: generationController.signal });
+    try {
+      saving = await callGenerationRpc(environment, savingFetcher, 'mark_generation_saving', {
+        p_generation_id: claim.generation_id,
+        p_claim_token: claim.claim_token,
+      });
+    } catch (error) {
+      if (!(error instanceof LiveGenerationError) || !error.retryableDependency) throw error;
+      assertBeforeDeadline();
+      saving = await callGenerationRpc(environment, savingFetcher, 'mark_generation_saving', {
+        p_generation_id: claim.generation_id,
+        p_claim_token: claim.claim_token,
+      });
+    }
     const parsedSaving = savingResultSchema.safeParse(saving);
     if (!parsedSaving.success || parsedSaving.data.generation_id !== claim.generation_id)
       throw new Error('GENERATION_SAVING_TRANSITION_INVALID');

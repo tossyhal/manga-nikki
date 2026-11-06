@@ -82,6 +82,69 @@ describe('local mock API', () => {
     expect(detail.revision).toBe(2);
     expect(detail.latestGeneration.entryRevision).toBe(1);
   });
+  it('uses the original create fingerprint after edits and retains a deleted key tombstone per owner', async () => {
+    const createRequestId = crypto.randomUUID();
+    const firstOwnerPayload = {
+      createRequestId,
+      diaryDate: jstToday(),
+      body: '作成時の架空日記',
+      consentVersion: 'v1',
+    };
+    const created = await request('/entries', 'POST', firstOwnerPayload);
+    const firstEntry = (await created.json()) as { id: string; body: string; revision: number };
+    expect(created.status).toBe(201);
+
+    const edited = await request(`/entries/${firstEntry.id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: jstToday(),
+      body: '編集後の架空日記',
+    });
+    expect((await edited.json()).revision).toBe(2);
+
+    const replayed = await request('/entries', 'POST', firstOwnerPayload);
+    expect(replayed.status).toBe(201);
+    expect(await replayed.json()).toMatchObject({
+      id: firstEntry.id,
+      body: '編集後の架空日記',
+      revision: 2,
+    });
+    expect(
+      (await request('/entries', 'POST', { ...firstOwnerPayload, body: '別の作成内容' })).status,
+    ).toBe(409);
+
+    const secondOwner = crypto.randomUUID();
+    const secondEntryResponse = await request(
+      '/entries',
+      'POST',
+      { ...firstOwnerPayload, body: '別所有者の架空日記' },
+      {},
+      secondOwner,
+    );
+    const secondEntry = (await secondEntryResponse.json()) as { id: string; body: string };
+    expect(secondEntryResponse.status).toBe(201);
+    expect(secondEntry.id).not.toBe(firstEntry.id);
+
+    expect((await request(`/entries/${firstEntry.id}`, 'DELETE')).status).toBe(202);
+    expect((await request('/entries', 'POST', firstOwnerPayload)).status).toBe(404);
+    expect(
+      (await request('/entries', 'POST', { ...firstOwnerPayload, body: '再利用を試す別内容' }))
+        .status,
+    ).toBe(404);
+    expect(
+      await (
+        await request(
+          '/entries',
+          'POST',
+          { ...firstOwnerPayload, body: '別所有者の架空日記' },
+          {},
+          secondOwner,
+        )
+      ).json(),
+    ).toMatchObject({
+      id: secondEntry.id,
+      body: '別所有者の架空日記',
+    });
+  });
   it('isolates entry, generation and asset by mock session', async () => {
     const entry = await create();
     await request(
@@ -125,17 +188,50 @@ describe('local mock API', () => {
     );
     expect(new Set(generated.map((x) => x.generationId)).size).toBe(1);
     expect((await (await request('/me/quota')).json()).remainingToday).toBe(1);
-    const secondGeneration = await request(
+    const replayedGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 1, captchaToken: '' },
+      { 'Idempotency-Key': key },
+    );
+    expect(replayedGeneration.status).toBe(202);
+    expect(await replayedGeneration.json()).toMatchObject({
+      generationId: generated[0].generationId,
+    });
+    const secondSameRevision = await request(
       `/entries/${id}/generations`,
       'POST',
       { expectedRevision: 1, captchaToken: '' },
       { 'Idempotency-Key': crypto.randomUUID() },
     );
+    expect(secondSameRevision.status).toBe(409);
+    expect((await secondSameRevision.json()).error).toMatchObject({
+      code: 'REVISION_ALREADY_GENERATED',
+      message: 'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
+    });
+    const revised = await request(`/entries/${id}`, 'PATCH', {
+      expectedRevision: 1,
+      diaryDate: jstToday(),
+      body: '改訂後の日記',
+    });
+    expect((await revised.json()).revision).toBe(2);
+    const secondGeneration = await request(
+      `/entries/${id}/generations`,
+      'POST',
+      { expectedRevision: 2, captchaToken: '' },
+      { 'Idempotency-Key': crypto.randomUUID() },
+    );
     expect(secondGeneration.status).toBe(202);
+    const revisedAgain = await request(`/entries/${id}`, 'PATCH', {
+      expectedRevision: 2,
+      diaryDate: jstToday(),
+      body: '再改訂後の日記',
+    });
+    expect((await revisedAgain.json()).revision).toBe(3);
     const limited = await request(
       `/entries/${id}/generations`,
       'POST',
-      { expectedRevision: 1, captchaToken: '' },
+      { expectedRevision: 3, captchaToken: '' },
       { 'Idempotency-Key': crypto.randomUUID() },
     );
     expect(limited.status).toBe(429);
@@ -270,4 +366,57 @@ it('serves all generation states and exposes only successful owned assets', asyn
       (await request(`/assets/${assetId}/url`, 'GET', undefined, {}, crypto.randomUUID())).status,
     ).toBe(404);
   }
+});
+
+it('keeps a prior mock success visible after the latest job fails', async () => {
+  const repository = createMockRepository();
+  app = createApp({ localDevelopment: true, repository });
+  const entry = await create();
+  const successfulId = crypto.randomUUID();
+  const failedId = crypto.randomUUID();
+  const fixtures = generationFixtures(entry.id, successfulId, 1);
+  const failed = generationFixtures(entry.id, failedId, 2).failed;
+  repository.generations.set(successfulId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: fixtures.succeeded,
+  });
+  repository.generations.set(failedId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: failed,
+  });
+  const foreignSuccess = generationFixtures(entry.id, crypto.randomUUID(), 2).succeeded;
+  repository.generations.set(foreignSuccess.id, {
+    owner: crypto.randomUUID(),
+    key: crypto.randomUUID(),
+    generation: foreignSuccess,
+  });
+  const futureSuccess = generationFixtures(entry.id, crypto.randomUUID(), 3).succeeded;
+  repository.generations.set(futureSuccess.id, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: futureSuccess,
+  });
+  const storedEntry = repository.entries.get(entry.id)!.entry;
+  storedEntry.revision = 2;
+  storedEntry.latestGenerationId = failedId;
+
+  const detailAfterFailure = await (await request(`/entries/${entry.id}`)).json();
+  expect(detailAfterFailure.latestGeneration.id).toBe(failedId);
+  expect(detailAfterFailure.latestGeneration.status).toBe('failed');
+  expect(detailAfterFailure.latestGenerationId).toBe(failedId);
+  expect(detailAfterFailure.lastSuccessfulGeneration.id).toBe(successfulId);
+
+  const newestSuccessId = crypto.randomUUID();
+  const newestSuccess = generationFixtures(entry.id, newestSuccessId, 2).succeeded;
+  repository.generations.set(newestSuccessId, {
+    owner,
+    key: crypto.randomUUID(),
+    generation: newestSuccess,
+  });
+  storedEntry.latestGenerationId = newestSuccessId;
+  const detailAfterSuccess = await (await request(`/entries/${entry.id}`)).json();
+  expect(detailAfterSuccess.latestGenerationId).toBe(newestSuccessId);
+  expect(detailAfterSuccess.lastSuccessfulGeneration.id).toBe(newestSuccessId);
 });

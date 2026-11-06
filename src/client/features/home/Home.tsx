@@ -1,8 +1,7 @@
 import { formatDiaryDate } from '../../lib/diaryDate';
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { type Entry, type Generation } from '../../../shared/schemas';
-import { jstToday } from '../../../shared/date';
 import { pageComic, sampleDiary } from '../../../shared/fixtures';
 import { summarizeDiary } from '../../../shared/summary';
 import catSleeping from '../../../../design/assets/cat_sleeping.svg?url';
@@ -13,6 +12,7 @@ import type { ClientConfig } from '../../lib/config';
 import { Icon } from '../../app/Icon';
 import { AppStateCard, configUnavailableMessage } from '../../app/AppStateCard';
 import { useHomeRecords } from './useHomeRecords';
+import { useJstToday } from '../../lib/useJstToday';
 
 function RecentRecords({ entries }: { entries: Entry[] }) {
   return (
@@ -37,14 +37,17 @@ function generationLabel(
   entry: Entry,
   loading: boolean,
   error?: string,
+  comicGeneration?: Generation | null,
 ) {
-  if (error)
-    return error.includes('画像') ? '漫画画像を読み込めません' : '記録の状態を確認できません';
-  if (!generation || generation.entryRevision !== entry.revision) {
-    if (entry.latestGenerationId)
-      return loading ? '状態を確認しています' : '記録を開いて状態を確認';
-    return '下書き';
+  if (!generation) {
+    if (entry.latestGenerationId) {
+      if (error) return '記録の状態を確認できません';
+      return loading ? '状態を確認しています' : '記録の状態を確認できません';
+    }
+    return comicGeneration ? '編集前の漫画' : '下書き';
   }
+  if (generation.entryRevision !== entry.revision)
+    return comicGeneration ? '編集前の漫画' : '編集済み';
   switch (generation.status) {
     case 'queued':
     case 'running':
@@ -64,44 +67,70 @@ function generationLabel(
 
 function TodayEntryHero({ entry }: { entry: Entry }) {
   const preview = useEntryPreview(entry, { eager: true });
-  const generation =
-    preview.generation?.entryRevision === entry.revision ? preview.generation : null;
   let placeholder = '漫画はまだありません';
   if (preview.isLoading) placeholder = '漫画を読み込んでいます';
-  else if (preview.error?.includes('画像')) placeholder = '漫画を表示できません';
-  else if (preview.error) placeholder = '記録の状態を確認できません';
-  else if (entry.latestGenerationId && !generation) placeholder = '記録を開いて状態を確認';
-  else if (generation?.status === 'queued' || generation?.status === 'running')
+  else if (preview.imageError) placeholder = '漫画画像を表示できません';
+  else if (preview.error && !preview.generation) placeholder = '記録の状態を確認できません';
+  else if (preview.generation?.status === 'queued' || preview.generation?.status === 'running')
     placeholder = '漫画を作成中';
-  else if (generation?.status === 'failed' || generation?.status === 'cancelled')
+  else if (preview.generation?.status === 'failed' || preview.generation?.status === 'cancelled')
     placeholder = '漫画はありません';
-  const hasComic = generation?.status === 'succeeded';
+  const hasComic = Boolean(preview.comicGeneration);
   const comicTitle =
-    generation?.status === 'succeeded' ? generation.comic.title : summarizeDiary(entry.body);
+    preview.comicGeneration?.status === 'succeeded'
+      ? preview.comicGeneration.comic.title
+      : summarizeDiary(entry.body);
+  const label = generationLabel(
+    preview.generation,
+    entry,
+    preview.isLoading,
+    preview.error,
+    preview.comicGeneration,
+  );
 
   return (
     <div className="home-today-hero">
       <div className="home-today-content">
         <h2>{summarizeDiary(entry.body)}</h2>
-        <p>{generationLabel(generation, entry, preview.isLoading, preview.error)}</p>
+        <p>{label}</p>
+        {preview.isStale && <p>編集前の漫画を表示しています。</p>}
+        {preview.error && (preview.generation || preview.comicGeneration) && (
+          <p>最新の状態を確認できません。</p>
+        )}
+        {preview.imageError && <p>{preview.imageError}</p>}
         <Link className="today-write-link" to={`/entries/${encodeURIComponent(entry.id)}`}>
           <span>{hasComic ? '漫画を読む' : '記録を読む'}</span>
           <Icon name="chevron-right" size={18} />
         </Link>
       </div>
-      <Link
-        className="home-today-image"
-        to={`/entries/${encodeURIComponent(entry.id)}`}
-        aria-label={`${comicTitle}の記録を読む`}
-      >
-        <EntryThumbnail
-          preview={preview}
-          className="home-today-image-preview"
-          iconSize={32}
-          ariaHidden
-          placeholderLabel={placeholder}
-        />
-      </Link>
+      <div className="home-today-image">
+        <Link
+          className="home-today-image-link"
+          to={`/entries/${encodeURIComponent(entry.id)}`}
+          aria-label={`${comicTitle}の記録を読む`}
+        >
+          <EntryThumbnail
+            preview={preview}
+            className="home-today-image-preview"
+            iconSize={32}
+            ariaHidden
+            placeholderLabel={placeholder}
+          />
+        </Link>
+        {preview.imageError && (
+          <button
+            className="thumbnail-retry-button"
+            type="button"
+            aria-label="漫画画像を再読み込み"
+            aria-disabled={preview.isLoading}
+            onClick={() => {
+              if (!preview.isLoading) preview.retryImage();
+            }}
+          >
+            <Icon name="refresh" size={18} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -115,25 +144,30 @@ export function Home({
   configError: boolean;
   retryConfig: () => void;
 }) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [recordsRetry, setRecordsRetry] = useState(0);
   const records = useHomeRecords(config, configError, recordsRetry);
   const showSample = records.status === 'sample';
   const entries = records.status === 'ready' ? records.entries : [];
-  const currentDay = jstToday();
-  const todayEntries = entries.filter((entry) => entry.diaryDate === currentDay);
+  const today = useJstToday();
+  const todayEntries = entries.filter((entry) => entry.diaryDate === today);
   const todayEntry = todayEntries[0] ?? null;
   const recentEntries = entries.filter((entry) => entry.id !== todayEntry?.id).slice(0, 2);
-  const [sampleOpen, setSampleOpen] = useState(false);
-  const [today] = useState(() => {
-    const date = jstToday();
-    return { date, label: formatDiaryDate(date) };
-  });
+  const sampleOpen = new URLSearchParams(location.search).get('sample') === '1';
+  const openedSampleInApp =
+    (location.state as { openedSampleInApp?: boolean } | null)?.openedSampleInApp === true;
+  const openSample = () => navigate('/?sample=1', { state: { openedSampleInApp: true } });
+  const closeSample = () => {
+    if (openedSampleInApp) navigate(-1);
+    else navigate('/', { replace: true });
+  };
 
   if (showSample && sampleOpen) {
     return (
       <section className="sample-detail" aria-labelledby="sample-detail-title">
         <div className="detail-toolbar">
-          <button className="icon-button" type="button" onClick={() => setSampleOpen(false)}>
+          <button className="icon-button" type="button" onClick={closeSample}>
             <Icon name="back" />
             <span className="sr-only">戻る</span>
           </button>
@@ -161,11 +195,9 @@ export function Home({
 
   return (
     <div className="home-page">
-      {today && (
-        <time className="home-date" dateTime={today.date}>
-          {today.label}
-        </time>
-      )}
+      <time className="home-date" dateTime={today}>
+        {formatDiaryDate(today)}
+      </time>
       <section className="today-section" aria-labelledby="today-heading">
         <h1 id="today-heading" className={showSample && !configError ? undefined : 'sr-only'}>
           {showSample && !configError ? 'サンプル' : '今日の記録'}
@@ -178,11 +210,7 @@ export function Home({
             role="alert"
             actions={
               <>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="button button-secondary" type="button" onClick={openSample}>
                   サンプルを見る
                 </button>
                 <button className="button button-secondary" type="button" onClick={retryConfig}>
@@ -197,11 +225,7 @@ export function Home({
               <h2>{pageComic.title}</h2>
               <p>サンプル漫画</p>
               <div className="home-today-actions">
-                <button
-                  className="today-write-link"
-                  type="button"
-                  onClick={() => setSampleOpen(true)}
-                >
+                <button className="today-write-link" type="button" onClick={openSample}>
                   <span>漫画を読む</span>
                   <Icon name="chevron-right" size={18} />
                 </button>

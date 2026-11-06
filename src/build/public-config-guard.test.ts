@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  assertNoKnownSupabaseServerKeyFormats,
+  assertDemoSupabaseUrlUsesHttps,
+  assertNoKnownServerKeyFormats,
   publicEnvironmentVariables,
 } from './public-config-guard';
 
@@ -13,7 +14,7 @@ function environmentWith(value: string): Record<string, string> {
   return Object.fromEntries(publicEnvironmentVariables.map((variable) => [variable, value]));
 }
 
-describe('公開環境変数の既知Supabase secret形式検査', () => {
+describe('公開環境変数の既知サーバー専用キー形式検査', () => {
   it('空欄・publishable key・旧anon key・未知形式・不正JWTは許可する', () => {
     for (const value of [
       '',
@@ -24,7 +25,7 @@ describe('公開環境変数の既知Supabase secret形式検査', () => {
       'header.not-json.signature',
       'not.a.jwt.with.extra-segments',
     ]) {
-      expect(() => assertNoKnownSupabaseServerKeyFormats(environmentWith(value))).not.toThrow();
+      expect(() => assertNoKnownServerKeyFormats(environmentWith(value))).not.toThrow();
     }
   });
 
@@ -33,13 +34,13 @@ describe('公開環境変数の既知Supabase secret形式検査', () => {
 
     for (const variable of publicEnvironmentVariables) {
       expect(() =>
-        assertNoKnownSupabaseServerKeyFormats({
+        assertNoKnownServerKeyFormats({
           ...environmentWith(''),
           [variable]: ` ${secretSentinel} `,
         }),
       ).toThrow(variable);
       try {
-        assertNoKnownSupabaseServerKeyFormats({
+        assertNoKnownServerKeyFormats({
           ...environmentWith(''),
           [variable]: secretSentinel,
         });
@@ -57,7 +58,7 @@ describe('公開環境変数の既知Supabase secret形式検査', () => {
     for (const variable of publicEnvironmentVariables) {
       let thrown: unknown;
       try {
-        assertNoKnownSupabaseServerKeyFormats({
+        assertNoKnownServerKeyFormats({
           ...environmentWith(''),
           [variable]: serviceRoleJwt,
         });
@@ -70,4 +71,41 @@ describe('公開環境変数の既知Supabase secret形式検査', () => {
       expect((thrown as Error).message).not.toContain(jwtPayloadSentinel);
     }
   });
+
+  it('3つの公開変数すべてでOpenAIのsk-形式を拒否し、値を例外へ含めない', () => {
+    const openAiKey = 'sk-proj-test-sentinel';
+
+    for (const variable of publicEnvironmentVariables) {
+      let thrown: unknown;
+      try {
+        assertNoKnownServerKeyFormats({
+          ...environmentWith(''),
+          [variable]: openAiKey,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(variable);
+      expect((thrown as Error).message).not.toContain(openAiKey);
+    }
+  });
+});
+
+describe('demoのSupabase公開URL検査', () => {
+  it('HTTPSのURLを許可する', () => {
+    expect(() =>
+      assertDemoSupabaseUrlUsesHttps({ VITE_SUPABASE_URL: ' https://demo.example.invalid ' }),
+    ).not.toThrow();
+  });
+
+  it.each(['http://demo.example.invalid', 'demo.example.invalid', ''])(
+    'HTTPSではないURLを拒否する: %s',
+    (url) => {
+      expect(() => assertDemoSupabaseUrlUsesHttps({ VITE_SUPABASE_URL: url })).toThrow(
+        'VITE_SUPABASE_URL',
+      );
+    },
+  );
 });
