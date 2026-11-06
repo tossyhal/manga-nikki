@@ -169,6 +169,7 @@ async function runBehindLock({
   waiterPrefix,
   queries,
   expectedWaiters = queries.length,
+  beforeRequests,
 }) {
   const marker = `${holderName}:lock-acquired`;
   const holder = startSqlSession(holderName);
@@ -178,6 +179,7 @@ async function runBehindLock({
   try {
     holder.write(`begin;\nset local role service_role;\n${lockSql};\n\\echo ${marker}\n`);
     await holder.waitForOutput(marker);
+    await beforeRequests?.(holder);
     requestsPromise = Promise.all(
       queries.map((query, index) => sql(query, `${waiterPrefix}${index}`)),
     );
@@ -733,6 +735,66 @@ select :'race_generation' || '|' || :'race_claim';`;
     '1:1:1:7',
   );
   console.log('成功: 同一キー6並列mock予約はjob・reservation・予算計上が各1件');
+
+  const duplicateGeneration = duplicateReceipts[0].generation_id;
+  const duplicateClaim = JSON.parse(
+    succeeded(
+      await sql(`set role service_role; select public.claim_generation('${duplicateGeneration}');`),
+    ),
+  ).claim_token;
+  const duplicateScriptAttempt = succeeded(
+    await sql(`set role service_role; select public.begin_provider_attempt(
+      '${duplicateGeneration}', '${duplicateClaim}', 'script', 1, false) ->> 'attempt_id';`),
+  );
+  succeeded(
+    await sql(`set role service_role; select public.finish_provider_attempt(
+      '${duplicateGeneration}', '${duplicateClaim}', '${duplicateScriptAttempt}', 'succeeded', null);`),
+  );
+  const duplicateImageAttempt = succeeded(
+    await sql(`set role service_role; select public.begin_provider_attempt(
+      '${duplicateGeneration}', '${duplicateClaim}', 'images', 1, false) ->> 'attempt_id';`),
+  );
+  succeeded(
+    await sql(`set role service_role; select public.finish_provider_attempt(
+      '${duplicateGeneration}', '${duplicateClaim}', '${duplicateImageAttempt}', 'succeeded', null);`),
+  );
+  const completedRevisionWait = await runBehindLock({
+    holderName: 'mn-db-revision-completion-holder',
+    lockSql: "select 1 from private.quota_counters where scope = 'global_total' for update",
+    waiterPrefix: 'mn-db-revision-completion-',
+    queries: [
+      `set role service_role; select public.reserve_mock_generation('${reservationActors[0]}','${duplicateEntry}',1,'bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc');`,
+    ],
+    beforeRequests: async (holder) => {
+      const completedMarker = 'mn-db-revision-completion-holder:completed';
+      holder.write(`select public.complete_mock_generation('${duplicateGeneration}', '${duplicateClaim}',
+        pg_catalog.jsonb_build_object(
+          'schemaVersion', 1, 'title', '同期競合用の架空サンプル',
+          'panels', pg_catalog.jsonb_build_array(
+            pg_catalog.jsonb_build_object('index', 1, 'scene', '場面1', 'caption', '', 'dialogue', ''),
+            pg_catalog.jsonb_build_object('index', 2, 'scene', '場面2', 'caption', '', 'dialogue', ''),
+            pg_catalog.jsonb_build_object('index', 3, 'scene', '場面3', 'caption', '', 'dialogue', ''),
+            pg_catalog.jsonb_build_object('index', 4, 'scene', '場面4', 'caption', '', 'dialogue', '')
+          ),
+          'visual', pg_catalog.jsonb_build_object(
+            'kind', 'page', 'assetId', '${duplicateGeneration}', 'textMode', 'external'
+          )
+        ));
+        \\echo ${completedMarker}\n`);
+      await holder.waitForOutput(completedMarker);
+    },
+  });
+  assert.notEqual(completedRevisionWait[0].code, 0, completedRevisionWait[0].stdout);
+  assert.match(completedRevisionWait[0].stderr, /REVISION_ALREADY_GENERATED/);
+  assert.equal(
+    succeeded(
+      await sql(
+        `select count(*) from public.generations where owner_id = '${reservationActors[0]}';`,
+      ),
+    ),
+    '1',
+  );
+  console.log('成功: 旧mock生成の完了commitを待つ同revision予約はREVISION_ALREADY_GENERATEDで拒否');
 
   const differentEntriesSameActor = await runBehindLock({
     holderName: 'mn-db-reserve-user-active-holder',

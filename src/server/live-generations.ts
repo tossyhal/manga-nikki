@@ -80,6 +80,7 @@ const rpcFailures: Record<string, { status: LiveGenerationError['status']; code:
   NOT_FOUND: { status: 404, code: 'NOT_FOUND' },
   IDEMPOTENCY_CONFLICT: { status: 409, code: 'IDEMPOTENCY_CONFLICT' },
   REVISION_CONFLICT: { status: 409, code: 'REVISION_CONFLICT' },
+  REVISION_ALREADY_GENERATED: { status: 409, code: 'REVISION_ALREADY_GENERATED' },
   ENTRY_BUSY: { status: 409, code: 'ENTRY_BUSY' },
   USER_LIMIT_REACHED: { status: 429, code: 'USER_LIMIT_REACHED' },
   GLOBAL_LIMIT_REACHED: { status: 429, code: 'GLOBAL_LIMIT_REACHED' },

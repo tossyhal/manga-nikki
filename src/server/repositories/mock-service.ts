@@ -131,6 +131,16 @@ export function reserveMockGeneration(
     statusUrl: `/api/v1/generations/${id}`,
   });
   if (old) return receipt(old.generation.id);
+  if (
+    [...repository.generations.values()].some(
+      (stored) =>
+        stored.owner === owner &&
+        stored.generation.entryId === entry.id &&
+        stored.generation.entryRevision === input.expectedRevision &&
+        stored.generation.status === 'succeeded',
+    )
+  )
+    throw new ApiError(409, 'REVISION_ALREADY_GENERATED');
   const counter = `${owner}:${jstToday()}`;
   const count = repository.counts.get(counter) ?? 0;
   if (count >= 2) throw new ApiError(429, 'USER_LIMIT_REACHED');

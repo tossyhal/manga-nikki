@@ -204,6 +204,7 @@ type ComicDocument = {
   - リクエストハッシュは`API version`・`entryId`・`expectedRevision`から計算し、サーバーが取得したそのrevision時点の日記本文を`input_snapshot`として保存します。
   - 後からサーバーのAIモデル設定が変わっても、過去の同じキーを新しい別生成へ流用しません。
   - 同じ`Idempotency-Key`で異なる対象やrevisionが送られた場合は、`409 IDEMPOTENCY_CONFLICT`で拒否します。
+  - 同じowner・entry・revisionに成功済みgenerationがある場合、同じキーのreceiptを優先して返し、新しいキーは`409 REVISION_ALREADY_GENERATED`で拒否します。判定はentry row lock後かつquota上限判定前に行い、別revisionとfailed後の再受付は通常どおり扱います。
   - DBでの枠予約が成功した後にCloudflare Queueへの送信だけが失敗した場合でも、DB上のジョブは保持し、定期バッチ（reconcile）でQueueへ再送します。
 
 ---
@@ -216,7 +217,7 @@ type ComicDocument = {
 | `401` | `AUTH_REQUIRED` | 既存の匿名セッションを更新。無断で別の新しい匿名ユーザーを作らない |
 | `403` | `CAPTCHA_FAILED` / `CONSENT_REQUIRED` | 新しいTurnstileチャレンジの取得、または利用同意画面の表示 |
 | `404` | `NOT_FOUND` | 対象のデータが存在しない旨を表示 |
-| `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
+| `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` / `REVISION_ALREADY_GENERATED` | 最新データと成功済み漫画の再読込、または進行中の既存ジョブの確認へ誘導 |
 | `413` | `INPUT_TOO_LARGE` | 入力サイズの削減を案内 |
 | `429` | `DRAFT_LIMIT_REACHED` | 下書き上限。不要な記録の削除を案内 |
 | `429` | `ENTRY_CREATE_RATE_LIMIT_REACHED` | 日記の作成頻度上限。JST翌日以降の再操作を案内 |
@@ -277,7 +278,7 @@ type ComicDocument = {
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
-| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
+| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新。同一revisionの成功済みgenerationはentry row lock後に確認し、新しいキーを`REVISION_ALREADY_GENERATED`で拒否する |
 | `reserve_mock_generation` | local-connected Worker | receiptを先に照会し、policy用advisory lockの下でenabledかつmock profileを確認した場合だけ既存の`reserve_generation(..., true)`へ渡す。実profileは受け付けない |
 | `reserve_openai_generation` | live-demo Worker | receiptを先に照会し、`generation_enabled=true`と上記固定OpenAI白黒profileをpolicy lock下で確認してから予約する。モデル、料金、呼出上限は入力から選べない |
 | `get_generation_quota` | Worker | 検証済み`sub`のJST日次残数・active generation・reset日時と、DB policy / 全体枠・予算を反映したmock利用可否を返す |
