@@ -982,6 +982,73 @@ test('409後は利用者が選んだ場合だけ最新を読み込み、キャ�
   expect(getCount).toBe(initialReads + 1);
 });
 
+test('409後にcleanな入力で最新記録の再読込が失敗したら保留中の移動を取り消す', async ({ page }) => {
+  let patchAttempted = false;
+  let releaseLatestRead!: () => void;
+  let notifyLatestRead!: () => void;
+  const latestReadRequested = new Promise<void>((resolve) => {
+    notifyLatestRead = resolve;
+  });
+  const latestReadGate = new Promise<void>((resolve) => {
+    releaseLatestRead = resolve;
+  });
+  await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
+  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      patchAttempted = true;
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'REVISION_CONFLICT',
+            message: '別の画面で変更されています。',
+            requestId: 'entry-reload-failure-conflict-e2e',
+            retryable: false,
+          },
+        },
+      });
+    }
+    if (!patchAttempted) return route.fulfill({ json: draftEntryDetailFixture });
+    notifyLatestRead();
+    await latestReadGate;
+    return route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: 'DEPENDENCY_UNAVAILABLE',
+          message: '最新の記録を読み込めませんでした。',
+          requestId: 'entry-reload-failure-e2e',
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  await page.goto(`/entries/${entryId}`);
+  await clickEntryMenuItem(page, '日記を編集');
+  const diary = page.getByLabel('今日はどんな日だった？', { exact: true });
+  await diary.fill('競合した架空の日記');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('button', { name: '最新の記録を読み込む' })).toBeVisible();
+
+  await diary.fill(draftEntryDetailFixture.body);
+  await page
+    .locator('#edit-entry-form')
+    .getByRole('button', { name: '最新の記録を読み込む', exact: true })
+    .click();
+  await latestReadRequested;
+  await page.getByRole('link', { name: 'ホーム', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
+  releaseLatestRead();
+
+  await expect(page).toHaveURL(`/entries/${entryId}`);
+  await expect(page.locator('#edit-entry-form [role="alert"]')).toContainText(
+    '一時的に利用できません',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(diary).toHaveValue(draftEntryDetailFixture.body);
+});
+
 test('生成開始後の409を最新読込すると編集を閉じる', async ({ page }) => {
   const latest: EntryDetail = {
     ...draftEntryDetailFixture,
@@ -1575,25 +1642,31 @@ test('削除中のpollingエラーで保留中の移動を取り消さない', a
   await expect(page).toHaveURL('/');
 });
 
-test('状態確認後の再取得失敗で保留中の移動を取り消す', async ({ page }) => {
+test('状態確認後の生成補完GET失敗で保留中の移動を取り消す', async ({ page }) => {
   const detail: EntryDetail = {
     ...draftEntryDetailFixture,
     latestGenerationId: generationId,
     latestGeneration: null,
   };
-  let releaseRefresh!: () => void;
-  let notifyRefresh!: () => void;
-  const refreshRequested = new Promise<void>((resolve) => {
-    notifyRefresh = resolve;
+  let releaseGenerationLookup!: () => void;
+  let notifyGenerationLookup!: () => void;
+  const generationLookupRequested = new Promise<void>((resolve) => {
+    notifyGenerationLookup = resolve;
   });
-  const refreshGate = new Promise<void>((resolve) => {
-    releaseRefresh = resolve;
+  const generationLookupGate = new Promise<void>((resolve) => {
+    releaseGenerationLookup = resolve;
   });
-  let holdRefresh = false;
+  let generationLookups = 0;
+  let entryReads = 0;
 
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
-  await page.route(`**/api/v1/generations/${generationId}`, (route) =>
-    route.fulfill({
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    generationLookups++;
+    if (generationLookups > 1) {
+      notifyGenerationLookup();
+      await generationLookupGate;
+    }
+    return route.fulfill({
       status: 503,
       json: {
         error: {
@@ -1603,33 +1676,21 @@ test('状態確認後の再取得失敗で保留中の移動を取り消す', as
           retryable: true,
         },
       },
-    }),
-  );
-  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
-    if (!holdRefresh) return route.fulfill({ json: detail });
-    notifyRefresh();
-    await refreshGate;
-    return route.fulfill({
-      status: 503,
-      json: {
-        error: {
-          code: 'DEPENDENCY_UNAVAILABLE',
-          message: 'backend refresh error',
-          requestId: 'generation-status-refresh-error-e2e',
-          retryable: true,
-        },
-      },
     });
+  });
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
+    entryReads++;
+    return route.fulfill({ json: detail });
   });
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('heading', { name: '漫画の状態を確認できません' })).toBeVisible();
-  holdRefresh = true;
   await page.getByRole('button', { name: '状態を再確認する' }).click();
-  await refreshRequested;
+  await generationLookupRequested;
+  expect(entryReads).toBeGreaterThan(1);
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
-  releaseRefresh();
+  releaseGenerationLookup();
 
   await expect(page).toHaveURL(`/entries/${entryId}`);
   await expect(page.locator('.detail-page p[role="alert"]')).toContainText(
@@ -1638,28 +1699,38 @@ test('状態確認後の再取得失敗で保留中の移動を取り消す', as
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-test('受付後の状態再取得失敗で保留中の移動を取り消し、受付再確認を残す', async ({ page }) => {
-  let releaseRefresh!: () => void;
-  let notifyRefresh!: () => void;
-  const refreshRequested = new Promise<void>((resolve) => {
-    notifyRefresh = resolve;
+test('受付後の生成補完GET失敗で保留中の移動を取り消し、受付再確認を残す', async ({ page }) => {
+  const acceptedDetail: EntryDetail = {
+    ...draftEntryDetailFixture,
+    latestGenerationId: generationId,
+    latestGeneration: null,
+  };
+  let releaseGenerationLookup!: () => void;
+  let notifyGenerationLookup!: () => void;
+  const generationLookupRequested = new Promise<void>((resolve) => {
+    notifyGenerationLookup = resolve;
   });
-  const refreshGate = new Promise<void>((resolve) => {
-    releaseRefresh = resolve;
+  const generationLookupGate = new Promise<void>((resolve) => {
+    releaseGenerationLookup = resolve;
   });
   let receiptAccepted = false;
+  let entryReadsAfterReceipt = 0;
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
-  await page.route(`**/api/v1/entries/${entryId}`, async (route) => {
+  await page.route(`**/api/v1/entries/${entryId}`, (route) => {
     if (!receiptAccepted) return route.fulfill({ json: draftEntryDetailFixture });
-    notifyRefresh();
-    await refreshGate;
+    entryReadsAfterReceipt++;
+    return route.fulfill({ json: acceptedDetail });
+  });
+  await page.route(`**/api/v1/generations/${generationId}`, async (route) => {
+    notifyGenerationLookup();
+    await generationLookupGate;
     return route.fulfill({
       status: 503,
       json: {
         error: {
           code: 'DEPENDENCY_UNAVAILABLE',
-          message: 'backend receipt refresh error',
-          requestId: 'generation-receipt-refresh-error-e2e',
+          message: 'backend generation lookup error',
+          requestId: 'generation-receipt-reference-error-e2e',
           retryable: true,
         },
       },
@@ -1679,10 +1750,11 @@ test('受付後の状態再取得失敗で保留中の移動を取り消し、�
 
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();
-  await refreshRequested;
+  await generationLookupRequested;
+  expect(entryReadsAfterReceipt).toBeGreaterThan(0);
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '処理中です' })).toBeVisible();
-  releaseRefresh();
+  releaseGenerationLookup();
 
   await expect(page).toHaveURL(`/entries/${entryId}`);
   await expect(page.locator('.detail-page [role="alert"]')).toContainText(

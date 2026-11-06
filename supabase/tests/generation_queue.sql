@@ -105,7 +105,41 @@ select test.assert((public.reserve_mock_generation('11111111-1111-4111-8111-1111
   '既存mock receiptは停止後・profile変更後も維持する');
 
 reset role;
-update private.generation_policy set enabled = true, global_daily_limit = 20,
+update private.generation_policy set enabled = true, user_daily_limit = 1, global_daily_limit = 20,
+  global_total_limit = 20, budget_micro_usd = 100,
+  model_profile_json = '{"profile_id":"queue-fixed-test-v1","is_mock":true,"max_cost_micro_usd":7}'::jsonb
+where id = 1;
+set local role service_role;
+select test.expect_error(format('select public.reserve_mock_generation(%L,%L,1,%L)',
+  '11111111-1111-4111-8111-111111111111', :'entry_id'::uuid,
+  'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'), 'P0001', 'REVISION_ALREADY_GENERATED');
+
+reset role;
+update private.generation_policy set user_daily_limit = 10 where id = 1;
+set local role service_role;
+select public.update_entry('11111111-1111-4111-8111-111111111111', :'entry_id'::uuid,
+  1, (statement_timestamp() at time zone 'Asia/Tokyo')::date, '改訂後の架空日記');
+select (public.reserve_mock_generation('11111111-1111-4111-8111-111111111111', :'entry_id'::uuid,
+  2, 'c1c1c1c1-c1c1-41c1-81c1-c1c1c1c1c1c1') ->> 'generation_id') as revised_generation \gset
+select test.assert((select entry_revision = 2 and status = 'queued'
+  from public.generations where id = :'revised_generation'::uuid),
+  '成功済みgenerationとは別revisionを予約できる');
+select public.fail_or_hold_generation(:'revised_generation'::uuid, null, 'failed') as revised_failed \gset
+select test.assert(:'revised_failed'::jsonb ->> 'status' = 'failed'
+  and (:'revised_failed'::jsonb ->> 'released')::boolean,
+  '新revisionの未送信失敗は予約枠を返す');
+select (public.reserve_mock_generation('11111111-1111-4111-8111-111111111111', :'entry_id'::uuid,
+  2, 'd1d1d1d1-d1d1-41d1-81d1-d1d1d1d1d1d1') ->> 'generation_id') as retry_after_failure \gset
+select test.assert((select status = 'queued' and entry_revision = 2
+  from public.generations where id = :'retry_after_failure'::uuid),
+  '同revisionの先行jobがfailedなら別keyを受け付ける');
+select public.fail_or_hold_generation(:'retry_after_failure'::uuid, null, 'failed') as retry_failed \gset
+select test.assert(:'retry_failed'::jsonb ->> 'status' = 'failed'
+  and (:'retry_failed'::jsonb ->> 'released')::boolean,
+  'failed後の再受付も未送信なら枠を返す');
+
+reset role;
+update private.generation_policy set enabled = true, user_daily_limit = 10, global_daily_limit = 20,
   global_total_limit = 20, budget_micro_usd = 100,
   model_profile_json = '{"profile_id":"queue-real-shaped-test-v1","is_mock":false,"max_cost_micro_usd":7}'::jsonb
 where id = 1;

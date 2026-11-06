@@ -204,6 +204,7 @@ type ComicDocument = {
   - リクエストハッシュは`API version`・`entryId`・`expectedRevision`から計算し、サーバーが取得したそのrevision時点の日記本文を`input_snapshot`として保存します。
   - 後からサーバーのAIモデル設定が変わっても、過去の同じキーを新しい別生成へ流用しません。
   - 同じ`Idempotency-Key`で異なる対象やrevisionが送られた場合は、`409 IDEMPOTENCY_CONFLICT`で拒否します。
+  - 同じowner・entry・revisionに成功済みgenerationがある場合、同じキーのreceiptを優先して返し、新しいキーは`409 REVISION_ALREADY_GENERATED`で拒否します。判定はentry row lock後かつquota上限判定前に行い、別revisionとfailed後の再受付は通常どおり扱います。
   - DBでの枠予約が成功した後にCloudflare Queueへの送信だけが失敗した場合でも、DB上のジョブは保持し、定期バッチ（reconcile）でQueueへ再送します。
 
 ---
@@ -216,7 +217,7 @@ type ComicDocument = {
 | `401` | `AUTH_REQUIRED` | 既存の匿名セッションを更新。無断で別の新しい匿名ユーザーを作らない |
 | `403` | `CAPTCHA_FAILED` / `CONSENT_REQUIRED` | 新しいTurnstileチャレンジの取得、または利用同意画面の表示 |
 | `404` | `NOT_FOUND` | 対象のデータが存在しない旨を表示 |
-| `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` | 最新データの再読込、または進行中の既存ジョブの確認へ誘導 |
+| `409` | `REVISION_CONFLICT` / `ENTRY_BUSY` / `IDEMPOTENCY_CONFLICT` / `REVISION_ALREADY_GENERATED` | 最新データと成功済み漫画の再読込、または進行中の既存ジョブの確認へ誘導 |
 | `413` | `INPUT_TOO_LARGE` | 入力サイズの削減を案内 |
 | `429` | `DRAFT_LIMIT_REACHED` | 下書き上限。不要な記録の削除を案内 |
 | `429` | `ENTRY_CREATE_RATE_LIMIT_REACHED` | 日記の作成頻度上限。JST翌日以降の再操作を案内 |
@@ -277,14 +278,14 @@ type ComicDocument = {
 | `update_entry` | 同上 | 所有者、`revision`の一致、進行中（active）ジョブが無いことを検査して更新 |
 | `request_entry_deletion` | 同上 | 所有者確認、日記の論理削除、進行中ジョブへの`cancel_requested`設定 |
 | `find_generation_receipt` | 同上 | 有効な本人entryの既存キーだけを照会し、receipt / `null` / `IDEMPOTENCY_CONFLICT`を返す。quota・job・pointerを書き換えない |
-| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新 |
+| `reserve_generation` | 同上 | `p_generation_enabled`とDB policyの二重停止、所有者・同意・`revision`、冪等性、active job、ユーザー枠/全体枠、policyの最大費用を1トランザクションで検査し、job・reservation・counter・最新jobポインタを原子的に更新。同一revisionの成功済みgenerationはentry row lock後に確認し、新しいキーを`REVISION_ALREADY_GENERATED`で拒否する |
 | `reserve_mock_generation` | local-connected Worker | receiptを先に照会し、policy用advisory lockの下でenabledかつmock profileを確認した場合だけ既存の`reserve_generation(..., true)`へ渡す。実profileは受け付けない |
 | `reserve_openai_generation` | live-demo Worker | receiptを先に照会し、`generation_enabled=true`と上記固定OpenAI白黒profileをpolicy lock下で確認してから予約する。モデル、料金、呼出上限は入力から選べない |
 | `get_generation_quota` | Worker | 検証済み`sub`のJST日次残数・active generation・reset日時と、DB policy / 全体枠・予算を反映したmock利用可否を返す |
 | `claim_generation` | Queue Consumer | `p_generation_id uuid`。queued jobを1Consumerだけがrunningへ移し、全ロック取得後から15分の`claim_token`を設定。日記の日付・本文・profile snapshotとtoken/deadlineを返す。日記期限はロック後の時刻で確認し、削除・期限切れ・cancel要求済みjobは`null` |
 | `begin_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_stage text`, `p_call_index integer`, `p_generation_enabled boolean`。全ロック取得後の現在時刻でclaim期限・entry・cancel・policyを再検査し、送信前にattemptを記録。script成功後の最初のimages開始と同じtransactionで`stage`も進める。返値`{attempt_id,generation_id,stage,call_index,mode,is_mock}`。scriptは1回、imagesはsnapshotの`max_image_calls`まで（未指定1、上限4）成功ごとに次を許可。`mode=mock`は実AIを呼ばない専用経路で、`GENERATION_ENABLED=false`でもprofile由来`is_mock=true`だけを許可 |
 | `finish_provider_attempt` | Queue Consumer | `p_generation_id uuid`, `p_claim_token uuid`, `p_attempt_id uuid`, `p_state text`, `p_request_id text default null`。running job・一致するclaim token・reserved枠に属するdispatch済みattemptだけを確定。同じ確定値の再送だけ冪等。削除要求・entry期限・claim期限後の既知結果も記録し、job終端状態は戻さない |
-| `mark_generation_saving` | live-demo Queue Consumer | 完了済みscript 1回・image 4回のattempt、claim、期限、削除/cancel、予約額とsnapshotの整合性を再確認してstageを`saving`へ進める。同claim tokenでの再送は冪等。policy停止の判定は外部呼出し前の`begin_provider_attempt`が担当 |
+| `mark_generation_saving` | live-demo Queue Consumer | 完了済みscript 1回・image 4回のattempt、claim、期限、削除/cancel、予約額とsnapshotの整合性を再確認してstageを`saving`へ進める。同claim tokenでの再送は冪等。一時依存障害（transport status 0、HTTP 408 / 429 / 5xx。ただし501 / 505を除く）だけ期限・signalの有効中に最大1回再送し、SQLの業務拒否や期限切れでは再送しない。providerは再実行しない |
 | `begin_comic_save_task` | live-demo Queue Consumer | scriptと4件のmanifestをprivate taskへdurable保存し、DBでasset ID/pathを決定する。入力manifestは`index`, `media_type`, `byte_size`, `width`, `height`, `sha256`の6項目で、返値taskにはasset ID/pathを含む。claim tokenとは独立した120秒save leaseを発行する。画像bytesはDBへ保存しない |
 | `claim_comic_save_recovery` | live-demo Scheduled handler | generation IDからdurable taskをclaimし、新しいsave tokenと最大120秒leaseを発行する。復旧期限・entry・削除/cancelを再確認し、完了・欠損・期限超過等の終端statusを返す |
 | `complete_comic_save` | live-demo Queue Consumer / Scheduled handler | save lease・元claim・24時間上限・entry・profile・5 successful attemptsを再検査し、task manifestと6項目の入力metadataを照合してassets・comic JSON・`succeeded`・予約`consumed`を1 transactionで確定する |
@@ -419,7 +420,7 @@ OpenAI SDKの自動再送は無効です。SDK responseから安全なrequest ID
 2. `find_generation_receipt`で既存receiptを確認します。既存なら新しいCAPTCHA検証・予約・AI呼出しをせず同じreceiptを返します。
 3. 新しい受付は生成用Turnstileを検証し、`reserve_openai_generation`でDB policy lock下のOpenAI profile・日記snapshot・最大費用枠を原子的に予約します。
 4. Queueへは`{ generationId }`だけを送ります。Consumerはclaim後にsnapshotを検証し、script 1回、image 1〜4の各API呼出し直前に`begin_provider_attempt`、既知結果直後に`finish_provider_attempt`を呼びます。
-5. scriptと4枚の画像が検証済みになった後、`mark_generation_saving`でstageを`saving`へ進めます。これは画像保存や成功確定を行いません。
+5. scriptと4枚の画像が検証済みになった後、`mark_generation_saving`でstageを`saving`へ進めます。一時依存障害だけ同じclaimで最大1回再送し、これは画像保存や成功確定を行いません。
 6. `mark_generation_saving`の後、保存handlerはscriptと保存taskの再開情報をdurableに記録し、画像をprivate Storageへ保存してassets・`comic_json`を登録、完了を確定します。DBの完了確定後だけgeneration IDと`succeeded`を返します。
 
 `unknown`のattemptは自動再実行せず、予約枠をheldにします。保存handlerがthrowするか不正な結果を返した場合、Consumerは`saving-pending`としてQueue messageをackし、jobは`running` / `saving`のまま残します。Cronはdurableに保存済みの情報から保存復旧callbackを呼び、AIは再実行しません。durableな保存情報を作る前にhandlerが失敗するなど復旧データが足りない場合、保存担当が安全に失敗または取消を確定します。削除・cancel・entry期限切れのjobは保存復旧より通常の取消・期限精算を先に行います。二重配送・claim失効・削除や期限との競合で外部呼出しを重ねないよう、Queue messageにはIDのみを載せ、各provider callをDB attempt台帳で囲みます。Queueメッセージ、アプリのJSON API body/response、`comic_json`へ画像bytesやBase64を埋め込みません。Provider・保存handler内部ではbinaryで受け渡し、画像配信はasset ID用の専用URLを使います。

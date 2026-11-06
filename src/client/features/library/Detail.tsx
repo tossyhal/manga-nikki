@@ -271,7 +271,7 @@ function DetailContent({
     let active = true;
     const readVersion = ++detailReadVersionRef.current;
     const guard = createDetailReadGuard(readVersion);
-    loadLatestEntry(id, guard.isCurrent)
+    loadLatestEntry(id, guard.isCurrent, 'initial')
       .then((result) => {
         if (active && result && guard.isCurrent()) setEntrySafely(result);
       })
@@ -429,10 +429,11 @@ function DetailContent({
   async function loadLatestEntry(
     entryId: string,
     isReadCurrent: () => boolean,
+    mode: 'initial' | 'foreground',
   ): Promise<EntryDetail | null> {
     const result = await getEntry(entryId);
     if (!isReadCurrent() || result.id !== entryId) return null;
-    const latest = await completeEntryDetail(result, getGeneration);
+    const latest = await completeEntryDetail(result, getGeneration, mode);
     if (!isReadCurrent()) return null;
     if (
       latest.latestGeneration &&
@@ -445,7 +446,13 @@ function DetailContent({
 
   async function readLatestEntry(): Promise<EntryDetail> {
     const guard = createDetailReadGuard();
-    const latest = await loadLatestEntry(id, guard.isCurrent);
+    let latest: EntryDetail | null;
+    try {
+      latest = await loadLatestEntry(id, guard.isCurrent, 'foreground');
+    } catch (failure) {
+      if (!guard.isCurrent()) return guard.currentEntryAfterStaleRead();
+      throw failure;
+    }
     if (!latest || !guard.isCurrent()) return guard.currentEntryAfterStaleRead();
     setEntrySafely(latest);
     return entryRef.current ?? latest;

@@ -36,6 +36,8 @@ const apiErrorMessages: Record<string, string> = {
   INVALID_INPUT: '入力内容を確認して、もう一度お試しください。',
   NOT_FOUND: '記録が見つかりません。保存した記録を読み込み直してください。',
   REVISION_CONFLICT: '記録が更新されています。最新の内容を読み込んでから操作してください。',
+  REVISION_ALREADY_GENERATED:
+    'この改訂版の漫画はすでに保存されています。最新の状態を読み込んでください。',
   TOO_MANY_ACTIVE: '別の漫画を作成しています。進行中の記録を開いて結果を確認してください。',
   USER_LIMIT_REACHED: '本日の生成上限に達しています。保存済みの記録は引き続き見られます。',
 };

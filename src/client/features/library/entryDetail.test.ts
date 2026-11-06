@@ -24,7 +24,7 @@ describe('completeEntryDetail', () => {
     const succeeded = generationFixtures(entryId, generationId, 1).succeeded;
     const loadGeneration = vi.fn(async () => succeeded);
 
-    const result = await completeEntryDetail(detail(), loadGeneration);
+    const result = await completeEntryDetail(detail(), loadGeneration, 'initial');
 
     expect(loadGeneration).toHaveBeenCalledWith(generationId);
     expect(result.latestGeneration).toEqual(succeeded);
@@ -43,10 +43,31 @@ describe('completeEntryDetail', () => {
     const result = await completeEntryDetail(
       { ...detail(), latestGeneration: staleEmbedded },
       loadGeneration,
+      'initial',
     );
 
     expect(loadGeneration).toHaveBeenCalledWith(generationId);
     expect(result.latestGeneration).toBeNull();
     expect(result.lastSuccessfulGeneration).toBeNull();
+  });
+
+  it('keeps initial rendering tolerant when the latest generation cannot be loaded', async () => {
+    const loadGeneration = vi.fn(async () => {
+      throw new Error('temporary lookup failure');
+    });
+
+    const result = await completeEntryDetail(detail(), loadGeneration, 'initial');
+
+    expect(result.latestGeneration).toBeNull();
+    expect(result.lastSuccessfulGeneration).toBeNull();
+  });
+
+  it('propagates a foreground latest generation lookup failure', async () => {
+    const failure = new Error('temporary lookup failure');
+    const loadGeneration = vi.fn(async () => {
+      throw failure;
+    });
+
+    await expect(completeEntryDetail(detail(), loadGeneration, 'foreground')).rejects.toBe(failure);
   });
 });
