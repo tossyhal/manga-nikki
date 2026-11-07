@@ -68,11 +68,16 @@ test('ホームとライブラリで先頭ページを共有し、キャッシ�
 
 test('編集後のホームと詳細で古い記録を再表示しない', async ({ page }) => {
   const today = jstToday();
+  const updatedBody = '編集後の日記本文です。';
   let currentEntry = makeEntry('編集前の日記本文です。', today);
   let currentDetail: EntryDetail = { ...currentEntry, latestGeneration: null };
   let firstPageGets = 0;
   let detailGets = 0;
   let patchRequests = 0;
+  let releasePostEditFirstPageResponse!: () => void;
+  const postEditFirstPageResponseGate = new Promise<void>((resolve) => {
+    releasePostEditFirstPageResponse = resolve;
+  });
 
   await page.route('**/api/v1/config', (route) => route.fulfill({ json: mockClientConfigFixture }));
   await page.route('**/api/v1/entries?*', async (route) => {
@@ -85,6 +90,9 @@ test('編集後のホームと詳細で古い記録を再表示しない', async
       !url.searchParams.has('cursor')
     ) {
       firstPageGets += 1;
+      if (currentEntry.body === updatedBody) {
+        await postEditFirstPageResponseGate;
+      }
       await route.fulfill({ json: { items: [currentEntry], nextCursor: null } });
       return;
     }
@@ -123,7 +131,6 @@ test('編集後のホームと詳細で古い記録を再表示しない', async
   await expect(page.locator('.detail-toolbar h1')).toHaveText(currentEntry.body);
 
   await clickEntryMenuItem(page, '日記を編集');
-  const updatedBody = '編集後の日記本文です。';
   await page.getByLabel('今日はどんな日だった？', { exact: true }).fill(updatedBody);
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('.detail-toolbar h1')).toHaveText(updatedBody);
@@ -132,10 +139,20 @@ test('編集後のホームと詳細で古い記録を再表示しない', async
 
   await page.getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page).toHaveURL('/');
-  await expect(page.getByRole('heading', { name: updatedBody, exact: true })).toBeVisible();
-  expect(firstPageGets).toBeGreaterThan(1);
-
   const updatedTodaySection = page.getByRole('region', { name: '今日の記録' });
+  try {
+    await expect.poll(() => firstPageGets).toBeGreaterThan(1);
+    await expect(updatedTodaySection).toBeVisible();
+    await expect(
+      updatedTodaySection.getByRole('heading', { name: updatedBody, exact: true }),
+    ).toHaveCount(0);
+  } finally {
+    releasePostEditFirstPageResponse();
+  }
+  await expect(
+    updatedTodaySection.getByRole('heading', { name: updatedBody, exact: true }),
+  ).toBeVisible();
+
   await updatedTodaySection.getByRole('link', { name: '記録を読む', exact: true }).click();
   await expect(page).toHaveURL(`/entries/${entryId}`);
   await expect(page.locator('.detail-toolbar h1')).toHaveText(updatedBody);
