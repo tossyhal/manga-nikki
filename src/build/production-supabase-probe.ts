@@ -33,7 +33,7 @@ function isLegacyServiceRoleJwt(value: string): boolean {
   }
 }
 
-async function readResponseJson(response: Response): Promise<JsonRecord> {
+async function readResponse(response: Response): Promise<unknown> {
   if (response.status !== 200) return fail();
   const reader = response.body?.getReader();
   if (!reader) return fail();
@@ -64,11 +64,16 @@ async function readResponseJson(response: Response): Promise<JsonRecord> {
   }
   try {
     const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-    if (!isRecord(parsed)) return fail();
     return parsed;
   } catch {
     return fail();
   }
+}
+
+async function readResponseJson(response: Response): Promise<JsonRecord> {
+  const parsed = await readResponse(response);
+  if (!isRecord(parsed)) return fail();
+  return parsed;
 }
 
 export type ProductionSupabaseProbeInput = Readonly<{
@@ -101,6 +106,19 @@ export async function runProductionSupabaseConnectionProbe(
     if (isLegacyServiceRoleJwt(input.secretKey)) {
       quotaHeaders.authorization = `Bearer ${input.secretKey}`;
     }
+    const pacingResponse = await fetcher(
+      `${PRODUCTION_SUPABASE_URL}/rest/v1/rpc/global_image_pacing_ready`,
+      {
+        method: 'POST',
+        headers: quotaHeaders,
+        body: '{}',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      },
+    );
+    if ((await readResponse(pacingResponse)) !== true) return fail();
+
     const quotaResponse = await fetcher(
       `${PRODUCTION_SUPABASE_URL}/rest/v1/rpc/get_generation_quota`,
       {

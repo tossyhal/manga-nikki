@@ -103,11 +103,15 @@ owner初回試験アカウントだけ日次例外があります。任意のユ
 
 このbudgetはDB内の予約上限で、実請求のhard capではありません。100 USDクレジット・自動チャージOFFの条件でも、provider側の請求・反映遅延を含め100 USD以内を保証しません。費用条件を確認し、workflowで`operation=activate-event250`、`confirmation=ACTIVATE_EVENT_250_3_PER_JST_DAY_AFTER_VERIFIED_COST`、`provider_cost_verified=true`を明示します。mergeや通常CDはDB policyを変更しません。
 
+`activate-event1000`は、稼働中の正確なevent250 policyから一度だけ切り替える操作です。`global_total_limit=1000`、内部固定予約額1,000,000,000 micro USD（1,000 USD相当）、通常owner/JST日3回を設定します。ownerの日次例外とmodel profileは保持し、既存のcounter・generation履歴・reserved/held reservation・unknown generation/attemptは変更しません。停止中、別policy、適用済みの状態からは拒否し、再開操作はありません。
+
+この1,000 USD相当は内部の固定予約額であり、providerの利用可能額を増やしません。OpenAI credit 100 USD・自動チャージOFFを維持し、provider側の請求・反映遅延を含め100 USD以内を保証しないことを確認してください。費用条件を確認し、workflowで`operation=activate-event1000`、`confirmation=event250稼働中から本番全期間1000件・内部予約1000USD相当へ一度だけ変更（JST日3回）`、`provider_cost_verified=true`を明示します。実AI生成やDB policyの適用には、レビュー後の別承認が必要です。
+
 再開時は現DB状態、保持予約、承認済み費用と回数を確認し、レビューされた専用変更を用意します。
 確認文字列を変えたり、counterを初期化したりして既存guardを迂回しません。
 policy操作の詳細条件は[production-trial-policy実装](../src/build/production-trial-policy.ts)を参照してください。
 
-本番Queueの`max_batch_size=1`・`max_retries=3`は維持し、consumerの`max_concurrency`を10にします。初回の滞留を減らすための初期値で、OpenAIのIPM上限を厳密に制御せず、実AIでの速度や80人同時時の完了時間も保証しません。実AIを使った負荷測定は別承認です。
+本番Queueの`max_batch_size=1`・`max_retries=3`を維持し、consumerの`max_concurrency`を40にします。40並列の利用には画像生成のglobal pacing migrationが必要で、production probeはmigration未適用時にfail closedします。PR #94のDB migrationを先にmergeし、DB migration workflowでplan/applyして適用後にruntime PRを進めてください。適用順と旧runtimeとの切替条件は[全体画像生成pacingの段階適用](IMAGE_PACING_ROLLOUT.md)を参照してください。runtime切替前にpolicy workflowのread-only `check`を実行し、表示されるqueued/running generationの`activeGenerationCount=0`を確認してください。migration適用とprobe成功も確認してから本番生成infraを有効にしてください。pacingはproviderのIPM契約や実請求hard capを保証しません。実AIを使った速度・負荷測定は別承認です。demo Queueのconcurrencyは2のままです。
 
 Queueの重複配信はclaim・attempt台帳で制御します。
 外部AIの実行・課金が不明な`unknown`は自動再実行せず、`held`として予約を保持します。

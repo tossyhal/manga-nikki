@@ -13,18 +13,19 @@ describe('read-only production Supabase connection probe', () => {
     const calls: Array<{ input: string; init: RequestInit }> = [];
     const fetcher: typeof fetch = async (input, init = {}) => {
       calls.push({ input: String(input), init });
-      return calls.length === 1
-        ? new Response(JSON.stringify({ disable_signup: false }), { status: 200 })
-        : new Response(
-            JSON.stringify({
-              remaining_today: 1,
-              generation_available: false,
-              profile_is_mock: false,
-              reset_at: '2030-01-01T00:00:00Z',
-              active_generation_id: null,
-            }),
-            { status: 200 },
-          );
+      if (calls.length === 1)
+        return new Response(JSON.stringify({ disable_signup: false }), { status: 200 });
+      if (calls.length === 2) return new Response('true', { status: 200 });
+      return new Response(
+        JSON.stringify({
+          remaining_today: 1,
+          generation_available: false,
+          profile_is_mock: false,
+          reset_at: '2030-01-01T00:00:00Z',
+          active_generation_id: null,
+        }),
+        { status: 200 },
+      );
     };
 
     await expect(
@@ -32,9 +33,10 @@ describe('read-only production Supabase connection probe', () => {
     ).resolves.toBeUndefined();
     expect(calls.map(({ input }) => input)).toEqual([
       `${probeInput.supabaseUrl}/auth/v1/settings`,
+      `${probeInput.supabaseUrl}/rest/v1/rpc/global_image_pacing_ready`,
       `${probeInput.supabaseUrl}/rest/v1/rpc/get_generation_quota`,
     ]);
-    expect(calls.map(({ init }) => init.method)).toEqual(['GET', 'POST']);
+    expect(calls.map(({ init }) => init.method)).toEqual(['GET', 'POST', 'POST']);
     expect(calls[0]?.init.headers).toEqual({
       apikey: probeInput.publishableKey,
       accept: 'application/json',
@@ -44,12 +46,14 @@ describe('read-only production Supabase connection probe', () => {
       accept: 'application/json',
       'content-type': 'application/json',
     });
+    expect(calls[1]?.init.body).toBe('{}');
+    expect(calls[2]?.init.headers).toEqual(calls[1]?.init.headers);
     for (const call of calls) {
       expect(new Headers(call.init.headers).has('authorization')).toBe(false);
       expect(call.init.redirect).toBe('error');
       expect(call.init.cache).toBe('no-store');
     }
-    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+    expect(JSON.parse(String(calls[2]?.init.body))).toEqual({
       p_actor_id: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
   });
@@ -60,6 +64,7 @@ describe('read-only production Supabase connection probe', () => {
       const fetcher = vi
         .fn()
         .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+        .mockResolvedValueOnce(new Response('true', { status: 200 }))
         .mockResolvedValueOnce(
           new Response(
             JSON.stringify({
@@ -83,22 +88,39 @@ describe('read-only production Supabase connection probe', () => {
     const calls: RequestInit[] = [];
     const fetcher: typeof fetch = async (_input, init = {}) => {
       calls.push(init);
-      return calls.length === 1
-        ? new Response(JSON.stringify({ disable_signup: false }), { status: 200 })
-        : new Response(
-            JSON.stringify({
-              remaining_today: 1,
-              generation_available: false,
-              profile_is_mock: false,
-              reset_at: '2030-01-01T00:00:00Z',
-              active_generation_id: null,
-            }),
-            { status: 200 },
-          );
+      if (calls.length === 1)
+        return new Response(JSON.stringify({ disable_signup: false }), { status: 200 });
+      if (calls.length === 2) return new Response('true', { status: 200 });
+      return new Response(
+        JSON.stringify({
+          remaining_today: 1,
+          generation_available: false,
+          profile_is_mock: false,
+          reset_at: '2030-01-01T00:00:00Z',
+          active_generation_id: null,
+        }),
+        { status: 200 },
+      );
     };
     await runProductionSupabaseConnectionProbe({ ...probeInput, secretKey: legacyKey }, fetcher);
     expect(new Headers(calls[0]?.headers).has('authorization')).toBe(false);
     expect(new Headers(calls[1]?.headers).get('authorization')).toBe(`Bearer ${legacyKey}`);
+    expect(new Headers(calls[2]?.headers).get('authorization')).toBe(`Bearer ${legacyKey}`);
+  });
+
+  it.each([
+    ['false', new Response('false', { status: 200 })],
+    ['missing RPC', new Response('{"code":"PGRST202"}', { status: 404 })],
+    ['database error', new Response('{"code":"PGRST000"}', { status: 500 })],
+  ] as const)('fails closed when global image pacing is %s', async (_label, pacingResponse) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }))
+      .mockResolvedValueOnce(pacingResponse);
+    await expect(runProductionSupabaseConnectionProbe(probeInput, fetcher)).rejects.toMatchObject({
+      code: 'SUPABASE_PROBE_FAILED',
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed for wrong target, bad JSON, oversized data and HTTP errors without response details', async () => {

@@ -1803,10 +1803,81 @@ select :'race_generation' || '|' || :'race_claim';`;
   assert.equal(finalPolicyMetadata.enabled, false);
   assert.equal(finalPolicyMetadata.public80Active, false);
   assert.equal(finalPolicyMetadata.event250Prepared, true);
+  assert.equal(finalPolicyMetadata.event1000Prepared, false);
   assert.equal(finalPolicyMetadata.cumulativeReservedCount, event250CountersBefore[0] + 2);
   assert.equal(finalPolicyMetadata.cumulativeReservedMicroUsd, event250CountersBefore[1] + 2000000);
   console.log(
     '成功: 稼働中public80からevent250への一回限り移行、履歴/予約/unknown/stop保持とread-only確認',
+  );
+
+  const event1000CountersBefore = succeeded(
+    await sql(`select
+      coalesce((select count from private.quota_counters where scope = 'global_total'), 0) || ':' ||
+      coalesce((select committed_micro_usd from private.quota_counters where scope = 'global_total'), 0);`),
+  )
+    .split(':')
+    .map(Number);
+  const event1000Operation = await readFile(
+    join(root, 'supabase/operations/production-event1000-policy-write.sql'),
+    'utf8',
+  );
+  const event1000Body = event1000Operation.match(/^DO \$\$\n([\s\S]*?)\n\$\$;/m)?.[1];
+  assert.ok(event1000Body, 'event1000有効化の固定DO本文が存在する');
+  const event1000Test = await readFile(
+    join(root, 'supabase/tests/production_event1000_policy.sql'),
+    'utf8',
+  );
+  assert.equal(event1000Test.split('-- EVENT1000_ACTIVATION_FUNCTION').length, 2);
+  assert.equal(event1000Test.split('-- TRIAL_POLICY_STOP_FUNCTION').length, 2);
+  assert.equal(event1000Test.split('-- PUBLIC_POLICY_STATUS_CHECK').length, 2);
+  const event1000Fixture = event1000Test
+    .replace('-- PUBLIC_POLICY_STATUS_CHECK', () => trialPolicyCheck)
+    .replace(
+      '-- EVENT1000_ACTIVATION_FUNCTION',
+      () =>
+        `CREATE FUNCTION pg_temp.activate_event1000() RETURNS void LANGUAGE plpgsql AS $event1000_activation$\n${event1000Body}\n$event1000_activation$;`,
+    )
+    .replace(
+      '-- TRIAL_POLICY_STOP_FUNCTION',
+      () =>
+        `CREATE FUNCTION pg_temp.apply_trial_policy_stop() RETURNS void LANGUAGE plpgsql AS $trial_policy_stop$\n${trialPolicyBody}\n$trial_policy_stop$;`,
+    );
+  const event1000FixtureOutput = succeeded(await sql(event1000Fixture));
+  assert.ok(event1000FixtureOutput.includes('EVENT1000_POLICY_FIXTURE_PASSED'));
+  const event1000StatusLine = event1000FixtureOutput
+    .split(/\r?\n/)
+    .find((line) => line.startsWith('{'));
+  assert.ok(event1000StatusLine, 'event1000のread-only statusを検査する');
+  const event1000Status = JSON.parse(event1000StatusLine);
+  assert.equal(event1000Status.identityOk, true);
+  assert.equal(event1000Status.readOnly, true);
+  assert.equal(event1000Status.enabled, false);
+  assert.equal(event1000Status.public80Active, false);
+  assert.equal(event1000Status.event250Prepared, false);
+  assert.equal(event1000Status.event1000Prepared, true);
+  assert.equal(event1000Status.cumulativeReservedCount, event1000CountersBefore[0] + 2);
+  assert.equal(event1000Status.cumulativeReservedMicroUsd, event1000CountersBefore[1] + 2000000);
+  const finalEvent1000Metadata = JSON.parse(
+    succeeded(await sql(`SET ROLE postgres;\n${trialPolicyCheck}`)),
+  );
+  const activeGenerationCount = Number(
+    succeeded(
+      await sql("select count(*) from public.generations where status in ('queued', 'running');"),
+    ),
+  );
+  assert.equal(finalEvent1000Metadata.identityOk, true);
+  assert.equal(finalEvent1000Metadata.readOnly, true);
+  assert.equal(finalEvent1000Metadata.enabled, false);
+  assert.equal(finalEvent1000Metadata.event250Prepared, false);
+  assert.equal(finalEvent1000Metadata.event1000Prepared, true);
+  assert.equal(finalEvent1000Metadata.activeGenerationCount, activeGenerationCount);
+  assert.equal(finalEvent1000Metadata.cumulativeReservedCount, event1000CountersBefore[0] + 2);
+  assert.equal(
+    finalEvent1000Metadata.cumulativeReservedMicroUsd,
+    event1000CountersBefore[1] + 2000000,
+  );
+  console.log(
+    '成功: 稼働中event250からevent1000への一回限り移行、全台帳/owner例外/profile/stop保持とread-only確認',
   );
 } catch (error) {
   if (receivedSignal) {

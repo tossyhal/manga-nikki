@@ -25,7 +25,8 @@ export type TrialPolicyOperation =
   | 'enable'
   | 'stop'
   | 'activate-public80'
-  | 'activate-event250';
+  | 'activate-event250'
+  | 'activate-event1000';
 type Code =
   | 'TRIAL_POLICY_INPUT_INVALID'
   | 'TRIAL_POLICY_METADATA_INVALID'
@@ -54,6 +55,8 @@ export class TrialPolicyFailure extends Error {
 export const TRIAL_POLICY_CONFIRMATIONS = {
   'activate-public80': 'ENABLE_PUBLIC_80USD_3_PER_JST_DAY_OWNER_DEBUG',
   'activate-event250': 'ACTIVATE_EVENT_250_3_PER_JST_DAY_AFTER_VERIFIED_COST',
+  'activate-event1000':
+    'event250稼働中から本番全期間1000件・内部予約1000USD相当へ一度だけ変更（JST日3回）',
   prepare: 'PREPARE_ONE_COMIC_1USD_TRIAL',
   enable: 'ENABLE_ONE_COMIC_1USD_TRIAL_AFTER_VERIFIED_COST',
   stop: 'STOP_GENERATION',
@@ -73,15 +76,23 @@ export type TrialPolicyStatus = Readonly<{
   public80Prepared: boolean;
   public80Active: boolean;
   event250Prepared: boolean;
+  event1000Prepared: boolean;
+  activeGenerationCount: number;
   cumulativeReservedCount: number;
   cumulativeReservedMicroUsd: number;
 }>;
 export function validateTrialPolicyInput(env: NodeJS.ProcessEnv): TrialPolicyOperation {
   const operation = env.PRODUCTION_TRIAL_POLICY_OPERATION;
   if (
-    !['check', 'prepare', 'enable', 'stop', 'activate-public80', 'activate-event250'].includes(
-      operation ?? '',
-    )
+    ![
+      'check',
+      'prepare',
+      'enable',
+      'stop',
+      'activate-public80',
+      'activate-event250',
+      'activate-event1000',
+    ].includes(operation ?? '')
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
   if (
@@ -94,7 +105,8 @@ export function validateTrialPolicyInput(env: NodeJS.ProcessEnv): TrialPolicyOpe
   if (
     (operation === 'enable' ||
       operation === 'activate-public80' ||
-      operation === 'activate-event250') &&
+      operation === 'activate-event250' ||
+      operation === 'activate-event1000') &&
     env.PRODUCTION_TRIAL_PROVIDER_COST_VERIFIED !== 'true'
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
@@ -154,11 +166,12 @@ export function parseTrialPolicyStatus(raw: string): TrialPolicyStatus {
       'public80Prepared',
       'public80Active',
       'event250Prepared',
+      'event1000Prepared',
     ].some((key) => typeof value[key] !== 'boolean')
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_METADATA_INVALID');
   if (
-    ['cumulativeReservedCount', 'cumulativeReservedMicroUsd'].some(
+    ['activeGenerationCount', 'cumulativeReservedCount', 'cumulativeReservedMicroUsd'].some(
       (key) => !Number.isSafeInteger(value[key]) || (value[key] as number) < 0,
     )
   )
@@ -169,6 +182,8 @@ export function parseTrialPolicyStatus(raw: string): TrialPolicyStatus {
     public80Prepared: value.public80Prepared as boolean,
     public80Active: value.public80Active as boolean,
     event250Prepared: value.event250Prepared as boolean,
+    event1000Prepared: value.event1000Prepared as boolean,
+    activeGenerationCount: value.activeGenerationCount as number,
     cumulativeReservedCount: value.cumulativeReservedCount as number,
     cumulativeReservedMicroUsd: value.cumulativeReservedMicroUsd as number,
     enabled: value.enabled as boolean,
@@ -221,6 +236,17 @@ export function assertTrialPolicyChangeAllowed(
       throw new TrialPolicyFailure('TRIAL_POLICY_STATE_INVALID');
     return;
   }
+  if (operation === 'activate-event1000') {
+    if (
+      !status.enabled ||
+      !status.public80SchemaReady ||
+      !status.event250Prepared ||
+      status.event1000Prepared ||
+      !status.policyTriggerPresent
+    )
+      throw new TrialPolicyFailure('TRIAL_POLICY_STATE_INVALID');
+    return;
+  }
   if (
     status.enabled ||
     !status.historyEmpty ||
@@ -238,11 +264,19 @@ export function buildTrialPolicySql(
   providerCostVerified: boolean,
 ): string {
   if (
-    !['prepare', 'enable', 'stop', 'activate-public80', 'activate-event250'].includes(operation) ||
+    ![
+      'prepare',
+      'enable',
+      'stop',
+      'activate-public80',
+      'activate-event250',
+      'activate-event1000',
+    ].includes(operation) ||
     typeof providerCostVerified !== 'boolean' ||
     ((operation === 'enable' ||
       operation === 'activate-public80' ||
-      operation === 'activate-event250') &&
+      operation === 'activate-event250' ||
+      operation === 'activate-event1000') &&
       !providerCostVerified) ||
     !source.startsWith(`BEGIN READ WRITE;\n${TRIAL_POLICY_SETTINGS_SENTINEL}`) ||
     source.split(TRIAL_POLICY_SETTINGS_SENTINEL).length !== 2
@@ -293,7 +327,7 @@ export function classifyTrialPolicyWriteFailure(error: unknown): TrialPolicyWrit
   return causes.size === 1 ? [...causes][0]! : 'UNKNOWN';
 }
 export function renderTrialPolicyStatus(status: TrialPolicyStatus): string {
-  return `enabled=${status.enabled} initialPolicy=${status.initialPolicy} trialPrepared=${status.trialPrepared} historyEmpty=${status.historyEmpty} policyTriggerPresent=${status.policyTriggerPresent} public80SchemaReady=${status.public80SchemaReady} public80Ready=${status.public80Ready} public80Prepared=${status.public80Prepared} public80Active=${status.public80Active} event250Prepared=${status.event250Prepared} cumulativeReservedCount=${status.cumulativeReservedCount} cumulativeReservedMicroUsd=${status.cumulativeReservedMicroUsd}`;
+  return `enabled=${status.enabled} initialPolicy=${status.initialPolicy} trialPrepared=${status.trialPrepared} historyEmpty=${status.historyEmpty} policyTriggerPresent=${status.policyTriggerPresent} public80SchemaReady=${status.public80SchemaReady} public80Ready=${status.public80Ready} public80Prepared=${status.public80Prepared} public80Active=${status.public80Active} event250Prepared=${status.event250Prepared} event1000Prepared=${status.event1000Prepared} activeGenerationCount=${status.activeGenerationCount} cumulativeReservedCount=${status.cumulativeReservedCount} cumulativeReservedMicroUsd=${status.cumulativeReservedMicroUsd}`;
 }
 export async function writeTrialPolicy(
   operation: Exclude<TrialPolicyOperation, 'check'>,
@@ -302,11 +336,19 @@ export async function writeTrialPolicy(
   executor: typeof execute = execute,
 ): Promise<void> {
   if (
-    !['prepare', 'enable', 'stop', 'activate-public80', 'activate-event250'].includes(operation) ||
+    ![
+      'prepare',
+      'enable',
+      'stop',
+      'activate-public80',
+      'activate-event250',
+      'activate-event1000',
+    ].includes(operation) ||
     typeof providerCostVerified !== 'boolean' ||
     ((operation === 'enable' ||
       operation === 'activate-public80' ||
-      operation === 'activate-event250') &&
+      operation === 'activate-event250' ||
+      operation === 'activate-event1000') &&
       !providerCostVerified)
   )
     throw new TrialPolicyFailure('TRIAL_POLICY_INPUT_INVALID');
@@ -326,7 +368,14 @@ export async function writeTrialPolicy(
               import.meta.url,
             ),
           )
-        : TRIAL_POLICY_WRITE_PATH,
+        : operation === 'activate-event1000'
+          ? fileURLToPath(
+              new URL(
+                '../../supabase/operations/production-event1000-policy-write.sql',
+                import.meta.url,
+              ),
+            )
+          : TRIAL_POLICY_WRITE_PATH,
     'utf8',
   );
   const sql = buildTrialPolicySql(source, operation, providerCostVerified);

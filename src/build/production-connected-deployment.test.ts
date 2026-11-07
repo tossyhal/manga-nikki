@@ -344,7 +344,7 @@ describe('production connected Wrangler deploy', () => {
 });
 
 describe('production generation deployment profile', () => {
-  it('keeps one-message batches and bounded retries while using ten consumers', () => {
+  it('keeps one-message batches and bounded retries while using forty consumers', () => {
     expect(productionGenerationQueueConfiguration('fixture-generations')).toEqual({
       producers: [{ binding: 'GENERATION_QUEUE', queue: 'fixture-generations' }],
       consumers: [
@@ -353,7 +353,7 @@ describe('production generation deployment profile', () => {
           max_batch_size: 1,
           max_batch_timeout: 0,
           max_retries: 3,
-          max_concurrency: 10,
+          max_concurrency: 40,
         },
       ],
     });
