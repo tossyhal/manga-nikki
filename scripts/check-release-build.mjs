@@ -117,7 +117,7 @@ if (target === 'production') {
           max_batch_size: 1,
           max_batch_timeout: 0,
           max_retries: 3,
-          max_concurrency: 10,
+          max_concurrency: 40,
         },
       ],
     });

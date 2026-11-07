@@ -14,6 +14,7 @@ import type {
 import type { ImageProvider } from './ai/image-provider';
 import type { ScriptProvider } from './ai/script-provider';
 import { scriptSchema } from './ai/script-schema';
+import { beginPacedImageAttempts } from './ai/global-image-pacing';
 import { resolveMode, type Environment } from './mode';
 import { generationOwnerAllowed } from './generation-owner';
 import { callGenerationRpc, getGenerationQueue, LiveGenerationError } from './live-generations';
@@ -32,7 +33,6 @@ const providerAttemptSchema = z.strictObject({
   mode: z.literal('provider'),
   is_mock: z.literal(false),
 });
-const parallelImageAttemptsSchema = z.array(providerAttemptSchema).length(3);
 const finishAttemptSchema = z.strictObject({
   attempt_id: z.uuid(),
   state: z.enum(['succeeded', 'failed', 'unknown']),
@@ -79,6 +79,17 @@ async function parallelImageGenerationReady(
   const parsed = z.boolean().safeParse(data);
   if (!parsed.success) throw new Error('PARALLEL_IMAGE_READINESS_INVALID');
   return parsed.data;
+}
+
+async function globalImagePacingReady(
+  environment: Environment,
+  fetcher: typeof fetch | undefined,
+): Promise<void> {
+  const { data, error } = await createServerRpcClient(environment, fetcher).rpc(
+    'global_image_pacing_ready',
+  );
+  if (error) throw new Error('IMAGE_PACING_READINESS_FAILED');
+  if (data !== true) throw new Error('IMAGE_PACING_NOT_READY');
 }
 
 export type ClaimedOpenAIGeneration = Readonly<{
@@ -162,23 +173,55 @@ export async function runOpenAIGeneration(
       throw error;
     }
   };
+  const generationFetcher: typeof fetch = (input, init) =>
+    (fetcher ?? fetch)(input, { ...init, signal: generationController.signal });
+
+  const beginPacedImages = (callIndices: readonly number[]) =>
+    beginPacedImageAttempts({
+      generationId: claim.generation_id,
+      claimToken: claim.claim_token,
+      callIndices,
+      signal: generationController.signal,
+      deadlineMs,
+      begin: (args) =>
+        callGenerationRpc(environment, generationFetcher, 'begin_paced_image_attempts', args),
+    });
 
   const attemptHooks: ProviderAttemptHooks = {
     begin: async (stage, callIndex) => {
       if (
         (stage === 'script' && callIndex !== 1) ||
-        (stage === 'images' && (callIndex < 1 || callIndex > profile.data.max_image_calls)) ||
+        (stage === 'images' &&
+          (!Number.isInteger(callIndex) ||
+            callIndex < 1 ||
+            callIndex > profile.data.max_image_calls)) ||
         attemptIds.has(key(stage, callIndex))
       )
         throw new Error('PROVIDER_ATTEMPT_ORDER_INVALID');
 
-      const result = await callGenerationRpc(environment, fetcher, 'begin_provider_attempt', {
-        p_generation_id: claim.generation_id,
-        p_claim_token: claim.claim_token,
-        p_stage: stage,
-        p_call_index: callIndex,
-        p_generation_enabled: true,
-      });
+      if (stage === 'images') {
+        assertBeforeDeadline();
+        const [attempt] = await beginPacedImages([callIndex]);
+        assertBeforeDeadline();
+        if (!attempt) throw new Error('PROVIDER_ATTEMPT_INVALID');
+        attemptIds.set(key(stage, callIndex), attempt.attempt_id);
+        return attempt.attempt_id;
+      }
+
+      assertBeforeDeadline();
+      const result = await callGenerationRpc(
+        environment,
+        generationFetcher,
+        'begin_provider_attempt',
+        {
+          p_generation_id: claim.generation_id,
+          p_claim_token: claim.claim_token,
+          p_stage: stage,
+          p_call_index: callIndex,
+          p_generation_enabled: true,
+        },
+      );
+      assertBeforeDeadline();
       const parsed = providerAttemptSchema.safeParse(result);
       if (
         !parsed.success ||
@@ -199,30 +242,20 @@ export async function runOpenAIGeneration(
       )
         throw new Error('PROVIDER_ATTEMPT_BATCH_ORDER_INVALID');
 
-      const result = await callGenerationRpc(
-        environment,
-        fetcher,
-        'begin_parallel_image_attempts',
-        {
-          p_generation_id: claim.generation_id,
-          p_claim_token: claim.claim_token,
-          p_generation_enabled: true,
-        },
-      );
-      const parsed = parallelImageAttemptsSchema.safeParse(result);
+      assertBeforeDeadline();
+      const parsed = await beginPacedImages(callIndices);
+      assertBeforeDeadline();
       if (
-        !parsed.success ||
-        parsed.data.some(
+        parsed.some(
           (attempt, index) =>
             attempt.generation_id !== claim.generation_id ||
             attempt.stage !== stage ||
             attempt.call_index !== callIndices[index],
-        ) ||
-        new Set(parsed.data.map((attempt) => attempt.attempt_id)).size !== 3
+        )
       )
         throw new Error('PROVIDER_ATTEMPT_BATCH_INVALID');
 
-      const handles = parsed.data.map((attempt) => ({
+      const handles = parsed.map((attempt) => ({
         callIndex: attempt.call_index,
         attemptId: attempt.attempt_id,
       }));
@@ -268,7 +301,12 @@ export async function runOpenAIGeneration(
   };
 
   try {
-    const parallelImagesAvailable = await parallelImageGenerationReady(environment, fetcher);
+    await globalImagePacingReady(environment, generationFetcher);
+    assertBeforeDeadline();
+    const parallelImagesAvailable = await parallelImageGenerationReady(
+      environment,
+      generationFetcher,
+    );
     assertBeforeDeadline();
     if (!parallelImagesAvailable) delete attemptHooks.beginBatch;
 
@@ -325,17 +363,15 @@ export async function runOpenAIGeneration(
 
     assertBeforeDeadline();
     let saving: unknown;
-    const savingFetcher: typeof fetch = (input, init) =>
-      (fetcher ?? fetch)(input, { ...init, signal: generationController.signal });
     try {
-      saving = await callGenerationRpc(environment, savingFetcher, 'mark_generation_saving', {
+      saving = await callGenerationRpc(environment, generationFetcher, 'mark_generation_saving', {
         p_generation_id: claim.generation_id,
         p_claim_token: claim.claim_token,
       });
     } catch (error) {
       if (!(error instanceof LiveGenerationError) || !error.retryableDependency) throw error;
       assertBeforeDeadline();
-      saving = await callGenerationRpc(environment, savingFetcher, 'mark_generation_saving', {
+      saving = await callGenerationRpc(environment, generationFetcher, 'mark_generation_saving', {
         p_generation_id: claim.generation_id,
         p_claim_token: claim.claim_token,
       });
