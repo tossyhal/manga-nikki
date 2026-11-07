@@ -664,4 +664,242 @@ async function getLiveComicAssetUrl(
   };
 }
 
+const signedAssetResultSchema = z.object({
+  error: z.string().nullable(),
+  path: z.string().nullable(),
+  signedUrl: z.string().nullable(),
+});
+
+function liveAssetReadError(error: unknown): never {
+  if (isRecord(error) && error.status === 401) throw new LiveGenerationError(401, 'AUTH_REQUIRED');
+  throw unavailable();
+}
+
+function privateAssetsById(
+  value: unknown,
+  assetIds: string[],
+  ownerId: string,
+  generationId: string,
+): Map<string, z.infer<typeof privateAssetSchema>> | null {
+  if (!Array.isArray(value) || value.length !== assetIds.length) return null;
+  const expectedIds = new Set(assetIds);
+  const result = new Map<string, z.infer<typeof privateAssetSchema>>();
+  for (const candidate of value) {
+    const parsed = privateAssetSchema.safeParse(candidate);
+    if (
+      !parsed.success ||
+      !expectedIds.has(parsed.data.id) ||
+      result.has(parsed.data.id) ||
+      parsed.data.generation_id !== generationId ||
+      parsed.data.owner_id !== ownerId ||
+      parsed.data.object_path !==
+        expectedPrivateAssetPath(ownerId, generationId, parsed.data.id, parsed.data.media_type)
+    )
+      return null;
+    result.set(parsed.data.id, parsed.data);
+  }
+  return result.size === assetIds.length ? result : null;
+}
+
+function samePrivateAsset(
+  left: z.infer<typeof privateAssetSchema>,
+  right: z.infer<typeof privateAssetSchema>,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.generation_id === right.generation_id &&
+    left.owner_id === right.owner_id &&
+    left.object_path === right.object_path &&
+    left.media_type === right.media_type
+  );
+}
+
+function signedAssetUrl(value: string, path: string, environment: Environment): string | null {
+  try {
+    const url = new URL(value);
+    const expectedOrigin = new URL(supabaseUrl(environment)).origin;
+    if (
+      url.origin !== expectedOrigin ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      url.pathname !== `/storage/v1/object/sign/comics/${path}`
+    )
+      return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function succeededAssetGeneration(value: unknown, generationId: string) {
+  const row = generationRowSchema.safeParse(value);
+  const generation = parseGenerationRow(value);
+  if (
+    !row.success ||
+    !generation ||
+    row.data.id !== generationId ||
+    generation.status !== 'succeeded' ||
+    generation.stage !== null
+  )
+    return null;
+  return { row: row.data, generation };
+}
+
+function sameAssetGeneration(
+  previous: ReturnType<typeof succeededAssetGeneration>,
+  current: ReturnType<typeof succeededAssetGeneration>,
+): boolean {
+  if (!previous || !current) return false;
+  const previousComic = comicSchema.safeParse(previous.row.comic_json);
+  const currentComic = comicSchema.safeParse(current.row.comic_json);
+  return Boolean(
+    previousComic.success &&
+    currentComic.success &&
+    previous.row.entry_id === current.row.entry_id &&
+    previous.row.entry_revision === current.row.entry_revision &&
+    previous.row.status === current.row.status &&
+    previous.row.stage === current.row.stage &&
+    previous.row.is_mock === current.row.is_mock &&
+    JSON.stringify(previousComic.data) === JSON.stringify(currentComic.data),
+  );
+}
+
+export async function getLiveGenerationAssets(
+  context: GenerationContext,
+  generationId: string,
+): Promise<{ id: string; url: string; expiresAt: string }[] | null> {
+  if (!z.uuid().safeParse(generationId).success)
+    throw new LiveGenerationError(400, 'INVALID_INPUT');
+
+  const client = createUserSupabaseClient(
+    context.environment,
+    context.accessToken,
+    context.fetcher,
+  );
+  const readGeneration = () =>
+    client
+      .from('generations')
+      .select('id,entry_id,entry_revision,status,stage,comic_json,is_mock')
+      .eq('id', generationId)
+      .eq('owner_id', context.owner)
+      .maybeSingle();
+  const { data: generationRow, error: generationError } = await readGeneration();
+  if (generationError) liveAssetReadError(generationError);
+  const initialGeneration = succeededAssetGeneration(generationRow, generationId);
+  if (!initialGeneration) return null;
+
+  const comic = comicSchema.safeParse(initialGeneration.row.comic_json);
+  if (!comic.success) return null;
+  const assetIds =
+    comic.data.visual.kind === 'page' ? [comic.data.visual.assetId] : comic.data.visual.assetIds;
+
+  const readEntry = () =>
+    client
+      .from('entries')
+      .select('id')
+      .eq('id', initialGeneration.row.entry_id)
+      .eq('owner_id', context.owner)
+      .is('deleted_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle();
+
+  if (
+    initialGeneration.row.is_mock === true &&
+    comic.data.visual.kind === 'page' &&
+    comic.data.visual.assetId === generationId
+  ) {
+    const { data: entry, error: entryError } = await readEntry();
+    if (entryError) liveAssetReadError(entryError);
+    if (!entry) return null;
+    return [
+      {
+        id: generationId,
+        url: '/sample-comic.svg',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    ];
+  }
+
+  if (initialGeneration.row.is_mock !== false) return null;
+
+  let metadataClient: ReturnType<typeof createServerAssetMetadataClient>;
+  try {
+    metadataClient = createServerAssetMetadataClient(context.environment, context.fetcher);
+  } catch {
+    throw unavailable();
+  }
+
+  const [entryResult, assetsResult] = await Promise.all([
+    readEntry(),
+    metadataClient.getAssets(assetIds),
+  ]);
+  if (entryResult.error) liveAssetReadError(entryResult.error);
+  if (!entryResult.data) return null;
+  if (entryResult.data.id !== initialGeneration.row.entry_id) throw unavailable();
+  if (assetsResult.error) throw unavailable();
+  const initialAssets = privateAssetsById(assetsResult.data, assetIds, context.owner, generationId);
+  if (!initialAssets) return null;
+
+  const signingStartedAt = Date.now();
+  const storage = createServerAssetSigningClient(context.environment, context.fetcher);
+  const paths = assetIds.map((id) => initialAssets.get(id)!.object_path);
+  const { data: signedRows, error: signingError } = await storage.createSignedUrls(paths, 60);
+  if (signingError || !Array.isArray(signedRows) || signedRows.length !== paths.length)
+    throw unavailable();
+
+  const signedUrls = new Map<string, string>();
+  for (const value of signedRows) {
+    const parsed = signedAssetResultSchema.safeParse(value);
+    if (
+      !parsed.success ||
+      parsed.data.error !== null ||
+      !parsed.data.path ||
+      !parsed.data.signedUrl ||
+      signedUrls.has(parsed.data.path)
+    )
+      throw unavailable();
+    const expectedAsset = [...initialAssets.values()].find(
+      (asset) => asset.object_path === parsed.data.path,
+    );
+    const url = expectedAsset
+      ? signedAssetUrl(parsed.data.signedUrl, expectedAsset.object_path, context.environment)
+      : null;
+    if (!url) throw unavailable();
+    signedUrls.set(parsed.data.path, url);
+  }
+  if (paths.some((path) => !signedUrls.has(path))) throw unavailable();
+
+  const [currentGenerationResult, currentEntryResult, currentAssetsResult] = await Promise.all([
+    readGeneration(),
+    readEntry(),
+    metadataClient.getAssets(assetIds),
+  ]);
+  if (currentGenerationResult.error) liveAssetReadError(currentGenerationResult.error);
+  if (currentEntryResult.error) liveAssetReadError(currentEntryResult.error);
+  if (currentAssetsResult.error) throw unavailable();
+  const currentGeneration = succeededAssetGeneration(currentGenerationResult.data, generationId);
+  if (!sameAssetGeneration(initialGeneration, currentGeneration)) return null;
+  if (!currentEntryResult.data) return null;
+  if (currentEntryResult.data.id !== initialGeneration.row.entry_id) throw unavailable();
+  const currentAssets = privateAssetsById(
+    currentAssetsResult.data,
+    assetIds,
+    context.owner,
+    generationId,
+  );
+  if (!currentAssets) return null;
+  for (const id of assetIds) {
+    const previous = initialAssets.get(id);
+    const current = currentAssets.get(id);
+    if (!previous || !current || !samePrivateAsset(previous, current)) return null;
+  }
+
+  const expiresAt = new Date(signingStartedAt + 60_000).toISOString();
+  return assetIds.map((id) => {
+    const asset = initialAssets.get(id)!;
+    return { id, url: signedUrls.get(asset.object_path)!, expiresAt };
+  });
+}
+
 export { getLiveAssetUrl as getLiveMockAssetUrl };

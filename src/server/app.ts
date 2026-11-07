@@ -10,7 +10,12 @@ import {
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { MockScriptProvider, mockScriptModelProfile } from './ai/mock-script-provider';
-import { createEntrySchema, updateEntrySchema, generateSchema } from '../shared/schemas';
+import {
+  comicSchema,
+  createEntrySchema,
+  updateEntrySchema,
+  generateSchema,
+} from '../shared/schemas';
 import { resolveMode, type Environment } from './mode';
 import type { RecoverGeneratedComic, SaveGeneratedComic } from './generation-save-handler';
 import { createMockRepository, type MockRepository } from './repositories/mock';
@@ -25,6 +30,7 @@ import {
 import {
   generationIngressConfigured,
   getLiveGeneration,
+  getLiveGenerationAssets,
   getLiveAssetUrl,
   getLiveGenerationQuota,
   LiveGenerationError,
@@ -64,7 +70,7 @@ export function createApp(
   const getRepository = () => (repository ??= createMockRepository());
   const app = new Hono<{
     Bindings: Environment;
-    Variables: { owner: string; accessToken: string | null };
+    Variables: { owner: string; accessToken: string | null; authDurationMs: number };
   }>();
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -188,6 +194,7 @@ export function createApp(
     const origin = c.req.header('Origin');
     if (origin && origin !== url.origin) throw new ApiError(401, 'AUTH_REQUIRED');
 
+    const authenticationStartedAt = performance.now();
     let owner: string;
     let accessToken: string | null = null;
     if (current === 'local-mock') {
@@ -209,6 +216,7 @@ export function createApp(
     }
     c.set('owner', owner);
     c.set('accessToken', accessToken);
+    c.set('authDurationMs', performance.now() - authenticationStartedAt);
     await next();
   });
   const liveContext = (c: {
@@ -341,6 +349,41 @@ export function createApp(
       token = await createComicShare(liveContext(c), generationId);
     }
     return c.json({ path: `/shared/${token}` }, 201);
+  });
+  app.get('/api/v1/generations/:id/assets', async (c) => {
+    const current = mode(c.env);
+    const generationId = z.uuid().parse(c.req.param('id'));
+    const applicationStartedAt = performance.now();
+    if (current !== 'local-mock') {
+      if (current !== 'local-connected' && current !== 'live-demo')
+        throw new ApiError(503, 'DEPENDENCY_UNAVAILABLE');
+      const assets = await getLiveGenerationAssets(liveContext(c), generationId);
+      if (!assets) throw new ApiError(404, 'NOT_FOUND');
+      c.header(
+        'Server-Timing',
+        `auth;dur=${c.get('authDurationMs').toFixed(1)}, app;dur=${(performance.now() - applicationStartedAt).toFixed(1)}`,
+      );
+      return c.json({ assets });
+    }
+
+    const repository = getRepository();
+    const job = repository.generations.get(generationId);
+    if (!job || job.owner !== c.get('owner') || job.generation.status !== 'succeeded')
+      throw new ApiError(404, 'NOT_FOUND');
+    const entry = repository.entries.get(job.generation.entryId);
+    if (!entry || entry.owner !== c.get('owner')) throw new ApiError(404, 'NOT_FOUND');
+    const comic = comicSchema.safeParse(job.generation.comic);
+    if (!comic.success) throw new ApiError(404, 'NOT_FOUND');
+    const assetIds =
+      comic.data.visual.kind === 'page' ? [comic.data.visual.assetId] : comic.data.visual.assetIds;
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    c.header(
+      'Server-Timing',
+      `auth;dur=${c.get('authDurationMs').toFixed(1)}, app;dur=${(performance.now() - applicationStartedAt).toFixed(1)}`,
+    );
+    return c.json({
+      assets: assetIds.map((id) => ({ id, url: '/sample-comic.svg', expiresAt })),
+    });
   });
   app.get('/api/v1/generations/:id', async (c) => {
     const current = mode(c.env);

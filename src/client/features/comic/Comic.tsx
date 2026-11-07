@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ComicDocument } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
+import { useDelayedLoading } from '../../lib/useDelayedLoading';
 
 function ComicTranscript({
   comic,
@@ -83,6 +84,7 @@ export function Comic({
     Record<string, { src: string; resetVersion: number }>
   >({});
   const zoomDialogRef = useRef<HTMLDialogElement>(null);
+  const showLoadingPlaceholder = useDelayedLoading(imageLoading, 120);
   const imageFailed = (id: string) =>
     imageError ||
     imageErrors.includes(id) ||
@@ -125,7 +127,8 @@ export function Comic({
                   <img
                     src={src}
                     referrerPolicy="no-referrer"
-                    loading="lazy"
+                    loading={index === 0 ? 'eager' : 'lazy'}
+                    fetchPriority={index === 0 ? 'high' : 'auto'}
                     decoding="async"
                     alt={alt}
                     onError={() => {
@@ -141,12 +144,17 @@ export function Comic({
                 </button>
               ) : (
                 <div
-                  className={`comic-image-placeholder${failed ? ' is-error' : ''}`}
-                  role={failed ? 'img' : 'status'}
+                  className={`comic-image-placeholder${failed ? ' is-error' : showLoadingPlaceholder ? '' : ' is-pending'}`}
+                  role={failed ? 'img' : showLoadingPlaceholder ? 'status' : undefined}
                   aria-label={failed ? '漫画の画像を表示できません' : undefined}
-                  aria-live={failed ? undefined : 'polite'}
+                  aria-live={failed || !showLoadingPlaceholder ? undefined : 'polite'}
+                  aria-hidden={!failed && !showLoadingPlaceholder}
                 >
-                  {failed ? '漫画の画像を表示できません。' : '漫画画像を読み込んでいます…'}
+                  {failed
+                    ? '漫画の画像を表示できません。'
+                    : showLoadingPlaceholder
+                      ? '漫画画像を読み込んでいます…'
+                      : null}
                 </div>
               );
             return (

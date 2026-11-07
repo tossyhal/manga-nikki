@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ClientAuthError, getLiveAccessToken } from '../auth';
 import { getClientConfig, type ClientConfig } from '../config';
+import { invalidateAssetReadCache } from './assetReadCacheInvalidation';
 import { invalidateEntryReadCache } from './entryReadCache';
 
 export class ApiClientError extends Error {
@@ -47,6 +48,21 @@ export type ApiAuthorizationScope = {
   dataMode: ClientConfig['dataMode'];
   authorization: string;
 };
+
+let lastAuthorizationScope: ApiAuthorizationScope | null = null;
+
+function sameAuthorizationScope(
+  left: ApiAuthorizationScope | null,
+  right: ApiAuthorizationScope,
+): boolean {
+  return Boolean(
+    left && left.dataMode === right.dataMode && left.authorization === right.authorization,
+  );
+}
+
+function invalidateImageReadsForAuthFailure() {
+  invalidateAssetReadCache('auth-failure');
+}
 
 function errorMessageFor(status: number, code: string): string {
   const knownMessage = apiErrorMessages[code];
@@ -123,7 +139,11 @@ async function readAuthorizationScope(signal?: AbortSignal | null): Promise<ApiA
     throw failure;
   });
   signal?.throwIfAborted();
-  return { dataMode: config.dataMode, authorization };
+  const scope = { dataMode: config.dataMode, authorization };
+  if (lastAuthorizationScope && !sameAuthorizationScope(lastAuthorizationScope, scope))
+    invalidateAssetReadCache('auth-scope-change');
+  lastAuthorizationScope = scope;
+  return scope;
 }
 
 export function getApiAuthorizationScope(): Promise<ApiAuthorizationScope> {
@@ -158,11 +178,17 @@ export async function api<T>(
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Authorization', scope.authorization);
   const method = (init.method ?? 'GET').toUpperCase();
+  const createsComicShare = method === 'POST' && /^\/generations\/[^/]+\/share$/.test(path);
   const invalidatesEntryReads =
-    method !== 'GET' && (/^\/entries(?:\/|$)/.test(path) || /^\/generations(?:\/|$)/.test(path));
+    method !== 'GET' &&
+    !createsComicShare &&
+    (/^\/entries(?:\/|$)/.test(path) || /^\/generations(?:\/|$)/.test(path));
   try {
     hooks.onRequestStart?.();
-    if (invalidatesEntryReads) invalidateEntryReadCache();
+    if (invalidatesEntryReads) {
+      invalidateEntryReadCache();
+      invalidateAssetReadCache('mutation');
+    }
     try {
       response = await fetch(`/api/v1${path}`, {
         ...init,
@@ -170,15 +196,24 @@ export async function api<T>(
       });
       result = await response.json();
     } finally {
-      if (invalidatesEntryReads) invalidateEntryReadCache();
+      if (invalidatesEntryReads) {
+        invalidateEntryReadCache();
+        invalidateAssetReadCache('mutation-finish');
+      }
     }
   } catch (failure) {
-    if (response?.status === 401 || response?.status === 403) invalidateEntryReadCache();
+    if (response?.status === 401 || response?.status === 403) {
+      invalidateEntryReadCache();
+      invalidateImageReadsForAuthFailure();
+    }
     if (init.signal?.aborted) throw failure;
     throw new ApiClientError(fallback, response?.status ?? null);
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) invalidateEntryReadCache();
+    if (response.status === 401 || response.status === 403) {
+      invalidateEntryReadCache();
+      invalidateImageReadsForAuthFailure();
+    }
     const failure = z
       .object({
         error: z.object({

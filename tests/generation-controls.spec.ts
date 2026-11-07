@@ -6,6 +6,7 @@ import {
   liveClientConfigFixture,
   mockClientConfigFixture,
 } from './fixtures/client-config';
+import { routeComicAssets } from './fixtures/comic-assets';
 import {
   clickAppDialogButton,
   clickEntryMenuItem,
@@ -483,11 +484,7 @@ test('終端polling後に返った古いactive-generation応答で成功状態�
     }
     return route.fulfill({ json: succeeded });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('heading', { name: '漫画をつくっています' })).toBeVisible();
@@ -543,9 +540,7 @@ test('quota経由で終端状態を確認したらpollingエラーを解除す�
       });
     return route.fulfill({ json: succeeded });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.getByRole('alert')).toContainText(
@@ -1022,10 +1017,10 @@ test('新規保存後に生成用CAPTCHAを取り直し、固定サンプルと�
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: generation ?? generationFixtures(entryId, generationId).queued }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
+  await routeComicAssets(page, generationId, () =>
+    generation?.status === 'succeeded'
+      ? generation.comic
+      : generationFixtures(entryId, generationId).succeeded.comic,
   );
   await page.route('https://manga-nikki-e2e.supabase.co/**', async (route) => {
     supabaseRequests.push(route.request().url());
@@ -1315,11 +1310,7 @@ test('通信断後の409で進行中を読み込んだら完了後も受付確�
     notifyTerminalPoll();
     return route.fulfill({ json: succeeded });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
@@ -1381,11 +1372,7 @@ test('生成用CAPTCHAが失敗しても保存済みの日記を残して取り�
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: generation }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
-  );
+  await routeComicAssets(page, generationId, () => generation.comic);
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
   await page.goto(`/entries/${entryId}`);
@@ -1557,11 +1544,7 @@ test('生成状態を参照できない間は受付せず、状態の再確認�
       });
     return route.fulfill({ json: succeeded });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
   await page.route('**/api/v1/entries/*/generations', (route) => {
     generationPosts++;
     return route.abort();
@@ -1951,10 +1934,10 @@ for (const delayedCallback of ['token', 'error'] as const) {
     await page.route(`**/api/v1/generations/${generationId}`, (route) =>
       route.fulfill({ json: generationFixtures(entryId, generationId).succeeded }),
     );
-    await page.route('**/api/v1/assets/*/url', (route) =>
-      route.fulfill({
-        json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-      }),
+    await routeComicAssets(
+      page,
+      generationId,
+      () => generationFixtures(entryId, generationId).succeeded.comic,
     );
     await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
 
@@ -2636,10 +2619,10 @@ test('削除中に届いたCAPTCHA tokenを破棄し、削除失敗後に新し�
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: generationFixtures(entryId, generationId).succeeded }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' },
-    }),
+  await routeComicAssets(
+    page,
+    generationId,
+    () => generationFixtures(entryId, generationId).succeeded.comic,
   );
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
   await page.goto(`/entries/${entryId}`);

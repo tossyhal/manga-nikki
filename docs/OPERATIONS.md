@@ -120,6 +120,22 @@ provider request IDと管理画面の記録から実行有無を調査し、外�
 
 `20261107030000_parallel_image_attempts.sql`適用後は、人物参照用の1コマ目が完成してから2〜4コマ目を並列に生成します。3件の試行をDBで一括記録し、全応答の記帳を待ってから保存・失敗を判定します。モデル・画質・最大4回の画像呼出し・予約予算は変更しません。migration適用前は従来の直列生成を維持します。実AIを使う速度測定は別承認です。
 
+## 日記読み込みのcache
+
+ログイン中の日記一覧・詳細のGET結果は、data mode・認証scope・request pathごとにブラウザメモリへ保持します。取得後15秒以内はfreshとして返し、15秒を過ぎて60秒以内ならstaleな値をすぐ返しながらバックグラウンドで再検証します（stale-while-revalidate）。同じkeyの同時再検証はまとめます。最大32件ずつ保持し、詳細は最新generationがqueued/runningの間はcacheしません。保存期限を越えるcacheは作らず、一覧の再検証結果で詳細cacheとの不整合も無効化します。
+
+このcacheはlocalStorage・IndexedDB・Service Worker/Cache Storageへ保存しません。認証scopeごとに分離し、日記・generationの作成、更新、削除などのmutation前後と401/403で無効化します。
+
+## 漫画画像の一括取得
+
+ログイン中の`GET /api/v1/generations/:id/assets`は、本人が所有する生成済み漫画について、漫画内の画像順に`{assets:[{id,url,expiresAt}]}`を返します。署名URLの有効期限は60秒で、応答は`Cache-Control: no-store`です。既存の`GET /api/v1/assets/:id/url`も個別取得用として維持します。
+
+署名前にJWTの`sub`に対応する生成・有効な日記と、全画像のowner・generation・asset ID・期待path・media typeを確認します。Storageへの署名要求は一括で送り、署名後にも生成・日記・画像metadataを再確認します。途中で削除やmetadata変更を検出した場合は署名済みURLを含む一覧全体を返しません。`object_path`は独立したレスポンス項目にせず、欠損・不一致・部分署名は失敗として扱います。
+
+`Server-Timing`は認証とアプリケーション処理の集計時間だけを示し、ID・path・token・payloadは含めません。サーバーログにも署名URLやStorage pathを記録しません。
+
+クライアントは署名URL metadataを認証scope・生成ID単位で最大55秒（署名期限の5秒前まで）だけ再利用します。取得済み画像Blobは認証scope・generation・asset ID単位でブラウザメモリに最大5分保持し、32件・32MiBを上限とします。画像bytesの再利用には有効な署名URL grantを必要とし、期限後は一括取得でgrantを更新します。Blob・object URLはlocalStorage・IndexedDB・Service Worker/Cache Storageへ保存しません。認証scope変更・entry/generation変更・401/403・関連mutationの開始と完了で再利用cacheを無効化します。現在画面で利用中のobject URLは利用中のleaseが解放されてから破棄され、認証失敗時は画像を画面から外します。
+
 ## 漫画のURL共有
 
 `20261107020000_comic_shares.sql`適用後、所有者の明示操作で選択した生成済み漫画だけに共有URLを発行します。公開APIは漫画の画像・タイトル・セリフ・説明文と最大60秒の画像署名URLだけを返し、日記本文・内部の画像描画指示（scene）・owner・Storage pathは返しません。公開用のsceneは表示済みのcaptionまたはコマ番号へ置換します。共有URLは閲覧権限そのものなのでログ・分析サービス・第三者へ不用意に渡しません。共有解除ボタンはなく、日記の削除・30日の保存期限で新しい閲覧を停止します。既に取得された画像や発行済み署名URLは回収できません。

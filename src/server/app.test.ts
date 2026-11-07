@@ -56,8 +56,12 @@ describe('local mock API', () => {
     expect(detail.latestGeneration.status).toBe('succeeded');
     expect(detail.body).toBe('図書館で本を読んだ。');
     const asset = detail.latestGeneration.comic.visual.assetId;
+    const batch = await request(`/generations/${detail.latestGeneration.id}/assets`);
+    expect(batch.status).toBe(200);
+    expect((await batch.json()).assets).toHaveLength(1);
     expect((await request(`/assets/${asset}/url`)).status).toBe(200);
     expect((await request(`/entries/${entry.id}`, 'DELETE')).status).toBe(202);
+    expect((await request(`/generations/${detail.latestGeneration.id}/assets`)).status).toBe(404);
     expect((await request(`/assets/${asset}/url`)).status).toBe(404);
     expect((await request(`/entries/${entry.id}`)).status).toBe(404);
   });
@@ -366,6 +370,16 @@ it('serves all generation states and exposes only successful owned assets', asyn
       (await request(`/assets/${assetId}/url`, 'GET', undefined, {}, crypto.randomUUID())).status,
     ).toBe(404);
   }
+  const batchResponse = await request(`/generations/${id}/assets`);
+  expect(batchResponse.status).toBe(200);
+  const batch = (await batchResponse.json()) as {
+    assets: { id: string; url: string; expiresAt: string }[];
+  };
+  expect(batch.assets.map((asset) => asset.id)).toEqual(panelsComic.visual.assetIds);
+  expect(batch.assets.every((asset) => asset.url === '/sample-comic.svg')).toBe(true);
+  expect(
+    (await request(`/generations/${id}/assets`, 'GET', undefined, {}, crypto.randomUUID())).status,
+  ).toBe(404);
 });
 
 it('keeps a prior mock success visible after the latest job fails', async () => {

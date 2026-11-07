@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAssetUrlLoader } from './assets';
+import { invalidateAssetReadCache } from './assetReadCacheInvalidation';
+import { createAssetUrlLoader, createGenerationAssetUrlLoader } from './assets';
 import type { ApiAuthorizationScope } from './client';
 
 const sessionA: ApiAuthorizationScope = {
@@ -13,6 +14,10 @@ const sessionB: ApiAuthorizationScope = {
 
 function assetUrl(url: string, expiresAt = new Date(Date.now() + 60_000).toISOString()) {
   return { url, expiresAt };
+}
+
+function generationAssets(url: string, expiresAt: string) {
+  return { assets: [{ id: 'asset-a', url, expiresAt }] };
 }
 
 describe('asset URL reuse', () => {
@@ -87,7 +92,7 @@ describe('asset URL reuse', () => {
 
     await load('asset-a');
     wall -= 10 * 60_000;
-    monotonic += 15_001;
+    monotonic += 55_001;
     await load('asset-a');
 
     expect(request).toHaveBeenCalledTimes(2);
@@ -173,5 +178,145 @@ describe('asset URL reuse', () => {
     for (let index = 0; index < 33; index++) await load(`asset-${index}`);
     await load('asset-0');
     expect(request).toHaveBeenCalledTimes(36);
+  });
+
+  it('reuses a generation grant after 16 seconds and requests a new batch before expiry', async () => {
+    let wall = 1_000;
+    let monotonic = 10;
+    let requestNumber = 0;
+    const request = vi.fn(() => {
+      requestNumber++;
+      return Promise.resolve(
+        generationAssets(`/batch-${requestNumber}`, new Date(wall + 60_000).toISOString()),
+      );
+    });
+    const load = createGenerationAssetUrlLoader({
+      getScope: () => Promise.resolve(sessionA),
+      request,
+      now: () => ({ wall, monotonic }),
+    });
+
+    await expect(load('generation-a')).resolves.toMatchObject({
+      assets: [{ id: 'asset-a', url: '/batch-1' }],
+    });
+    wall += 16_000;
+    monotonic += 16_000;
+    await expect(load('generation-a')).resolves.toMatchObject({
+      assets: [{ id: 'asset-a', url: '/batch-1' }],
+    });
+    expect(request).toHaveBeenCalledOnce();
+
+    wall += 40_000;
+    monotonic += 40_000;
+    await expect(load('generation-a')).resolves.toMatchObject({
+      assets: [{ id: 'asset-a', url: '/batch-2' }],
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases a loaded image lease when the final authorization-scope check throws', async () => {
+    const scopeFailure = new Error('scope lookup failed');
+    const getScope = vi
+      .fn()
+      .mockResolvedValueOnce(sessionA)
+      .mockResolvedValueOnce(sessionA)
+      .mockRejectedValueOnce(scopeFailure);
+    const lease = {
+      url: 'blob:comic-image',
+      cached: false,
+      invalidate: vi.fn(),
+      release: vi.fn(),
+    };
+    const loadImage = vi.fn().mockResolvedValue(lease);
+    const load = createGenerationAssetUrlLoader({
+      getScope,
+      request: vi
+        .fn()
+        .mockResolvedValue(generationAssets('/comic-image', assetUrl('/signed').expiresAt)),
+      loadImage,
+    });
+    const batch = await load('generation-a');
+
+    await expect(batch.loadImage('asset-a')).rejects.toBe(scopeFailure);
+
+    expect(getScope).toHaveBeenCalledTimes(3);
+    expect(loadImage).toHaveBeenCalledOnce();
+    expect(lease.release).toHaveBeenCalledOnce();
+  });
+
+  it('does not let a late normal batch replace a newer fresh generation grant', async () => {
+    let resolveNormal!: (value: ReturnType<typeof generationAssets>) => void;
+    let resolveFresh!: (value: ReturnType<typeof generationAssets>) => void;
+    let notifyNormal!: () => void;
+    let notifyFresh!: () => void;
+    const normalStarted = new Promise<void>((resolve) => {
+      notifyNormal = resolve;
+    });
+    const freshStarted = new Promise<void>((resolve) => {
+      notifyFresh = resolve;
+    });
+    let requestNumber = 0;
+    const request = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof generationAssets>>((resolve) => {
+          requestNumber++;
+          if (requestNumber === 1) {
+            resolveNormal = resolve;
+            notifyNormal();
+          } else {
+            resolveFresh = resolve;
+            notifyFresh();
+          }
+        }),
+    );
+    const load = createGenerationAssetUrlLoader({
+      getScope: () => Promise.resolve(sessionA),
+      request,
+    });
+
+    const normal = load('generation-a');
+    await normalStarted;
+    const fresh = load('generation-a', { fresh: true });
+    await freshStarted;
+    resolveFresh(generationAssets('/fresh', new Date(Date.now() + 60_000).toISOString()));
+    await fresh;
+    resolveNormal(generationAssets('/normal', new Date(Date.now() + 60_000).toISOString()));
+    const normalResult = await normal;
+    await expect(normalResult.loadImage('asset-a')).rejects.toThrow(
+      'Signed image metadata became invalid',
+    );
+
+    await expect(load('generation-a')).resolves.toMatchObject({
+      assets: [{ url: '/fresh' }],
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not return a batch that completes after cache invalidation', async () => {
+    let resolveRequest!: (value: ReturnType<typeof generationAssets>) => void;
+    const request = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof generationAssets>>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const load = createGenerationAssetUrlLoader({
+      getScope: () => Promise.resolve(sessionA),
+      request,
+    });
+    const pending = load('generation-a');
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    invalidateAssetReadCache('mutation');
+    resolveRequest(generationAssets('/stale', new Date(Date.now() + 60_000).toISOString()));
+
+    await expect(pending).rejects.toThrow('Signed image metadata became invalid');
+    const retry = load('generation-a');
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    resolveRequest(generationAssets('/fresh', new Date(Date.now() + 60_000).toISOString()));
+    await expect(retry).resolves.toMatchObject({
+      assets: [{ url: '/fresh' }],
+    });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

@@ -70,16 +70,37 @@ async function accessToken(environment: Environment, owner = ownerId): Promise<s
   return `${input}.${Buffer.from(signature).toString('base64url')}`;
 }
 
-function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } = {}) {
+function boundary(
+  options: {
+    expired?: boolean;
+    removeAfterSigning?: boolean;
+    liveMockPage?: boolean;
+    changeGenerationAfterSigning?: boolean;
+    changeMetadataAfterSigning?: boolean;
+    invalidAsset?: 'owner' | 'generation' | 'path' | 'media' | 'missing';
+    incompleteSigning?: boolean;
+    malformedSigning?: boolean;
+  } = {},
+) {
   const entryReads: URL[] = [];
   const signCalls: { url: URL; apiKey: string; authorization: string; body: unknown }[] = [];
+  const batchSignCalls: { url: URL; apiKey: string; authorization: string; body: unknown }[] = [];
   const readCalls: { url: URL; apiKey: string; authorization: string }[] = [];
+  const generationReads: URL[] = [];
+  const metadataReads: URL[] = [];
+  let batchSigningStarted = false;
   const script = scriptSchema.parse(scriptSample);
   const comic = {
     schemaVersion: 1,
     title: script.title,
     panels: script.panels,
     visual: { kind: 'panels', assetIds, textMode: 'external' },
+  };
+  const mockPageComic = {
+    schemaVersion: 1,
+    title: script.title,
+    panels: script.panels,
+    visual: { kind: 'page' as const, assetId: generationId, textMode: 'external' as const },
   };
   const authFetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
@@ -116,7 +137,38 @@ function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } =
 
     if (url.pathname.endsWith('/rest/v1/assets')) {
       readCalls.push({ url, apiKey, authorization });
-      if (apiKey === 'sb_secret_test')
+      if (apiKey === 'sb_secret_test') {
+        metadataReads.push(url);
+        const idFilter = url.searchParams.get('id') ?? '';
+        if (idFilter.startsWith('in.(')) {
+          const requestedIds = idFilter.slice(4, -1).split(',');
+          const rows = requestedIds.map((id) => {
+            let mediaType = 'image/png';
+            let objectPath = `${ownerId}/${generationId}/${id}.png`;
+            let assetOwner = ownerId;
+            let assetGeneration = generationId;
+            if (options.changeMetadataAfterSigning && batchSigningStarted && id === assetIds[0]) {
+              mediaType = 'image/webp';
+              objectPath = `${ownerId}/${generationId}/${id}.webp`;
+            }
+            if (options.invalidAsset === 'owner' && id === assetIds[0])
+              assetOwner = '99999999-9999-4999-8999-999999999999';
+            if (options.invalidAsset === 'generation' && id === assetIds[0])
+              assetGeneration = '99999999-9999-4999-8999-999999999999';
+            if (options.invalidAsset === 'path' && id === assetIds[0])
+              objectPath = `${ownerId}/${generationId}/unexpected.png`;
+            if (options.invalidAsset === 'media' && id === assetIds[0])
+              mediaType = 'application/json';
+            return {
+              id,
+              generation_id: assetGeneration,
+              owner_id: assetOwner,
+              object_path: objectPath,
+              media_type: mediaType,
+            };
+          });
+          return Response.json(options.invalidAsset === 'missing' ? rows.slice(0, -1) : rows);
+        }
         return Response.json([
           {
             id: assetIds[0],
@@ -126,12 +178,14 @@ function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } =
             media_type: 'image/png',
           },
         ]);
+      }
       return Response.json(
         tokenOwner === ownerId ? [{ id: assetIds[0], generation_id: generationId }] : [],
       );
     }
     if (url.pathname.endsWith('/rest/v1/generations')) {
       readCalls.push({ url, apiKey, authorization });
+      generationReads.push(url);
       if (
         url.searchParams.get('id') === `eq.${generationId}` &&
         url.searchParams.get('owner_id') === `eq.${ownerId}`
@@ -143,8 +197,13 @@ function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } =
             entry_revision: 1,
             status: 'succeeded',
             stage: null,
-            comic_json: comic,
-            is_mock: false,
+            comic_json:
+              options.changeGenerationAfterSigning && batchSigningStarted
+                ? { ...comic, title: '漫画を変更しました' }
+                : options.liveMockPage
+                  ? mockPageComic
+                  : comic,
+            is_mock: options.liveMockPage ?? false,
           },
         ]);
       return Response.json([]);
@@ -154,6 +213,23 @@ function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } =
       if (options.removeAfterSigning && entryReads.length > 1) return Response.json([]);
       if (options.expired || tokenOwner !== ownerId) return Response.json([]);
       return Response.json([{ id: entryId }]);
+    }
+    if (url.pathname === '/storage/v1/object/sign/comics') {
+      const body = (await request.json()) as { expiresIn: number; paths: string[] };
+      batchSignCalls.push({ url, apiKey, authorization, body });
+      batchSigningStarted = true;
+      return Response.json(
+        body.paths.map((path, index) => ({
+          error: options.incompleteSigning && index === 2 ? 'asset missing' : null,
+          path,
+          signedURL:
+            options.incompleteSigning && index === 2
+              ? null
+              : options.malformedSigning && index === 2
+                ? `/object/sign/wrong-bucket/${path}?token=signed-${index}`
+                : `/object/sign/comics/${path}?token=signed-${index}`,
+        })),
+      );
     }
     if (url.pathname.startsWith('/storage/v1/object/sign/comics/')) {
       signCalls.push({
@@ -168,7 +244,16 @@ function boundary(options: { expired?: boolean; removeAfterSigning?: boolean } =
     }
     return new Response(null, { status: 404 });
   };
-  return { authFetch, supabaseFetch, signCalls, readCalls, entryReads };
+  return {
+    authFetch,
+    supabaseFetch,
+    signCalls,
+    batchSignCalls,
+    readCalls,
+    generationReads,
+    metadataReads,
+    entryReads,
+  };
 }
 
 function signedApp(bound: ReturnType<typeof boundary>) {
@@ -182,6 +267,18 @@ async function assetRequest(
 ) {
   return app.request(
     `https://app.example/api/v1/assets/${assetIds[0]}/url`,
+    { headers: { Authorization: `Bearer ${token}` } },
+    environment,
+  );
+}
+
+async function generationAssetsRequest(
+  app: ReturnType<typeof signedApp>,
+  environment: Environment,
+  token: string,
+) {
+  return app.request(
+    `https://app.example/api/v1/generations/${generationId}/assets`,
     { headers: { Authorization: `Bearer ${token}` } },
     environment,
   );
@@ -235,5 +332,148 @@ describe('private comic asset URL', () => {
     expect(response.status).toBe(404);
     expect(bound.signCalls).toHaveLength(1);
     expect(await response.json()).not.toHaveProperty('url');
+  });
+});
+
+describe('private comic asset URL batch', () => {
+  it('keeps the live mock page fixture response shape without signing private assets', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const bound = boundary({ liveMockPage: true });
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      assets: [{ id: generationId, url: '/sample-comic.svg' }],
+    });
+    expect(bound.entryReads).toHaveLength(1);
+    expect(bound.metadataReads).toHaveLength(0);
+    expect(bound.batchSignCalls).toHaveLength(0);
+  });
+
+  it('signs all four owned assets in one Storage call and uses seven downstream reads/calls', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const bound = boundary();
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    const body = (await response.json()) as {
+      assets: { id: string; url: string; expiresAt: string }[];
+    };
+    expect(body.assets.map((asset) => asset.id)).toEqual(assetIds);
+    expect(body.assets.map((asset) => Object.keys(asset).sort())).toEqual(
+      assetIds.map(() => ['expiresAt', 'id', 'url']),
+    );
+    expect(
+      body.assets.every((asset) => new URL(asset.url).origin === environment.SUPABASE_URL),
+    ).toBe(true);
+    expect(body.assets.every((asset) => Date.parse(asset.expiresAt) - Date.now() <= 60_000)).toBe(
+      true,
+    );
+    expect(bound.generationReads).toHaveLength(2);
+    expect(bound.entryReads).toHaveLength(2);
+    expect(bound.metadataReads).toHaveLength(2);
+    expect(bound.metadataReads.every((url) => url.searchParams.get('id')?.startsWith('in.('))).toBe(
+      true,
+    );
+    expect(bound.batchSignCalls).toHaveLength(1);
+    expect(bound.batchSignCalls[0]!.body).toEqual({
+      expiresIn: 60,
+      paths: assetIds.map((id) => `${ownerId}/${generationId}/${id}.png`),
+    });
+    expect(bound.batchSignCalls[0]!.apiKey).toBe('sb_secret_test');
+    expect(bound.batchSignCalls[0]!.authorization).toBe('');
+    expect(bound.readCalls).toHaveLength(4);
+    expect(bound.readCalls.length + bound.entryReads.length + bound.batchSignCalls.length).toBe(7);
+    const timing = response.headers.get('Server-Timing') ?? '';
+    expect(timing).toMatch(/^auth;dur=\d+\.\d, app;dur=\d+\.\d$/);
+    expect(timing).not.toContain(generationId);
+    expect(timing).not.toContain(assetIds[0]!);
+  });
+
+  it('returns the same 404 for another owner without reading private metadata or signing', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment, '99999999-9999-4999-8999-999999999999');
+    const bound = boundary();
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+    expect(response.status).toBe(404);
+    expect(bound.metadataReads).toHaveLength(0);
+    expect(bound.batchSignCalls).toHaveLength(0);
+  });
+
+  it('does not sign assets for an expired entry or missing asset metadata', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const expired = boundary({ expired: true });
+    const expiredResponse = await generationAssetsRequest(signedApp(expired), environment, token);
+    expect(expiredResponse.status).toBe(404);
+    expect(expired.batchSignCalls).toHaveLength(0);
+
+    const incomplete = boundary({ invalidAsset: 'missing' });
+    const incompleteResponse = await generationAssetsRequest(
+      signedApp(incomplete),
+      environment,
+      token,
+    );
+    expect(incompleteResponse.status).toBe(404);
+    expect(incomplete.batchSignCalls).toHaveLength(0);
+  });
+
+  it.each(['owner', 'generation', 'path', 'media'] as const)(
+    'rejects metadata with an unexpected %s before signing',
+    async (invalidAsset) => {
+      const environment = liveEnvironment();
+      const token = await accessToken(environment);
+      const bound = boundary({ invalidAsset });
+      const response = await generationAssetsRequest(signedApp(bound), environment, token);
+      expect(response.status).toBe(404);
+      expect(bound.batchSignCalls).toHaveLength(0);
+    },
+  );
+
+  it('withholds every URL when the entry is deleted while signing', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const bound = boundary({ removeAfterSigning: true });
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+    expect(response.status).toBe(404);
+    expect(bound.batchSignCalls).toHaveLength(1);
+    expect(await response.json()).not.toHaveProperty('assets');
+  });
+
+  it.each(['generation', 'metadata'] as const)(
+    'withholds every URL if %s changes while signing',
+    async (changed) => {
+      const environment = liveEnvironment();
+      const token = await accessToken(environment);
+      const bound = boundary(
+        changed === 'generation'
+          ? { changeGenerationAfterSigning: true }
+          : { changeMetadataAfterSigning: true },
+      );
+      const response = await generationAssetsRequest(signedApp(bound), environment, token);
+      expect(response.status).toBe(404);
+      expect(bound.batchSignCalls).toHaveLength(1);
+      expect(await response.json()).not.toHaveProperty('assets');
+    },
+  );
+
+  it('withholds a partial Storage signing result', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const bound = boundary({ incompleteSigning: true });
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+    expect(response.status).toBe(503);
+    expect(await response.json()).not.toHaveProperty('assets');
+  });
+
+  it('withholds URLs when Storage returns a signed URL for the wrong bucket path', async () => {
+    const environment = liveEnvironment();
+    const token = await accessToken(environment);
+    const bound = boundary({ malformedSigning: true });
+    const response = await generationAssetsRequest(signedApp(bound), environment, token);
+    expect(response.status).toBe(503);
+    expect(await response.json()).not.toHaveProperty('assets');
   });
 });

@@ -28,6 +28,7 @@ import {
   hasGenerationRequest,
   recheckGeneration,
 } from '../../lib/api';
+import { getApiAuthorizationScope } from '../../lib/api/client';
 import { SavedComic } from '../comic/SavedComic';
 import { validateLibraryBackTo } from './librarySearch';
 import type { DiaryActivity } from '../diary/diaryActivity';
@@ -279,6 +280,82 @@ function DetailContent({
     return () => window.clearTimeout(refreshTimer);
   }, [refreshQuota]);
 
+  const loadLatestEntry = useCallback(
+    async (
+      entryId: string,
+      isReadCurrent: () => boolean,
+      mode: 'initial' | 'foreground',
+    ): Promise<EntryDetail | null> => {
+      const backgroundReadVersion = detailReadVersionRef.current;
+      const canApplyBackgroundResult = () =>
+        activeRef.current &&
+        detailReadVersionRef.current <= backgroundReadVersion + 1 &&
+        (!entryRef.current || entryRef.current.id === entryId);
+      const result = await getEntry(entryId, {
+        fresh: mode === 'foreground',
+        onUpdate:
+          mode === 'initial'
+            ? async (updated, sourceScope) => {
+                if (!canApplyBackgroundResult()) return;
+                const activeScope = await getApiAuthorizationScope().catch(() => null);
+                if (
+                  !activeScope ||
+                  activeScope.dataMode !== sourceScope.dataMode ||
+                  activeScope.authorization !== sourceScope.authorization ||
+                  !canApplyBackgroundResult()
+                )
+                  return;
+                const latestUpdate = await completeEntryDetail(updated, getGeneration, 'initial');
+                const completedScope = await getApiAuthorizationScope().catch(() => null);
+                if (
+                  !completedScope ||
+                  completedScope.dataMode !== sourceScope.dataMode ||
+                  completedScope.authorization !== sourceScope.authorization ||
+                  !canApplyBackgroundResult()
+                )
+                  return;
+                setEntrySafely(latestUpdate);
+                setError('');
+              }
+            : undefined,
+        onBackgroundError:
+          mode === 'initial'
+            ? async (failure, sourceScope) => {
+                if (!canApplyBackgroundResult()) return;
+                const activeScope = await getApiAuthorizationScope().catch(() => null);
+                if (
+                  !activeScope ||
+                  activeScope.dataMode !== sourceScope.dataMode ||
+                  activeScope.authorization !== sourceScope.authorization ||
+                  !canApplyBackgroundResult()
+                )
+                  return;
+                if (
+                  failure instanceof ApiClientError &&
+                  ((failure.status === 404 && failure.code === 'NOT_FOUND') ||
+                    failure.status === 401 ||
+                    failure.status === 403)
+                ) {
+                  setEntrySafely(null);
+                  setError(failure.message);
+                }
+              }
+            : undefined,
+      });
+      if (!isReadCurrent() || result.id !== entryId) return null;
+      const latest = await completeEntryDetail(result, getGeneration, mode);
+      if (!isReadCurrent()) return null;
+      if (
+        latest.latestGeneration &&
+        latest.latestGeneration.status !== 'queued' &&
+        latest.latestGeneration.status !== 'running'
+      )
+        setPollingError('');
+      return latest;
+    },
+    [setEntrySafely],
+  );
+
   useEffect(() => {
     let active = true;
     const readVersion = ++detailReadVersionRef.current;
@@ -293,7 +370,7 @@ function DetailContent({
     return () => {
       active = false;
     };
-  }, [id, setEntrySafely]);
+  }, [id, loadLatestEntry, setEntrySafely]);
   useEffect(() => {
     if (autoGenerationRequestedRef.current && location.state !== null)
       navigate(location.pathname, { replace: true, state: null });
@@ -434,24 +511,6 @@ function DetailContent({
       throw new Error('記録の状態が更新されています。最新の状態を読み直してください。');
     };
     return { isCurrent: isReadCurrent, currentEntryAfterStaleRead };
-  }
-
-  async function loadLatestEntry(
-    entryId: string,
-    isReadCurrent: () => boolean,
-    mode: 'initial' | 'foreground',
-  ): Promise<EntryDetail | null> {
-    const result = await getEntry(entryId, { fresh: mode === 'foreground' });
-    if (!isReadCurrent() || result.id !== entryId) return null;
-    const latest = await completeEntryDetail(result, getGeneration, mode);
-    if (!isReadCurrent()) return null;
-    if (
-      latest.latestGeneration &&
-      latest.latestGeneration.status !== 'queued' &&
-      latest.latestGeneration.status !== 'running'
-    )
-      setPollingError('');
-    return latest;
   }
 
   async function readLatestEntry(): Promise<EntryDetail> {

@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Entry } from '../../../shared/schemas';
 import { ApiClientError } from '../../lib/api';
-import { fetchMonthCoverage, fetchListCoverage, targetEntryCount } from './libraryCoverage';
+import { getApiAuthorizationScope, type ApiAuthorizationScope } from '../../lib/api/client';
+import {
+  fetchMonthCoverage,
+  fetchListCoverage,
+  hasMonthCoverage,
+  targetEntryCount,
+} from './libraryCoverage';
 import { maxListRestoreRequests } from './librarySearch';
 
 function isSessionUnavailable(error: unknown) {
   return (
     error instanceof ApiClientError &&
-    (error.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'AUTH_EXPIRED')
+    (error.status === 401 ||
+      error.status === 403 ||
+      error.code === 'AUTH_REQUIRED' ||
+      error.code === 'AUTH_EXPIRED')
   );
 }
 
@@ -21,6 +30,12 @@ function isMissingLocalSession(error: unknown) {
 }
 
 type ActiveRequest = { epoch: number; controller: AbortController };
+
+function sameAuthorizationScope(left: ApiAuthorizationScope | null, right: ApiAuthorizationScope) {
+  return Boolean(
+    left && left.dataMode === right.dataMode && left.authorization === right.authorization,
+  );
+}
 
 export function useLibraryEntries(initialMonth: string) {
   const initialMonthRef = useRef(initialMonth);
@@ -61,6 +76,20 @@ export function useLibraryEntries(initialMonth: string) {
     [],
   );
 
+  const requestCanPublish = useCallback(
+    (request: ActiveRequest) => mountedRef.current && requestEpochRef.current === request.epoch,
+    [],
+  );
+
+  const stopRequest = useCallback((request: ActiveRequest) => {
+    if (activeRequestRef.current?.epoch !== request.epoch) return;
+    activeRequestRef.current = null;
+    requestEpochRef.current += 1;
+    loadingRef.current = false;
+    request.controller.abort();
+    if (mountedRef.current) setBusy(false);
+  }, []);
+
   const finishRequest = useCallback((request: ActiveRequest) => {
     if (activeRequestRef.current?.epoch !== request.epoch) return;
     activeRequestRef.current = null;
@@ -68,10 +97,81 @@ export function useLibraryEntries(initialMonth: string) {
     if (mountedRef.current) setBusy(false);
   }, []);
 
+  const clearForBackgroundAuthFailure = useCallback(
+    (request: ActiveRequest, failure: unknown) => {
+      if (!requestCanPublish(request)) return;
+      stopRequest(request);
+      if (isMissingLocalSession(failure)) {
+        syncEntries([], null);
+        setError('');
+        setSessionUnavailable(false);
+        return;
+      }
+      if (isSessionUnavailable(failure)) {
+        syncEntries(null, null);
+        setSessionUnavailable(true);
+        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
+      }
+    },
+    [requestCanPublish, stopRequest, syncEntries],
+  );
+
+  const publishRefreshedFirstPage = useCallback(
+    async (
+      request: ActiveRequest,
+      targetMonth: string,
+      items: Entry[],
+      cursor: string | null,
+      sourceScope: ApiAuthorizationScope,
+    ) => {
+      if (!requestCanPublish(request)) return;
+      const activeScope = await getApiAuthorizationScope().catch(() => null);
+      if (!sameAuthorizationScope(activeScope, sourceScope) || !requestCanPublish(request)) return;
+      const refresh = beginRequest();
+      try {
+        if (cursor === null || hasMonthCoverage(items, cursor, targetMonth)) {
+          if (requestIsActive(refresh)) syncEntries(items, cursor);
+          return;
+        }
+
+        const result = await fetchMonthCoverage(
+          items,
+          cursor,
+          targetMonth,
+          () => requestIsActive(refresh),
+          refresh.controller.signal,
+          undefined,
+          true,
+        );
+        if (!result || !requestIsActive(refresh)) return;
+        const refreshedScope = await getApiAuthorizationScope().catch(() => null);
+        if (!sameAuthorizationScope(refreshedScope, sourceScope) || !requestIsActive(refresh))
+          return;
+        syncEntries(result.entries, result.cursor);
+      } catch (failure) {
+        if (!requestIsActive(refresh)) return;
+        if (isMissingLocalSession(failure) || isSessionUnavailable(failure)) {
+          clearForBackgroundAuthFailure(refresh, failure);
+          return;
+        }
+        setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
+      } finally {
+        finishRequest(refresh);
+      }
+    },
+    [
+      beginRequest,
+      clearForBackgroundAuthFailure,
+      finishRequest,
+      requestCanPublish,
+      requestIsActive,
+      syncEntries,
+    ],
+  );
+
   const refreshEntries = useCallback(
     async (targetMonth: string, fresh = false) => {
       const request = beginRequest();
-      syncEntries(null, null);
       setError('');
       setSessionUnavailable(false);
 
@@ -86,22 +186,39 @@ export function useLibraryEntries(initialMonth: string) {
             if (requestIsActive(request)) syncEntries(items, cursor);
           },
           fresh,
+          (items, cursor, scope) =>
+            publishRefreshedFirstPage(request, targetMonth, items, cursor, scope),
+          async (failure, scope) => {
+            const activeScope = await getApiAuthorizationScope().catch(() => null);
+            if (sameAuthorizationScope(activeScope, scope))
+              clearForBackgroundAuthFailure(request, failure);
+          },
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
       } catch (failure) {
         if (!requestIsActive(request)) return;
-        if (navigator.onLine && entriesRef.current === null && isMissingLocalSession(failure)) {
+        if (navigator.onLine && isMissingLocalSession(failure)) {
           syncEntries([], null);
           return;
         }
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
+        if (isSessionUnavailable(failure)) {
+          syncEntries(null, null);
+          setSessionUnavailable(true);
+        }
         setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
       } finally {
         finishRequest(request);
       }
     },
-    [beginRequest, finishRequest, requestIsActive, syncEntries],
+    [
+      beginRequest,
+      clearForBackgroundAuthFailure,
+      finishRequest,
+      publishRefreshedFirstPage,
+      requestIsActive,
+      syncEntries,
+    ],
   );
 
   const loadThroughMonth = useCallback(
@@ -120,18 +237,39 @@ export function useLibraryEntries(initialMonth: string) {
             if (requestIsActive(request)) syncEntries(items, cursor);
           },
           fresh,
+          (items, cursor, scope) =>
+            publishRefreshedFirstPage(request, targetMonth, items, cursor, scope),
+          async (failure, scope) => {
+            const activeScope = await getApiAuthorizationScope().catch(() => null);
+            if (sameAuthorizationScope(activeScope, scope))
+              clearForBackgroundAuthFailure(request, failure);
+          },
         );
         if (!result || !requestIsActive(request)) return;
         syncEntries(result.entries, result.cursor);
       } catch (failure) {
         if (!requestIsActive(request)) return;
-        if (isSessionUnavailable(failure)) setSessionUnavailable(true);
+        if (isMissingLocalSession(failure)) {
+          syncEntries([], null);
+          return;
+        }
+        if (isSessionUnavailable(failure)) {
+          syncEntries(null, null);
+          setSessionUnavailable(true);
+        }
         setError(failure instanceof Error ? failure.message : '記録を読み込めませんでした。');
       } finally {
         finishRequest(request);
       }
     },
-    [beginRequest, finishRequest, requestIsActive, syncEntries],
+    [
+      beginRequest,
+      clearForBackgroundAuthFailure,
+      finishRequest,
+      publishRefreshedFirstPage,
+      requestIsActive,
+      syncEntries,
+    ],
   );
 
   const loadThroughListPage = useCallback(

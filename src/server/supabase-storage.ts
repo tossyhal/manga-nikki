@@ -39,5 +39,7 @@ export function createServerAssetSigningClient(environment: Environment, fetcher
   const comics = createServerComicsBucket(environment, fetcher);
   return {
     createSignedUrl: (path: string, expiresIn: number) => comics.createSignedUrl(path, expiresIn),
+    createSignedUrls: (paths: string[], expiresIn: number) =>
+      comics.createSignedUrls(paths, expiresIn),
   };
 }
