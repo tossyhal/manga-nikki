@@ -404,6 +404,10 @@ try {
   succeeded(await sql(await readFile(join(root, 'supabase/tests/reservations.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/generation_queue.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/openai_generation.sql'), 'utf8')));
+  succeeded(
+    await sql(await readFile(join(root, 'supabase/tests/global_image_pacing.sql'), 'utf8')),
+  );
+  console.log('成功: Worker全体の画像生成枠・有効期限/停止判定・batch枠・RPC権限');
   succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_storage.sql'), 'utf8')));
   succeeded(await sql(await readFile(join(root, 'supabase/tests/comic_shares.sql'), 'utf8')));
   console.log('成功: 漫画共有の所有者確認・本文非公開・再送・期限/削除失効・RPC権限');
