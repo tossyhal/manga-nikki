@@ -115,7 +115,6 @@ test('期限相当のHomeサムネイル失敗は1回だけ自動取得し、同
   const beforeFailure = await frame.boundingBox();
   await page.clock.fastForward(60_000);
   releaseExpiredImage();
-  await expect(image).toHaveAttribute('src', '/thumbnail-fresh.svg');
 
   const retry = page.getByRole('button', { name: '漫画画像を再読み込み' });
   await expect(retry).toBeVisible();

@@ -333,6 +333,101 @@ describe('entry read cache', () => {
     }
   });
 
+  it.each([{ outcome: 'background 404' as const }, { outcome: 'background success' as const }])(
+    'preserves same-revision detail SWR notification after list refresh ($outcome)',
+    async ({ outcome }) => {
+      const refreshedDetail = deferred<Response>();
+      const detailRefreshStarted = deferred<void>();
+      const refreshedList = deferred<Response>();
+      const listRefreshStarted = deferred<void>();
+      const currentTime = Date.now();
+      const currentMonotonicTime = performance.now();
+      let wallTime = currentTime;
+      let monotonicTime = currentMonotonicTime;
+      const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+      const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+      const currentEntry = makeEntry('entry', 'same revision');
+      const currentDetail = { ...currentEntry, latestGeneration: null };
+      let detailRequests = 0;
+      let listRequests = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+          if (String(input) === '/api/v1/entries?limit=20') {
+            listRequests++;
+            if (listRequests === 1)
+              return Response.json({ items: [currentEntry], nextCursor: null });
+            listRefreshStarted.resolve();
+            return refreshedList.promise;
+          }
+          if (String(input) === '/api/v1/entries/entry') {
+            detailRequests++;
+            if (detailRequests === 1) return Response.json(currentDetail);
+            detailRefreshStarted.resolve();
+            return refreshedDetail.promise;
+          }
+          throw new Error(`Unexpected request: ${String(input)}`);
+        }),
+      );
+
+      try {
+        await getEntry('entry');
+        await getEntries({ limit: 20 });
+        wallTime += entryReadCacheFreshTtlMs + 1;
+        monotonicTime += entryReadCacheFreshTtlMs + 1;
+
+        const onUpdate = vi.fn();
+        const onBackgroundError = vi.fn();
+        await expect(getEntry('entry', { onUpdate, onBackgroundError })).resolves.toEqual(
+          currentDetail,
+        );
+        await detailRefreshStarted.promise;
+
+        const listOnUpdate = vi.fn();
+        await expect(getEntries({ limit: 20, onUpdate: listOnUpdate })).resolves.toMatchObject({
+          items: [currentEntry],
+        });
+        await listRefreshStarted.promise;
+        refreshedList.resolve(Response.json({ items: [currentEntry], nextCursor: null }));
+        await vi.waitFor(() => expect(listOnUpdate).toHaveBeenCalledOnce());
+
+        if (outcome === 'background 404') {
+          refreshedDetail.resolve(
+            Response.json(
+              {
+                error: {
+                  message: 'not found',
+                  code: 'NOT_FOUND',
+                  requestId: 'deleted-entry',
+                  retryable: false,
+                },
+              },
+              { status: 404 },
+            ),
+          );
+          await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+          expect(onBackgroundError.mock.calls[0]?.[0]).toMatchObject({
+            status: 404,
+            code: 'NOT_FOUND',
+          });
+          expect(onUpdate).not.toHaveBeenCalled();
+        } else {
+          refreshedDetail.resolve(Response.json(currentDetail));
+          await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+          expect(onUpdate.mock.calls[0]?.[0]).toEqual(currentDetail);
+          expect(onBackgroundError).not.toHaveBeenCalled();
+        }
+
+        expect(detailRequests).toBe(2);
+        expect(listRequests).toBe(2);
+      } finally {
+        wallClock.mockRestore();
+        monotonicClock.mockRestore();
+      }
+    },
+  );
+
   it('expires cached pages when either clock moves backward or passes the TTL', () => {
     invalidateEntryReadCache();
     const wallClock = vi.spyOn(Date, 'now');

@@ -220,7 +220,15 @@ export function reconcileEntryDetailsFromList(
       continue;
     }
     const current = details.get(id);
-    if (current || completeList) invalidateEntryReadCacheKey('entry', scope, path);
+    const cached = detailCache.get(recordKey)?.value as Partial<Entry> | undefined;
+    const matchesCurrent = Boolean(
+      current &&
+      cached &&
+      typeof cached.id === 'string' &&
+      sameEntryRevision(current, cached as Entry),
+    );
+    if ((current && !matchesCurrent) || (!current && completeList))
+      invalidateEntryReadCacheKey('entry', scope, path);
   }
 }
 
