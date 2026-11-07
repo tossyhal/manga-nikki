@@ -1,0 +1,15 @@
+# 全体画像生成pacingの段階適用
+
+## DB migration
+
+`20261107040000_global_image_pacing.sql`は、Worker全体で共有する画像API開始枠をDBに追加します。間隔は500ms、画像3件の既存batchは3枠を使うため、DBで許可する通常のrateは平均120画像/分相当です。60秒窓の両端とbatchの同時開始を含めると最大約123件で、150件/分を下回ります。
+
+枠の判定とattempt記録は同じDB transactionで行います。次枠がまだ来ていない場合は待ち時間だけ返し、attemptと消費slotを記録しません。idle後に過去枠をまとめて発行せず、次に許可する枠はDBの現在時刻から計算します。SQL内で待機しません。
+
+このmigrationだけでは現行Workerの画像呼出しは変わりません。旧runtimeで開始したqueued/running generationの画像呼出しは新pacerを通らず、新旧runtimeが重なる間はDB枠だけで全呼出しを制御できません。runtimeを切り替える前にqueued/running generationがないこと、同時に実生成を試していないことを運用側で確認してください。新runtimeはreadiness RPCでmigration未適用・状態不整合を検出し、scriptを含む有料AI呼出しの前に停止します。
+
+## 制約
+
+この枠は同一Supabase DBを使うWorker間で、アプリがDBから許可を受ける間隔を制御します。OpenAIへのネットワーク到着時刻そのものや、同じprojectを使う別システムの呼出しは計上しません。OpenAI側の150 images/min制限や429回避を保証するhard capではありません。
+
+新しい環境変数・dependencyはありません。既存の4画像生成、image 1完了後の2〜4並列batch、provider retry無効、DB生成枠・予算policyは維持します。
