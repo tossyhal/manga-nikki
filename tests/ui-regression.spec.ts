@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { generationFixtures, pageComic, panelsComic } from '../src/shared/fixtures';
 import { jstToday, type Entry, type EntryDetail, type Generation } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+import { routeComicAssets } from './fixtures/comic-assets';
 import { clickEntryMenuItem, expectDefaultLibraryLocation } from './fixtures/ui';
 
 const entryId = draftEntryDetailFixture.id;
@@ -582,11 +583,7 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
   await page.route(`**/api/v1/entries/${entryId}`, (route) =>
     route.fulfill({ json: displayedEntry }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00.000Z' },
-    }),
-  );
+  await routeComicAssets(page, panelGeneration.id, () => panelsComic);
 
   const comicViewports = [
     { width: 1920, height: 900 },
@@ -671,6 +668,7 @@ test('デスクトップではページ幅を使い、漫画4コマを2列で表
     latestGenerationId: pageGeneration.id,
     latestGeneration: pageGeneration,
   };
+  await routeComicAssets(page, pageGeneration.id, () => pageComic);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.comic.is-page .comic-panel-card')).toHaveCount(1);

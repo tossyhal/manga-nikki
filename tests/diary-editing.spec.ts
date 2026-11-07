@@ -12,6 +12,7 @@ import {
   expectDefaultLibraryLocation,
   openEntryMenu,
 } from './fixtures/ui';
+import { routeComicAssets } from './fixtures/comic-assets';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -186,9 +187,7 @@ test('編集保存直後の遅延再取得で同じrevisionの別タブ生成結
     await latestReadGate;
     return route.fulfill({ json: latestDetail });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => latestGeneration.comic);
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.diary')).toHaveText(draftEntryDetailFixture.body);
@@ -335,9 +334,7 @@ test('再生成中と失敗後も最後に保存した漫画を表示し、最�
       status === 'failed' ? generationFixtures(entryId, retryId, 2).failed : latestGeneration;
     return route.fulfill({ json: latestGeneration });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => previousSuccess.comic);
 
   await page.goto(`/entries/${entryId}`);
   await expect(page.locator('.comic')).toBeVisible();
@@ -399,16 +396,23 @@ test('ホームで既知の旧漫画と状態取得失敗を別々に案内す�
       },
     }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => oldSuccess.comic);
 
   await page.goto('/');
   await page.getByRole('heading', { name: '最近の記録' }).scrollIntoViewIfNeeded();
   const oldComicCard = page.locator('.entry-history-card').filter({ hasText: '編集前の漫画' });
   await expect(oldComicCard).toBeVisible();
   await expect(oldComicCard).not.toContainText('生成失敗');
-  await expect(oldComicCard.locator('img')).toHaveAttribute('src', '/sample-comic.svg');
+  const oldComicImage = oldComicCard.locator('img');
+  await expect
+    .poll(() => oldComicImage.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+    .toBe(10);
+  const oldComicImageData = await oldComicImage.evaluate(async (image) =>
+    (await (await fetch((image as HTMLImageElement).src)).text()).slice(0, 256),
+  );
+  expect(oldComicImageData).toContain(
+    `data-asset-id="${oldSuccess.comic.visual.kind === 'page' ? oldSuccess.comic.visual.assetId : oldSuccess.comic.visual.assetIds[0]}"`,
+  );
   const unavailableCard = page
     .locator('.entry-history-card')
     .filter({ hasText: '状態確認に失敗した記録です。' });
@@ -437,17 +441,21 @@ test('ホームは旧漫画を表示しながら最新の生成失敗を案内�
     route.fulfill({ json: { items: [todayEntry], nextCursor: null } }),
   );
   await page.route(`**/api/v1/entries/${entryId}`, (route) => route.fulfill({ json: detail }));
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => oldSuccess.comic);
 
   await page.goto('/');
   const todaySection = page.getByRole('region', { name: '今日の記録' });
   await expect(todaySection.getByText('編集前の漫画を表示しています。')).toBeVisible();
   await expect(todaySection.getByText('新しい漫画を生成できませんでした。')).toBeVisible();
-  await expect(todaySection.locator('img.entry-thumbnail-image')).toHaveAttribute(
-    'src',
-    '/sample-comic.svg',
+  const todayImage = todaySection.locator('img.entry-thumbnail-image');
+  await expect
+    .poll(() => todayImage.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+    .toBe(10);
+  const todayImageData = await todayImage.evaluate(async (image) =>
+    (await (await fetch((image as HTMLImageElement).src)).text()).slice(0, 256),
+  );
+  expect(todayImageData).toContain(
+    `data-asset-id="${oldSuccess.comic.visual.kind === 'page' ? oldSuccess.comic.visual.assetId : oldSuccess.comic.visual.assetIds[0]}"`,
   );
 });
 
@@ -516,7 +524,7 @@ test('ホームと一覧で漫画画像の取得失敗を読める', async ({ pa
   for (const [id, entryDetail] of details) {
     await page.route(`**/api/v1/entries/${id}`, (route) => route.fulfill({ json: entryDetail }));
   }
-  await page.route('**/api/v1/assets/*/url', (route) =>
+  await page.route('**/api/v1/generations/*/assets', (route) =>
     route.fulfill({
       status: 503,
       json: {
@@ -1197,9 +1205,7 @@ test('生成受付の409後に最新状態が進行中なら受付エラーを�
     await terminalPollGate;
     return route.fulfill({ json: succeeded });
   });
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
 
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();

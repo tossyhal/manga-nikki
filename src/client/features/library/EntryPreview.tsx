@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefCallback } from 'react';
 import type { Entry, EntryDetail, Generation } from '../../../shared/schemas';
 import { Icon } from '../../app/Icon';
-import { getAssetUrl, getEntry, getGeneration } from '../../lib/api';
+import { ApiClientError, getEntry, getGeneration, getGenerationAssetUrls } from '../../lib/api';
+import {
+  getAssetReadCacheEpoch,
+  subscribeAssetReadCacheInvalidation,
+} from '../../lib/api/assetReadCacheInvalidation';
+import { ComicImageGrantExpiredError, type ComicImageLease } from '../../lib/api/comicImageMemory';
 import { shouldRenewExpiredAsset } from '../comic/signedAssetRefresh';
 
 export type EntryPreviewOptions = { eager?: boolean };
@@ -67,6 +72,10 @@ export function useEntryPreview(
   const imageLoadRef = useRef<((url: string, token: number | null) => void) | null>(null);
   const imageErrorRef = useRef<((url: string, token: number | null) => void) | null>(null);
   const retryImageRef = useRef<(() => void) | null>(null);
+  const activeAssetRef = useRef<ComicImageLease | null>(null);
+  const loadingRef = useRef(false);
+  const [authScopeVersion, setAuthScopeVersion] = useState(0);
+  const [mutationReloadVersion, setMutationReloadVersion] = useState(0);
   const [result, setResult] = useState<PreviewResult>({
     key: null,
     imageUrl: null,
@@ -94,6 +103,48 @@ export function useEntryPreview(
     [],
   );
   const retryImage = useCallback(() => retryImageRef.current?.(), []);
+
+  useEffect(
+    () =>
+      subscribeAssetReadCacheInvalidation(({ reason }) => {
+        if (reason === 'mutation') return;
+        if (reason === 'mutation-finish') {
+          if (loadingRef.current) {
+            setResult((current) => ({
+              ...current,
+              imageUrl: null,
+              imageToken: null,
+              isLoading: true,
+            }));
+            setMutationReloadVersion((version) => version + 1);
+          }
+          return;
+        }
+        activeAssetRef.current?.release();
+        activeAssetRef.current = null;
+        if (reason === 'auth-scope-change') {
+          loadingRef.current = true;
+          setResult((current) => ({
+            ...current,
+            imageUrl: null,
+            imageToken: null,
+            isLoading: true,
+            imageError: undefined,
+          }));
+          setAuthScopeVersion((version) => version + 1);
+          return;
+        }
+        setResult((current) => ({
+          ...current,
+          imageUrl: null,
+          imageToken: null,
+          isLoading: false,
+          imageError: '漫画画像を表示できません。',
+        }));
+        loadingRef.current = false;
+      }),
+    [],
+  );
 
   useLayoutEffect(() => {
     visibleRef.current = visible;
@@ -145,11 +196,20 @@ export function useEntryPreview(
       requestedAtWall: number;
       token: number;
       state: 'loading' | 'loaded' | 'failed';
+      lease: ComicImageLease;
     };
     let currentAsset: ComicImageAsset | null = null;
     let assetRequestId = 0;
     let autoRefreshAttempted = false;
     let imageFailureMessage = '漫画画像を表示できません。';
+
+    function releaseCurrentAsset(invalidate = false) {
+      const lease = currentAsset?.lease;
+      if (invalidate) lease?.invalidate();
+      lease?.release();
+      currentAsset = null;
+      if (activeAssetRef.current === lease) activeAssetRef.current = null;
+    }
 
     if (!entryId || !generationId || revision === null) {
       imageErrorRef.current = null;
@@ -185,7 +245,9 @@ export function useEntryPreview(
       if (!active || fetchingAsset || comicGeneration?.id !== generation.id) return;
       fetchingAsset = true;
       const requestId = ++assetRequestId;
-      currentAsset = null;
+      const requestEpoch = getAssetReadCacheEpoch();
+      releaseCurrentAsset();
+      loadingRef.current = true;
       publish({
         imageUrl: null,
         imageToken: null,
@@ -196,28 +258,86 @@ export function useEntryPreview(
         generation.comic.visual.kind === 'page'
           ? generation.comic.visual.assetId
           : generation.comic.visual.assetIds[0];
+      let pendingGrant: {
+        url: string;
+        expiresAt: string;
+        requestedAt: number;
+        requestedAtWall: number;
+      } | null = null;
       try {
-        const asset = await getAssetUrl(assetId, fresh ? { fresh: true } : undefined);
-        if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
+        const batch = await getGenerationAssetUrls(
+          generation.id,
+          fresh ? { fresh: true } : undefined,
+        );
+        const asset = batch.assets.find((candidate) => candidate.id === assetId);
+        if (!asset) throw new Error('Comic image grant missing.');
+        pendingGrant = asset;
+        const lease = await batch.loadImage(assetId);
+        if (
+          active &&
+          assetRequestId === requestId &&
+          comicGeneration?.id === generation.id &&
+          requestEpoch === getAssetReadCacheEpoch()
+        ) {
           currentAsset = {
-            url: asset.url,
+            url: lease.url,
             expiresAt: asset.expiresAt,
             requestedAt: asset.requestedAt,
             requestedAtWall: asset.requestedAtWall,
             token: requestId,
             state: 'loading',
+            lease,
           };
+          activeAssetRef.current = lease;
+          loadingRef.current = false;
           publish({
-            imageUrl: asset.url,
+            imageUrl: lease.url,
             imageToken: requestId,
             isLoading: preserveError,
             ...(!preserveError ? { imageError: undefined } : {}),
           });
+        } else {
+          lease.release();
         }
-      } catch {
-        if (active && assetRequestId === requestId && comicGeneration?.id === generation.id) {
+      } catch (error) {
+        if (
+          active &&
+          assetRequestId === requestId &&
+          comicGeneration?.id === generation.id &&
+          requestEpoch === getAssetReadCacheEpoch()
+        ) {
           manualRetryPending = false;
-          currentAsset = null;
+          if (error instanceof ComicImageGrantExpiredError && !autoRefreshAttempted) {
+            if (document.hidden && pendingGrant) {
+              currentAsset = {
+                ...pendingGrant,
+                token: requestId,
+                state: 'failed',
+                lease: {
+                  url: pendingGrant.url,
+                  cached: false,
+                  invalidate: () => {},
+                  release: () => {},
+                },
+              };
+              loadingRef.current = false;
+              publish({
+                imageUrl: null,
+                imageToken: null,
+                isLoading: false,
+                imageError: imageFailureMessage,
+              });
+              return;
+            }
+            autoRefreshAttempted = true;
+            window.setTimeout(() => {
+              if (active && comicGeneration?.id === generation.id)
+                void refreshComicImage(generation, false, true);
+            }, 0);
+            return;
+          }
+          releaseCurrentAsset();
+          loadingRef.current = false;
           publish({
             imageUrl: null,
             imageToken: null,
@@ -226,14 +346,17 @@ export function useEntryPreview(
           });
         }
       } finally {
-        if (assetRequestId === requestId) fetchingAsset = false;
+        if (assetRequestId === requestId) {
+          fetchingAsset = false;
+          if (requestEpoch === getAssetReadCacheEpoch()) loadingRef.current = false;
+        }
       }
     }
 
     async function loadComic(generation: Generation | null) {
       if (!active || !generation || generation.status !== 'succeeded') {
         comicGeneration = null;
-        currentAsset = null;
+        releaseCurrentAsset();
         manualRetryPending = false;
         assetRequestId++;
         fetchingAsset = false;
@@ -250,7 +373,7 @@ export function useEntryPreview(
       const previousComicId = comicGeneration?.id;
       if (previousComicId !== generation.id) autoRefreshAttempted = false;
       comicGeneration = generation;
-      currentAsset = null;
+      releaseCurrentAsset();
       manualRetryPending = false;
       assetRequestId++;
       fetchingAsset = false;
@@ -285,6 +408,9 @@ export function useEntryPreview(
       )
         return;
 
+      asset.lease.invalidate();
+      asset.lease.release();
+      activeAssetRef.current = null;
       const wasManualRetry = manualRetryPending;
       manualRetryPending = false;
       asset.state = 'failed';
@@ -300,6 +426,7 @@ export function useEntryPreview(
         );
       if (document.hidden) {
         if (wasManualRetry) autoRefreshAttempted = true;
+        currentAsset = null;
         publish({
           imageUrl: null,
           imageToken: null,
@@ -336,6 +463,7 @@ export function useEntryPreview(
       asset.state = 'loaded';
       if (manualRetryPending) {
         manualRetryPending = false;
+        loadingRef.current = false;
         publish({ isLoading: false, imageError: undefined });
       }
     };
@@ -369,65 +497,114 @@ export function useEntryPreview(
       if (pollTimer === null) pollTimer = window.setInterval(() => void refresh(), 5000);
     }
 
+    let detailUpdateId = 0;
+
+    async function acceptDetail(detail: EntryDetail) {
+      if (!active) return;
+      const updateId = ++detailUpdateId;
+      if (detail.id !== entryId || detail.revision !== revision) {
+        publish({
+          isLoading: false,
+          error: '記録が更新されています。状態を確認できません。',
+        });
+        initialized = true;
+        return;
+      }
+      activeGenerationId = detail.latestGenerationId;
+      const latest =
+        validGeneration(detail.latestGeneration, entryId!, revision!) &&
+        detail.latestGeneration.id === detail.latestGenerationId
+          ? detail.latestGeneration
+          : null;
+      latestGeneration = latest;
+      let latestUnavailable = false;
+      if (detail.latestGenerationId && (!latest || latest.id !== detail.latestGenerationId)) {
+        try {
+          const current = await getGeneration(detail.latestGenerationId);
+          if (
+            active &&
+            updateId === detailUpdateId &&
+            validGeneration(current, entryId!, revision!) &&
+            current.id === detail.latestGenerationId
+          ) {
+            activeGenerationId = detail.latestGenerationId;
+            latestGeneration = current;
+          } else if (active) {
+            latestUnavailable = true;
+          }
+        } catch {
+          if (active) latestUnavailable = true;
+        }
+      }
+      if (!active || updateId !== detailUpdateId) return;
+      const currentLatest = latestGeneration;
+      const comic = lastSuccessfulGeneration(detail, currentLatest);
+      comicGeneration = comic;
+      publish({
+        generation: currentLatest,
+        comicGeneration: comic,
+        imageUrl: null,
+        imageToken: null,
+        isStale: Boolean(comic && comic.entryRevision < revision!),
+        isLoading: Boolean(comic),
+        error: latestUnavailable ? '記録の状態を確認できません。' : undefined,
+        imageError: undefined,
+      });
+      if (comic) await loadComic(comic);
+      if (!active || updateId !== detailUpdateId) return;
+      initialized = true;
+      if (currentLatest?.status === 'queued' || currentLatest?.status === 'running') {
+        schedulePolling();
+      } else if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function handleBackgroundError(error: unknown) {
+      if (
+        !active ||
+        !(error instanceof ApiClientError) ||
+        (error.status !== 404 && error.status !== 401 && error.status !== 403)
+      )
+        return;
+      if (error.status === 404) {
+        assetRequestId++;
+        fetchingAsset = false;
+        manualRetryPending = false;
+        releaseCurrentAsset(true);
+      } else {
+        releaseCurrentAsset();
+      }
+      detailUpdateId++;
+      loadingRef.current = false;
+      publish({
+        imageUrl: null,
+        imageToken: null,
+        isLoading: false,
+        error: '記録の状態を確認できません。',
+        imageError: '漫画画像を表示できません。',
+      });
+    }
+
     async function loadDetail() {
       if (initialized || fetching || !visibleRef.current || document.hidden) return;
       fetching = true;
+      loadingRef.current = true;
       publish({ isLoading: true, error: undefined, imageError: undefined });
       try {
-        const detail = await getEntry(entryId!);
-        if (!active) return;
-        if (detail.id !== entryId || detail.revision !== revision) {
-          publish({
-            isLoading: false,
-            error: '記録が更新されています。状態を確認できません。',
-          });
-          initialized = true;
-          return;
-        }
-        activeGenerationId = detail.latestGenerationId;
-        const latest =
-          validGeneration(detail.latestGeneration, entryId!, revision!) &&
-          detail.latestGeneration.id === detail.latestGenerationId
-            ? detail.latestGeneration
-            : null;
-        latestGeneration = latest;
-        let latestUnavailable = false;
-        if (detail.latestGenerationId && (!latest || latest.id !== detail.latestGenerationId)) {
-          try {
-            const current = await getGeneration(detail.latestGenerationId);
-            if (
-              active &&
-              validGeneration(current, entryId!, revision!) &&
-              current.id === detail.latestGenerationId
-            ) {
-              activeGenerationId = detail.latestGenerationId;
-              latestGeneration = current;
-            } else if (active) {
-              latestUnavailable = true;
-            }
-          } catch {
-            if (active) latestUnavailable = true;
-          }
-        }
-        if (!active) return;
-        const currentLatest = latestGeneration;
-        const comic = lastSuccessfulGeneration(detail, currentLatest);
-        comicGeneration = comic;
-        publish({
-          generation: currentLatest,
-          comicGeneration: comic,
-          imageUrl: null,
-          imageToken: null,
-          isStale: Boolean(comic && comic.entryRevision < revision!),
-          isLoading: Boolean(comic),
-          error: latestUnavailable ? '記録の状態を確認できません。' : undefined,
-          imageError: undefined,
+        let backgroundOutcomeSeen = false;
+        const detail = await getEntry(entryId!, {
+          onUpdate: (updated) => {
+            backgroundOutcomeSeen = true;
+            void acceptDetail(updated);
+          },
+          onBackgroundError: (error) => {
+            backgroundOutcomeSeen = true;
+            handleBackgroundError(error);
+          },
         });
-        if (comic) await loadComic(comic);
-        initialized = true;
-        if (currentLatest?.status === 'queued' || currentLatest?.status === 'running') {
-          schedulePolling();
-        }
+        if (!backgroundOutcomeSeen) await acceptDetail(detail);
       } catch {
         if (active) {
           publish({
@@ -444,6 +621,7 @@ export function useEntryPreview(
         }
       } finally {
         fetching = false;
+        if (!fetchingAsset) loadingRef.current = false;
       }
     }
 
@@ -460,6 +638,7 @@ export function useEntryPreview(
       )
         return;
       fetching = true;
+      loadingRef.current = true;
       const polledGenerationId = activeGenerationId;
       try {
         const current = await getGeneration(polledGenerationId);
@@ -474,6 +653,7 @@ export function useEntryPreview(
           publish({ error: '記録の状態を確認できません。' });
       } finally {
         fetching = false;
+        if (!fetchingAsset) loadingRef.current = false;
       }
     }
 
@@ -515,13 +695,15 @@ export function useEntryPreview(
     return () => {
       active = false;
       if (pollTimer !== null) clearInterval(pollTimer);
+      releaseCurrentAsset();
+      loadingRef.current = false;
       document.removeEventListener('visibilitychange', onVisible);
       if (refreshRef.current) refreshRef.current = null;
       if (imageLoadRef.current === handleComicImageLoad) imageLoadRef.current = null;
       if (imageErrorRef.current === handleComicImageError) imageErrorRef.current = null;
       if (retryImageRef.current === retryComicImage) retryImageRef.current = null;
     };
-  }, [entryId, generationId, key, revision]);
+  }, [entryId, generationId, key, revision, authScopeVersion, mutationReloadVersion]);
 
   const current =
     result.key === key

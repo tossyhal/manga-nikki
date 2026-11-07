@@ -47,9 +47,36 @@ export function useHomeRecords(
     const currentConfig = config;
     let active = true;
     async function loadEntries() {
+      let receivedBackgroundUpdate = false;
       try {
-        const result = await getEntries({ limit: 20, fresh: retryKey > 0 });
-        if (active)
+        const result = await getEntries({
+          limit: 20,
+          fresh: retryKey > 0,
+          onUpdate: (latest) => {
+            if (!active) return;
+            receivedBackgroundUpdate = true;
+            setLoaded({
+              config: currentConfig,
+              configError,
+              retryKey,
+              records: { status: 'ready', entries: latest.items },
+            });
+          },
+          onBackgroundError: (failure) => {
+            if (!active || !(failure instanceof ApiClientError)) return;
+            if (failure.status !== 401 && failure.status !== 403) return;
+            receivedBackgroundUpdate = true;
+            setLoaded({
+              config: currentConfig,
+              configError,
+              retryKey,
+              records: isMissingLocalSession(failure)
+                ? { status: 'ready', entries: [] }
+                : { status: 'error', message: failure.message },
+            });
+          },
+        });
+        if (active && !receivedBackgroundUpdate)
           setLoaded({
             config: currentConfig,
             configError,

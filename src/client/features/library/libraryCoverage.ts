@@ -1,5 +1,6 @@
 import type { Entry } from '../../../shared/schemas';
 import { getEntries } from '../../lib/api';
+import type { ApiAuthorizationScope } from '../../lib/api/client';
 import { maxListRestoreRequests } from './librarySearch';
 
 export const pageSize = 20;
@@ -27,12 +28,24 @@ export async function fetchMonthCoverage(
   signal?: AbortSignal,
   onProgress?: (entries: Entry[], cursor: string | null) => void,
   fresh = false,
+  onFirstPageUpdate?: (
+    entries: Entry[],
+    cursor: string | null,
+    scope: ApiAuthorizationScope,
+  ) => void | Promise<void>,
+  onFirstPageError?: (failure: unknown, scope: ApiAuthorizationScope) => void | Promise<void>,
 ) {
   let entries = initialEntries;
   let cursor = initialCursor;
 
   if (entries === null) {
-    const firstPage = await getEntries({ limit: pageSize, signal, fresh });
+    const firstPage = await getEntries({
+      limit: pageSize,
+      signal,
+      fresh,
+      onUpdate: (page, scope) => onFirstPageUpdate?.(page.items, page.nextCursor, scope),
+      onBackgroundError: onFirstPageError,
+    });
     if (!shouldContinue()) return null;
     entries = firstPage.items;
     cursor = firstPage.nextCursor;

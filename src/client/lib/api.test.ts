@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Entry, EntryDetail } from '../../shared/schemas';
 import {
   api,
   ApiClientError,
@@ -11,8 +12,12 @@ import {
 } from './api';
 import { getLiveAccessToken } from './auth';
 import { getClientConfig, invalidateClientConfig, refreshClientConfig } from './config';
+import { subscribeAssetReadCacheInvalidation } from './api/assetReadCacheInvalidation';
+import { getApiAuthorizationScope } from './api/client';
 import {
   entryReadCacheEpoch,
+  entryReadCacheFreshTtlMs,
+  entryReadCacheMaxStaleMs,
   getEntryReadCache,
   invalidateEntryReadCache,
   setEntryReadCache,
@@ -45,6 +50,23 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function makeEntry(id: string, body = id): Entry {
+  const createdAt = new Date().toISOString();
+  return {
+    id,
+    diaryDate: createdAt.slice(0, 10),
+    body,
+    revision: 1,
+    latestGenerationId: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function makeDetail(id: string, body = id): EntryDetail {
+  return { ...makeEntry(id, body), latestGeneration: null };
 }
 
 function denySessionStorageGetter() {
@@ -89,7 +111,7 @@ describe('entry read cache', () => {
     let token = 'owner-a-token';
     vi.mocked(getLiveAccessToken).mockImplementation(async () => token);
     const entryRequest = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
-      Response.json({ items: [{ id: 'entry' }], nextCursor: null }, { headers: init?.headers }),
+      Response.json({ items: [makeEntry('entry')], nextCursor: null }, { headers: init?.headers }),
     );
     vi.stubGlobal(
       'fetch',
@@ -112,13 +134,73 @@ describe('entry read cache', () => {
     expect(secondHeaders.get('Authorization')).toBe('Bearer owner-b-token');
   });
 
+  it('does not deliver a stale owner response after the active token changes', async () => {
+    const liveConfig = { ...mockConfig, dataMode: 'live' };
+    const refreshedResponse = deferred<Response>();
+    const refreshStarted = deferred<void>();
+    const currentTime = Date.now();
+    const currentMonotonicTime = performance.now();
+    let wallTime = currentTime;
+    let monotonicTime = currentMonotonicTime;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+    const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+    let token = 'owner-a-token';
+    vi.mocked(getLiveAccessToken).mockImplementation(async () => token);
+    const entryRequests: Array<{ authorization: string | null; count: number }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/v1/config') return Response.json(liveConfig);
+        entryRequests.push({
+          authorization: new Headers(init?.headers).get('Authorization'),
+          count: entryRequests.length + 1,
+        });
+        if (entryRequests.length === 1)
+          return Response.json({ items: [makeEntry('entry', 'owner A')], nextCursor: null });
+        if (entryRequests.length === 2) {
+          refreshStarted.resolve();
+          return refreshedResponse.promise;
+        }
+        return Response.json({ items: [makeEntry('entry', 'owner B')], nextCursor: null });
+      }),
+    );
+
+    try {
+      await getEntries({ limit: 20 });
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      monotonicTime += entryReadCacheFreshTtlMs + 1;
+      const onUpdate = vi.fn();
+      await expect(getEntries({ limit: 20, onUpdate })).resolves.toMatchObject({
+        items: [expect.objectContaining({ body: 'owner A' })],
+      });
+      await refreshStarted.promise;
+      token = 'owner-b-token';
+      refreshedResponse.resolve(
+        Response.json({ items: [makeEntry('entry', 'late owner A')], nextCursor: null }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onUpdate).not.toHaveBeenCalled();
+
+      const ownerB = await getEntries({ limit: 20 });
+      expect(ownerB.items[0]?.body).toBe('owner B');
+      expect(entryRequests.map((request) => request.authorization)).toEqual([
+        'Bearer owner-a-token',
+        'Bearer owner-a-token',
+        'Bearer owner-b-token',
+      ]);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
   it('refreshes explicitly and caches the refreshed page', async () => {
     let requestCount = 0;
     vi.stubGlobal(
       'fetch',
       mockFetch(async () => {
         requestCount += 1;
-        return Response.json({ items: [{ id: `entry-${requestCount}` }], nextCursor: null });
+        return Response.json({ items: [makeEntry(`entry-${requestCount}`)], nextCursor: null });
       }),
     );
 
@@ -131,6 +213,221 @@ describe('entry read cache', () => {
     expect(cached).toEqual(refreshed);
   });
 
+  it('returns a page after the fresh TTL and publishes the background refresh', async () => {
+    const refreshedResponse = deferred<Response>();
+    const refreshStarted = deferred<void>();
+    const currentTime = Date.now();
+    const currentMonotonicTime = performance.now();
+    let wallTime = currentTime;
+    let monotonicTime = currentMonotonicTime;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+    const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+    let requestCount = 0;
+    const initial = makeEntry('entry', 'cached body');
+    const updated = { ...initial, revision: 2, body: 'refreshed body' };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json({ items: [initial], nextCursor: null });
+        refreshStarted.resolve();
+        return refreshedResponse.promise;
+      }),
+    );
+
+    try {
+      await getEntries({ limit: 20 });
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      monotonicTime += entryReadCacheFreshTtlMs + 1;
+      const onUpdate = vi.fn();
+      const stale = await getEntries({ limit: 20, onUpdate });
+      expect(stale.items[0]?.body).toBe('cached body');
+      await refreshStarted.promise;
+      expect(requestCount).toBe(2);
+
+      refreshedResponse.resolve(Response.json({ items: [updated], nextCursor: null }));
+      await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+      expect(onUpdate.mock.calls[0]?.[0]).toEqual({ items: [updated], nextCursor: null });
+      await expect(getEntries({ limit: 20 })).resolves.toMatchObject({ items: [updated] });
+      expect(requestCount).toBe(2);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it('does not reuse a page beyond the server retention boundary', async () => {
+    let requestCount = 0;
+    const expired = {
+      ...makeEntry('expired'),
+      createdAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        return Response.json({ items: [expired], nextCursor: null });
+      }),
+    );
+
+    await getEntries({ limit: 20 });
+    await getEntries({ limit: 20 });
+    expect(requestCount).toBe(2);
+  });
+
+  it('keeps matching detail records and invalidates a detail only after its list revision changes', async () => {
+    const refreshedList = deferred<Response>();
+    const listRefreshStarted = deferred<void>();
+    const currentTime = Date.now();
+    const currentMonotonicTime = performance.now();
+    let wallTime = currentTime;
+    let monotonicTime = currentMonotonicTime;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+    const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+    let currentEntry = makeEntry('entry', 'same revision');
+    let detailRequests = 0;
+    let listRequests = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+        if (String(input) === '/api/v1/entries?limit=20') {
+          listRequests += 1;
+          if (listRequests === 1) return Response.json({ items: [currentEntry], nextCursor: null });
+          listRefreshStarted.resolve();
+          return refreshedList.promise;
+        }
+        if (String(input) === '/api/v1/entries/entry') {
+          detailRequests += 1;
+          return Response.json({ ...currentEntry, latestGeneration: null });
+        }
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }),
+    );
+
+    try {
+      const initialDetail = await getEntry('entry');
+      await getEntries({ limit: 20 });
+      await expect(getEntry('entry')).resolves.toEqual(initialDetail);
+      expect(detailRequests).toBe(1);
+
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      monotonicTime += entryReadCacheFreshTtlMs + 1;
+      currentEntry = {
+        ...currentEntry,
+        body: 'new revision',
+        revision: 2,
+        updatedAt: new Date().toISOString(),
+      };
+      const onUpdate = vi.fn();
+      await getEntries({ limit: 20, onUpdate });
+      await listRefreshStarted.promise;
+      refreshedList.resolve(Response.json({ items: [currentEntry], nextCursor: null }));
+      await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+
+      await expect(getEntry('entry')).resolves.toMatchObject({ body: 'new revision', revision: 2 });
+      expect(detailRequests).toBe(2);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it.each([{ outcome: 'background 404' as const }, { outcome: 'background success' as const }])(
+    'preserves same-revision detail SWR notification after list refresh ($outcome)',
+    async ({ outcome }) => {
+      const refreshedDetail = deferred<Response>();
+      const detailRefreshStarted = deferred<void>();
+      const refreshedList = deferred<Response>();
+      const listRefreshStarted = deferred<void>();
+      const currentTime = Date.now();
+      const currentMonotonicTime = performance.now();
+      let wallTime = currentTime;
+      let monotonicTime = currentMonotonicTime;
+      const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+      const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+      const currentEntry = makeEntry('entry', 'same revision');
+      const currentDetail = { ...currentEntry, latestGeneration: null };
+      let detailRequests = 0;
+      let listRequests = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          if (String(input) === '/api/v1/config') return Response.json(mockConfig);
+          if (String(input) === '/api/v1/entries?limit=20') {
+            listRequests++;
+            if (listRequests === 1)
+              return Response.json({ items: [currentEntry], nextCursor: null });
+            listRefreshStarted.resolve();
+            return refreshedList.promise;
+          }
+          if (String(input) === '/api/v1/entries/entry') {
+            detailRequests++;
+            if (detailRequests === 1) return Response.json(currentDetail);
+            detailRefreshStarted.resolve();
+            return refreshedDetail.promise;
+          }
+          throw new Error(`Unexpected request: ${String(input)}`);
+        }),
+      );
+
+      try {
+        await getEntry('entry');
+        await getEntries({ limit: 20 });
+        wallTime += entryReadCacheFreshTtlMs + 1;
+        monotonicTime += entryReadCacheFreshTtlMs + 1;
+
+        const onUpdate = vi.fn();
+        const onBackgroundError = vi.fn();
+        await expect(getEntry('entry', { onUpdate, onBackgroundError })).resolves.toEqual(
+          currentDetail,
+        );
+        await detailRefreshStarted.promise;
+
+        const listOnUpdate = vi.fn();
+        await expect(getEntries({ limit: 20, onUpdate: listOnUpdate })).resolves.toMatchObject({
+          items: [currentEntry],
+        });
+        await listRefreshStarted.promise;
+        refreshedList.resolve(Response.json({ items: [currentEntry], nextCursor: null }));
+        await vi.waitFor(() => expect(listOnUpdate).toHaveBeenCalledOnce());
+
+        if (outcome === 'background 404') {
+          refreshedDetail.resolve(
+            Response.json(
+              {
+                error: {
+                  message: 'not found',
+                  code: 'NOT_FOUND',
+                  requestId: 'deleted-entry',
+                  retryable: false,
+                },
+              },
+              { status: 404 },
+            ),
+          );
+          await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+          expect(onBackgroundError.mock.calls[0]?.[0]).toMatchObject({
+            status: 404,
+            code: 'NOT_FOUND',
+          });
+          expect(onUpdate).not.toHaveBeenCalled();
+        } else {
+          refreshedDetail.resolve(Response.json(currentDetail));
+          await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+          expect(onUpdate.mock.calls[0]?.[0]).toEqual(currentDetail);
+          expect(onBackgroundError).not.toHaveBeenCalled();
+        }
+
+        expect(detailRequests).toBe(2);
+        expect(listRequests).toBe(2);
+      } finally {
+        wallClock.mockRestore();
+        monotonicClock.mockRestore();
+      }
+    },
+  );
+
   it('expires cached pages when either clock moves backward or passes the TTL', () => {
     invalidateEntryReadCache();
     const wallClock = vi.spyOn(Date, 'now');
@@ -141,13 +438,17 @@ describe('entry read cache', () => {
     monotonicClock.mockImplementation(() => monotonicTime);
     const scope = { dataMode: 'mock' as const, authorization: 'Bearer mock:test' };
     const path = '/entries?limit=20';
-    const cacheEpoch = entryReadCacheEpoch('entries');
+    const cacheEpoch = entryReadCacheEpoch('entries', scope, path);
 
     try {
       setEntryReadCache('entries', scope, path, { items: [] }, cacheEpoch);
       expect(getEntryReadCache('entries', scope, path).found).toBe(true);
 
-      wallTime += 15_001;
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      const stale = getEntryReadCache('entries', scope, path);
+      expect(stale.found && stale.stale).toBe(true);
+
+      wallTime += entryReadCacheMaxStaleMs - entryReadCacheFreshTtlMs;
       expect(getEntryReadCache('entries', scope, path).found).toBe(false);
 
       wallTime = 2_000;
@@ -186,7 +487,7 @@ describe('entry read cache', () => {
             { status: 404 },
           );
         }
-        return Response.json({ items: [{ id: `entry-${requestCount}` }], nextCursor: null });
+        return Response.json({ items: [makeEntry(`entry-${requestCount}`)], nextCursor: null });
       }),
     );
 
@@ -205,7 +506,10 @@ describe('entry read cache', () => {
       mockFetch(async (input) => {
         if (String(input) === '/api/v1/entries?limit=20') {
           listRequestCount += 1;
-          return Response.json({ items: [{ id: `entry-${listRequestCount}` }], nextCursor: null });
+          return Response.json({
+            items: [makeEntry(`entry-${listRequestCount}`)],
+            nextCursor: null,
+          });
         }
         throw new TypeError('connection lost after sending the mutation');
       }),
@@ -235,7 +539,7 @@ describe('entry read cache', () => {
             oldRequestStarted.resolve();
             return oldResponse.promise;
           }
-          return Response.json({ items: [{ id: 'new' }], nextCursor: null });
+          return Response.json({ items: [makeEntry('new')], nextCursor: null });
         }
         if (String(input) === '/api/v1/entries') return Response.json({ ok: true });
         throw new Error(`Unexpected request: ${String(input)}`);
@@ -245,7 +549,7 @@ describe('entry read cache', () => {
     const oldRead = getEntries({ limit: 20 });
     await oldRequestStarted.promise;
     await api('/entries', { method: 'POST', body: '{}' });
-    oldResponse.resolve(Response.json({ items: [{ id: 'old' }], nextCursor: null }));
+    oldResponse.resolve(Response.json({ items: [makeEntry('old')], nextCursor: null }));
     await oldRead;
 
     const current = await getEntries({ limit: 20 });
@@ -276,7 +580,7 @@ describe('entry read cache', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(listRequestCount).toBe(1);
 
-    response.resolve(Response.json({ items: [{ id: 'shared' }], nextCursor: null }));
+    response.resolve(Response.json({ items: [makeEntry('shared')], nextCursor: null }));
     const [first, second] = await Promise.all([firstRead, secondRead]);
     expect(first).toEqual(second);
     expect(first.items[0]?.id).toBe('shared');
@@ -292,7 +596,7 @@ describe('entry read cache', () => {
         if (String(input) === '/api/v1/entries?limit=20') {
           firstPageRequestCount += 1;
           return Response.json({
-            items: [{ id: `first-${firstPageRequestCount}` }],
+            items: [makeEntry(`first-${firstPageRequestCount}`)],
             nextCursor: 'older-page',
           });
         }
@@ -325,7 +629,7 @@ describe('entry read cache', () => {
   it('rejects an aborted first-page read without clearing the complete page cache', async () => {
     const entryRequest = vi
       .fn()
-      .mockResolvedValue(Response.json({ items: [{ id: 'entry' }], nextCursor: null }));
+      .mockResolvedValue(Response.json({ items: [makeEntry('entry')], nextCursor: null }));
     vi.stubGlobal('fetch', mockFetch(entryRequest));
     await getEntries({ limit: 20 });
 
@@ -361,6 +665,221 @@ describe('entry read cache', () => {
     await getEntry('entry');
     await getEntry('entry');
     expect(requestCount).toBe(2);
+  });
+
+  it('removes stale detail after a background 404 and surfaces the deletion', async () => {
+    const refreshedResponse = deferred<Response>();
+    const refreshStarted = deferred<void>();
+    const currentTime = Date.now();
+    const currentMonotonicTime = performance.now();
+    let wallTime = currentTime;
+    let monotonicTime = currentMonotonicTime;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+    const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json(makeDetail('entry', 'deleted later'));
+        refreshStarted.resolve();
+        if (requestCount === 2) return refreshedResponse.promise;
+        return Response.json(
+          {
+            error: {
+              message: 'not found',
+              code: 'NOT_FOUND',
+              requestId: 'deleted',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        );
+      }),
+    );
+
+    try {
+      await getEntry('entry');
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      monotonicTime += entryReadCacheFreshTtlMs + 1;
+      const onBackgroundError = vi.fn();
+      const stale = await getEntry('entry', { onBackgroundError });
+      expect(stale.body).toBe('deleted later');
+      await refreshStarted.promise;
+
+      refreshedResponse.resolve(
+        Response.json(
+          {
+            error: {
+              message: 'not found',
+              code: 'NOT_FOUND',
+              requestId: 'deleted',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        ),
+      );
+      await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+      expect(onBackgroundError.mock.calls[0]?.[0]).toMatchObject({
+        status: 404,
+        code: 'NOT_FOUND',
+      });
+      await expect(getEntry('entry')).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+      expect(requestCount).toBe(3);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it('drops a cached completed detail when refresh reports an active generation', async () => {
+    const refreshedResponse = deferred<Response>();
+    const refreshStarted = deferred<void>();
+    const currentTime = Date.now();
+    const currentMonotonicTime = performance.now();
+    let wallTime = currentTime;
+    let monotonicTime = currentMonotonicTime;
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallTime);
+    const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => monotonicTime);
+    const activeDetail = { ...makeDetail('entry', 'under generation'), latestGenerationId: 'job' };
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json(makeDetail('entry', 'completed'));
+        if (requestCount === 2) {
+          refreshStarted.resolve();
+          return refreshedResponse.promise;
+        }
+        return Response.json(activeDetail);
+      }),
+    );
+
+    try {
+      await getEntry('entry');
+      wallTime += entryReadCacheFreshTtlMs + 1;
+      monotonicTime += entryReadCacheFreshTtlMs + 1;
+      const onUpdate = vi.fn();
+      await expect(getEntry('entry', { onUpdate })).resolves.toMatchObject({
+        body: 'completed',
+        latestGenerationId: null,
+      });
+      await refreshStarted.promise;
+      refreshedResponse.resolve(Response.json(activeDetail));
+      await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+      expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({
+        body: 'under generation',
+        latestGenerationId: 'job',
+        latestGeneration: null,
+      });
+
+      await expect(getEntry('entry')).resolves.toMatchObject({ latestGenerationId: 'job' });
+      expect(requestCount).toBe(3);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+
+  it('clears a detail cache when background authorization fails', async () => {
+    let requestCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(async () => {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json(makeDetail('entry', 'private record'));
+        return Response.json(
+          {
+            error: {
+              message: 'session expired',
+              code: 'AUTH_EXPIRED',
+              requestId: 'expired-session',
+              retryable: false,
+            },
+          },
+          { status: 403 },
+        );
+      }),
+    );
+    await getEntry('entry');
+    const wallClock = vi.spyOn(Date, 'now');
+    const monotonicClock = vi.spyOn(performance, 'now');
+    const initialWallTime = wallClock.getMockImplementation()?.() ?? Date.now();
+    const initialMonotonicTime = monotonicClock.getMockImplementation()?.() ?? performance.now();
+    wallClock.mockImplementation(() => initialWallTime + entryReadCacheFreshTtlMs + 1);
+    monotonicClock.mockImplementation(() => initialMonotonicTime + entryReadCacheFreshTtlMs + 1);
+    const onBackgroundError = vi.fn();
+    try {
+      const stale = await getEntry('entry', { onBackgroundError });
+      expect(stale.body).toBe('private record');
+      await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce());
+      expect(onBackgroundError.mock.calls[0]?.[0]).toMatchObject({
+        status: 403,
+        code: 'AUTH_EXPIRED',
+      });
+      expect(requestCount).toBe(2);
+    } finally {
+      wallClock.mockRestore();
+      monotonicClock.mockRestore();
+    }
+  });
+});
+
+describe('comic image cache invalidation', () => {
+  it('keeps image reads through successful quota reads and comic sharing', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/v1/me/quota') return Response.json({ remainingToday: 2 });
+      if (path.endsWith('/share')) return Response.json({ path: '/shared/sample' });
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', mockFetch(request));
+    await getApiAuthorizationScope();
+    const reasons: string[] = [];
+    const unsubscribe = subscribeAssetReadCacheInvalidation(({ reason }) => reasons.push(reason));
+
+    await api('/me/quota');
+    await api('/generations/11111111-1111-4111-8111-111111111111/share', {
+      method: 'POST',
+      body: '{}',
+    });
+
+    expect(reasons).toEqual([]);
+    unsubscribe();
+  });
+
+  it('invalidates around entry mutations and on any 401/403 response', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ id: 'entry', diaryDate: '2026-11-02', body: '日記' }))
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              message: '確認が必要です。',
+              code: 'AUTH_REQUIRED',
+              requestId: 'request',
+              retryable: false,
+            },
+          },
+          { status: 403 },
+        ),
+      );
+    vi.stubGlobal('fetch', mockFetch(request));
+    await getApiAuthorizationScope();
+    const reasons: string[] = [];
+    const unsubscribe = subscribeAssetReadCacheInvalidation(({ reason }) => reasons.push(reason));
+
+    await api('/entries/11111111-1111-4111-8111-111111111111', {
+      method: 'PATCH',
+      body: JSON.stringify({ diaryDate: '2026-11-02', body: '更新' }),
+    });
+    await expect(api('/me/quota')).rejects.toMatchObject({ status: 403 });
+
+    expect(reasons).toEqual(['mutation', 'mutation-finish', 'auth-failure']);
+    unsubscribe();
   });
 });
 

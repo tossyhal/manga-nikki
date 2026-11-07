@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
 import { jstToday, type Entry, type EntryDetail } from '../src/shared/schemas';
 import { liveClientConfigFixture, mockClientConfigFixture } from './fixtures/client-config';
+import { comicAssetPayload, comicImageFixture } from './fixtures/comic-assets';
 import {
   clickAppDialogButton,
   clickEntryMenuItem,
@@ -305,7 +306,7 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   const externalAuthRequests: string[] = [];
   let entryWrites = 0;
   let generationWrites = 0;
-  let assetUrlReads = 0;
+  let assetBatchReads = 0;
 
   await page.addInitScript(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -354,16 +355,16 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
     await route.fulfill({ status: 404, json: { error: 'not found' } });
   });
   await page.route('**/api/v1/generations/*', (route) => route.fulfill({ json: generation }));
-  await page.route('**/api/v1/assets/*/url', async (route) => {
-    assetUrlReads++;
+  await page.route(`**/api/v1/generations/${generationId}/assets`, async (route) => {
+    assetBatchReads++;
     apiAuthorization.push(route.request().headers().authorization ?? '');
-    await route.fulfill({
-      json: {
-        url: '/sample-comic.svg',
-        expiresAt: '2099-01-01T00:00:00Z',
-      },
-    });
+    await route.fulfill({ json: comicAssetPayload(generation.comic) });
   });
+  await page.route('**/sample-comic.svg?asset=*', (route) =>
+    route.fulfill(
+      comicImageFixture(new URL(route.request().url()).searchParams.get('asset') ?? ''),
+    ),
+  );
   await page.route('https://manga-nikki-e2e.supabase.co/**', (route) => route.abort());
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -389,11 +390,18 @@ test('liveホームは既存sessionの本人履歴と成功漫画を表示し、
   const preview = previewLink.locator('img.entry-thumbnail-image');
   await expect(previewLink).toBeVisible();
   await expect(preview).toBeVisible();
-  await expect(preview).toHaveAttribute('src', '/sample-comic.svg');
   await expect
     .poll(() => preview.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-    .toBeGreaterThan(0);
-  await expect.poll(() => assetUrlReads).toBeGreaterThan(0);
+    .toBe(10);
+  const previewData = await preview.evaluate(async (image) =>
+    (await (await fetch((image as HTMLImageElement).src)).text()).slice(0, 256),
+  );
+  const firstAssetId =
+    generation.comic.visual.kind === 'page'
+      ? generation.comic.visual.assetId
+      : generation.comic.visual.assetIds[0];
+  expect(previewData).toContain(`data-asset-id="${firstAssetId}"`);
+  await expect.poll(() => assetBatchReads).toBe(1);
 
   expect(apiAuthorization.length).toBeGreaterThan(0);
   expect(apiAuthorization.every((value) => value === 'Bearer fixture-live-access-token')).toBe(

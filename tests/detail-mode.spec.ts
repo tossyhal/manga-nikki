@@ -6,6 +6,7 @@ import {
   liveClientConfigFixture,
   mockClientConfigFixture,
 } from './fixtures/client-config';
+import { routeComicAssets } from './fixtures/comic-assets';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -49,13 +50,10 @@ test('mock設定では生成API経由で固定漫画を表示する', async ({ p
       ? route.fulfill({ json: generation })
       : route.fulfill({ status: 404, json: { error: 'not found' } }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({
-      json: {
-        url: '/sample-comic.svg',
-        expiresAt: '2099-01-01T00:00:00Z',
-      },
-    }),
+  await routeComicAssets(
+    page,
+    generationId,
+    () => generationFixtures(entryId, generationId).succeeded.comic,
   );
 
   await page.goto(`/entries/${entryId}`);

@@ -48,6 +48,11 @@ export function createServerAssetMetadataClient(environment: Environment, fetche
         .select('id,generation_id,owner_id,object_path,media_type')
         .eq('id', assetId)
         .maybeSingle(),
+    getAssets: (assetIds: string[]) =>
+      client
+        .from('assets')
+        .select('id,generation_id,owner_id,object_path,media_type')
+        .in('id', assetIds),
   };
 }
 

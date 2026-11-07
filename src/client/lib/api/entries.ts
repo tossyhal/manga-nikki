@@ -5,15 +5,28 @@ import {
   getApiAuthorizationScope,
   type ApiAuthorizationScope,
 } from './client';
+import { getClientConfig } from '../config';
 import {
   entryReadCacheEpoch,
   getOrCreateEntryRead,
   getEntryReadCache,
+  invalidateEntryReadCacheKey,
   invalidateEntryReadCache,
+  isEntryReadCacheEpochCurrent,
+  removeEntryReadCache,
+  reconcileEntryDetailsFromList,
   setEntryReadCache,
 } from './entryReadCache';
 
-export type EntryReadOptions = { fresh?: boolean; signal?: AbortSignal };
+type ReadCallbacks<T> = {
+  onUpdate?: (value: T, scope: ApiAuthorizationScope) => void | Promise<void>;
+  onBackgroundError?: (failure: unknown, scope: ApiAuthorizationScope) => void | Promise<void>;
+};
+
+export type EntryReadOptions<T = unknown> = ReadCallbacks<T> & {
+  fresh?: boolean;
+  signal?: AbortSignal;
+};
 
 function canCacheEntryDetail(detail: EntryDetail) {
   if (detail.latestGenerationId === null) return true;
@@ -28,33 +41,109 @@ async function readCachedEntry<T>(
   kind: 'entries' | 'entry',
   scope: ApiAuthorizationScope,
   path: string,
-  options: EntryReadOptions,
+  options: EntryReadOptions<T>,
+  retentionDays: number,
   canCache: (value: T) => boolean = () => true,
 ): Promise<T> {
   options.signal?.throwIfAborted();
-  if (options.fresh) invalidateEntryReadCache();
-  const cacheEpoch = entryReadCacheEpoch(kind);
-  if (!options.fresh) {
-    const cached = getEntryReadCache<T>(kind, scope, path);
-    if (cached.found) return cached.value;
-  }
-  const load = async () => {
-    const result = await api<T>(path, { signal: options.signal }, { expectedScope: scope });
-    options.signal?.throwIfAborted();
-    if (kind === 'entries') invalidateEntryReadCache('entry');
-    if (canCache(result)) setEntryReadCache(kind, scope, path, result, cacheEpoch);
+  if (options.fresh) invalidateEntryReadCacheKey(kind, scope, path);
+  const cacheEpoch = entryReadCacheEpoch(kind, scope, path);
+  const load = async (signal?: AbortSignal) => {
+    const result = await api<T>(path, { signal }, { expectedScope: scope });
+    signal?.throwIfAborted();
+    if (isEntryReadCacheEpochCurrent(kind, scope, path, cacheEpoch)) {
+      if (kind === 'entries') {
+        const page = result as { items: Entry[]; nextCursor: string | null };
+        const query = path.split('?', 2)[1] ?? '';
+        const isCompleteList = !new URLSearchParams(query).has('cursor') && !page.nextCursor;
+        reconcileEntryDetailsFromList(scope, page.items, isCompleteList);
+      }
+      const entries = kind === 'entries' ? (result as { items: Entry[] }).items : [result as Entry];
+      const now = Date.now();
+      const retentionBound = entries.reduce((limit, entry) => {
+        const createdAt = Date.parse(entry.createdAt);
+        if (!Number.isFinite(createdAt)) return 0;
+        return Math.min(limit, createdAt + retentionDays * 24 * 60 * 60 * 1000 - now);
+      }, 60_000);
+      if (canCache(result) && retentionBound > 0)
+        setEntryReadCache(kind, scope, path, result, cacheEpoch, retentionBound);
+      else removeEntryReadCache(kind, scope, path);
+    }
     return result;
   };
-  return options.signal ? load() : getOrCreateEntryRead(kind, scope, path, cacheEpoch, load);
+  if (!options.fresh) {
+    const cached = getEntryReadCache<T>(kind, scope, path);
+    if (cached.found) {
+      if (cached.stale) {
+        const backgroundEpoch = cacheEpoch;
+        const revalidate = () =>
+          getOrCreateEntryRead(kind, scope, path, backgroundEpoch, () => load());
+        const isCurrentScope = async () => {
+          try {
+            const current = await getApiAuthorizationScope();
+            return (
+              current.dataMode === scope.dataMode && current.authorization === scope.authorization
+            );
+          } catch {
+            return false;
+          }
+        };
+        const notifyFailure = async (failure: unknown) => {
+          const current = isEntryReadCacheEpochCurrent(kind, scope, path, backgroundEpoch);
+          const error = failure instanceof ApiClientError ? failure : null;
+          const isAuthFailure = error !== null && (error.status === 401 || error.status === 403);
+          const isMissingDetail =
+            kind === 'entry' && error?.status === 404 && error.code === 'NOT_FOUND';
+          const invalidatedMissingDetail = isMissingDetail && current;
+          if (invalidatedMissingDetail) invalidateEntryReadCacheKey(kind, scope, path);
+          if (!(current || isAuthFailure || invalidatedMissingDetail)) return;
+          const failureEpoch = entryReadCacheEpoch(kind, scope, path);
+          if (!(await isCurrentScope())) return;
+          if (!isEntryReadCacheEpochCurrent(kind, scope, path, failureEpoch)) return;
+          await options.onBackgroundError?.(failure, scope);
+        };
+        void revalidate()
+          .then(async (result) => {
+            if (!isEntryReadCacheEpochCurrent(kind, scope, path, backgroundEpoch)) return;
+            const current = await isCurrentScope();
+            if (
+              !current ||
+              !isEntryReadCacheEpochCurrent(kind, scope, path, backgroundEpoch) ||
+              options.signal?.aborted
+            )
+              return;
+            await options.onUpdate?.(result, scope);
+          }, notifyFailure)
+          .catch(() => undefined);
+      }
+      return cached.value;
+    }
+  }
+  return options.signal
+    ? load(options.signal)
+    : getOrCreateEntryRead(kind, scope, path, cacheEpoch, () => load());
 }
 
-export async function getEntry(id: string, options: EntryReadOptions = {}) {
+export async function getEntry(id: string, options: EntryReadOptions<EntryDetail> = {}) {
   options.signal?.throwIfAborted();
-  if (options.fresh) invalidateEntryReadCache();
   const path = `/entries/${encodeURIComponent(id)}`;
   const scope = await getApiAuthorizationScope();
+  const { retentionDays } = await getClientConfig();
   options.signal?.throwIfAborted();
-  return readCachedEntry<EntryDetail>('entry', scope, path, options, canCacheEntryDetail);
+  try {
+    return await readCachedEntry<EntryDetail>(
+      'entry',
+      scope,
+      path,
+      options,
+      retentionDays,
+      canCacheEntryDetail,
+    );
+  } catch (failure) {
+    if (failure instanceof ApiClientError && failure.status === 404 && failure.code === 'NOT_FOUND')
+      invalidateEntryReadCacheKey('entry', scope, path);
+    throw failure;
+  }
 }
 
 export async function getEntries({
@@ -62,11 +151,18 @@ export async function getEntries({
   limit,
   signal,
   fresh = false,
+  onUpdate,
+  onBackgroundError,
 }: {
   cursor?: string;
   limit?: number;
   signal?: AbortSignal;
   fresh?: boolean;
+  onUpdate?: (
+    value: { items: Entry[]; nextCursor: string | null },
+    scope: ApiAuthorizationScope,
+  ) => void | Promise<void>;
+  onBackgroundError?: (failure: unknown, scope: ApiAuthorizationScope) => void | Promise<void>;
 } = {}) {
   const query = new URLSearchParams();
   if (cursor) query.set('cursor', cursor);
@@ -80,14 +176,15 @@ export async function getEntries({
   if (cursor) signal?.addEventListener('abort', clearIncompleteList, { once: true });
   try {
     signal?.throwIfAborted();
-    if (fresh) invalidateEntryReadCache();
     const scope = await getApiAuthorizationScope();
+    const { retentionDays } = await getClientConfig();
     signal?.throwIfAborted();
     return await readCachedEntry<{ items: Entry[]; nextCursor: string | null }>(
       'entries',
       scope,
       path,
-      { signal, fresh },
+      { signal, fresh, onUpdate, onBackgroundError },
+      retentionDays,
     );
   } finally {
     if (cursor) signal?.removeEventListener('abort', clearIncompleteList);

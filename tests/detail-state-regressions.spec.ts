@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { generationFixtures } from '../src/shared/fixtures';
 import type { EntryDetail } from '../src/shared/schemas';
 import { draftEntryDetailFixture, mockClientConfigFixture } from './fixtures/client-config';
+import { routeComicAssets } from './fixtures/comic-assets';
 
 const entryId = draftEntryDetailFixture.id;
 const generationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -80,9 +81,7 @@ test('同revisionの成功済み漫画がある409後は最新漫画へ復帰す
   await page.route(`**/api/v1/generations/${generationId}`, (route) =>
     route.fulfill({ json: succeeded }),
   );
-  await page.route('**/api/v1/assets/*/url', (route) =>
-    route.fulfill({ json: { url: '/sample-comic.svg', expiresAt: '2099-01-01T00:00:00Z' } }),
-  );
+  await routeComicAssets(page, generationId, () => succeeded.comic);
 
   await page.goto(`/entries/${entryId}`);
   await page.getByRole('button', { name: '4コマにする', exact: true }).click();

@@ -1290,6 +1290,10 @@ p {
   color: #252525;
 }
 
+.comic-image-placeholder.is-pending {
+  visibility: hidden;
+}
+
 .comic.is-panels .comic-panel-image-frame > .comic-image-placeholder {
   min-height: 180px;
   padding: 16px;
